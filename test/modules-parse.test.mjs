@@ -28,3 +28,18 @@ test('every extension module parses as an ES module', () => {
     );
   }
 });
+
+// Parsing each file alone misses an import of a name the target module does not
+// export, typically a kit function the committed pkg/ build predates. That too
+// kills the service worker before it registers a listener, so the popup never
+// gets past "Loading…". Linking the graph from each entry point catches it.
+test('every import in the extension resolves to an export', () => {
+  const entries = ['background.js', 'offscreen.js', 'popup/popup.js', 'approval/approval.js'];
+  try {
+    execFileSync(process.execPath,
+      ['--experimental-vm-modules', '--no-warnings', join(root, 'test/helpers/link-check.mjs'), root, ...entries],
+      { stdio: 'pipe' });
+  } catch (e) {
+    assert.fail('unresolved imports:\n' + e.stdout.toString());
+  }
+});

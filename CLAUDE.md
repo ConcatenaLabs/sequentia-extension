@@ -60,7 +60,10 @@ token (already public in sequentia-web-wallet) — not a secret.
 ## Commands
 
 - Tests: `node --test 'test/*.test.mjs'`
-- Syntax sweep: copy each .js to a .mjs and `node --check` it
+- The tests include `test/modules-parse.test.mjs`, which parses every module
+  and links the import graph from each entry point, so a missing export (for
+  instance a kit function the committed `pkg/` predates) fails there instead
+  of silently killing the service worker. After rebuilding `pkg/`, run it.
 - Icons: `node scripts/gen-icons.mjs`
 
 ## Known limitations (candidates for future work)
