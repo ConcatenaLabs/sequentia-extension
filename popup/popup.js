@@ -551,7 +551,7 @@ async function renderStake() {
   const unsupported = $('stakeUnsupported');
   if (!STAKE.supported) {
     // Never offer joining a pool that this build could not leave.
-    unsupported.textContent = 'This build cannot spend a delegation record, so it does not offer delegating either. Update the extension.';
+    unsupported.textContent = 'This build cannot create or spend a delegation record the way the network requires, so it does not offer delegating. Update the extension.';
     unsupported.classList.remove('hide');
     $('stakePools').innerHTML = '';
     $('stakeStatus').textContent = '';

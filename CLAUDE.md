@@ -64,6 +64,12 @@ token (already public in sequentia-web-wallet) — not a secret.
   and links the import graph from each entry point, so a missing export (for
   instance a kit function the committed `pkg/` predates) fails there instead
   of silently killing the service worker. After rebuilding `pkg/`, run it.
+- Service worker in a real browser: `CHROME=… node scripts/sw-console-check.mjs`
+  (headless; no network). Run it before saying anything works in the browser.
+- Staking on a private chain: `SEQUENTIAD=… node test/regtest/stake-records.mjs
+  block-one|fork`. It rewrites `src/config.js` and the engine's network only
+  through `test/regtest/loader.mjs`, which fails if either source text it
+  replaces has changed.
 - Icons: `node scripts/gen-icons.mjs`
 
 ## Known limitations (candidates for future work)
