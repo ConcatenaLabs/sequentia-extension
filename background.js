@@ -353,9 +353,9 @@ const uiMethods = {
 
   'stakingDelegate': async ({ signer }) => {
     await engine.ensureOpen();
-    const pset = await staking.buildDelegate(signer);
-    const signed = await engine.signPset(pset);
-    return await engine.broadcastRaw({ psetB64: signed });
+    // Two transactions: the wallet pays its staking key, then the record is
+    // created from that coin. `txid` is the record's.
+    return await staking.delegate(signer);
   },
   'stakingSpend': async ({ rotateTo }) => {
     await engine.ensureOpen();
@@ -366,7 +366,7 @@ const uiMethods = {
     const record = await staking.findDelegation(board);
     const built = await staking.buildSpend(record, rotateTo || null);
     const { txid } = await engine.broadcastRaw({ hex: built.rawHex });
-    return { txid, repointed: built.repointed };
+    return { txid, repointed: built.repointed, signing: built.signing };
   },
   'prepareSend': prepareSend,
   'confirmSend': confirmSend,

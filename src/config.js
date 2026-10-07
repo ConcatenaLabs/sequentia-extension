@@ -27,6 +27,12 @@ export const LSP = {
   hostPubkeyBtc: '020a749af93e2a5a4d67ad28585cec31b55a146969eb77ca3d076eb59ff111ed51',
 };
 
+// The height from which the network signs stake records the second-generation
+// way (committing to the amount). null means the network's own, which the kit
+// carries per network and binds to its genesis; a number overrides it, for a
+// private chain started with -posrecordsv2height.
+export const RECORDS_V2_HEIGHT = null;
+
 export const DEFAULT_FEERATE = 2000;   // sat/kvB reference feerate (2 sat/vB), above min relay
 export const BTC_FEERATE = 2;          // sat/vB for parent-chain testnet4 sends
 export const EXCHANGE_RATE_SCALE = 100000000;

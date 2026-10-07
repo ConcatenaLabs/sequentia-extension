@@ -14,17 +14,29 @@
 // The safety properties that make that reasonable, all enforced by the chain:
 //   * the pool's key appears nowhere in the staking output's spending
 //     condition, so a pool can never spend a delegator's coins;
-//   * delegating moves no coins at all, and neither does leaving;
+//   * delegating moves no staked coins at all, and neither does leaving: the
+//     record is a separate small output (RECORD_ATOMS) that comes back, less
+//     the fees of the transactions that spent it, on leaving;
 //   * only this wallet's staking key can spend the delegation record, so
 //     leaving needs nobody's cooperation and has no notice period.
+//
+// The network accepts a delegation record only from a transaction that spends
+// a coin of its controller, the wallet's staking key (m/2/0), and every spend
+// of a record carries the signature the chain wants at the block it enters.
+// Joining is therefore two transactions, mined together: an ordinary wallet
+// payment to the staking key's P2WPKH (the authorization), then the record,
+// funded by that coin alone.
 //
 // Because of that last one, "leave" must always work. This module therefore
 // never gates leaving on the pool board being reachable, and reports its own
 // unavailability rather than silently disabling the button.
 
 import * as lwk from '../pkg/lwk_wasm.js';
-import { BASE, ESPLORA } from './config.js';
-import { getSigner, getWollet, getMnemonic, getNetwork, withWollet } from './engine.js';
+import { btc } from '../vendor/btc.js';
+import { BASE, ESPLORA, RECORDS_V2_HEIGHT } from './config.js';
+import {
+  getSigner, getWollet, getMnemonic, getNetwork, getPolicyHex, withWollet, signPset, broadcastRaw,
+} from './engine.js';
 // Kept in its own module, free of the wasm engine, so the copy that IS the
 // delegator's protection can be unit-tested.
 export { delegationWarnings as warnings } from './staking-warnings.js';
@@ -36,18 +48,44 @@ export const POOLS_URL = BASE + '/pools/pools.json';
 /// comes back when the delegation is reclaimed.
 const RECORD_ATOMS = 100000n;   // 0.001 tSEQ
 
-/// The spend's shape is fixed: one bare input, one output, one fee output, about
-/// 230 vB. Priced at the same rate the rest of the wallet uses.
-const SPEND_VBYTES = 230n;
+/// Both record transactions have a fixed shape, priced at the rate the rest of
+/// the wallet uses. A spend is one bare input, one output and the fee output;
+/// creating a record is one P2WPKH input, the record and the fee output.
+/// Measured sizes are in test/regtest/stake-records.mjs, which fails if a
+/// transaction outgrows its allowance.
+export const SPEND_VBYTES = 300n;
+export const CREATE_VBYTES = 260n;
 const FEE_RATE_SAT_KVB = 2000n;
-const spendFee = () => (SPEND_VBYTES * FEE_RATE_SAT_KVB + 999n) / 1000n;
+const feeFor = (vbytes) => (vbytes * FEE_RATE_SAT_KVB + 999n) / 1000n;
+const spendFee = () => feeFor(SPEND_VBYTES);
+export const createFee = () => feeFor(CREATE_VBYTES);
 
-/// Whether the vendored wasm build is new enough to SPEND a record. Shipping
-/// "join a pool" without "leave a pool" would be a one-way door, so the whole
-/// feature reports itself unavailable rather than offering half of it.
+/// A record spend signed for the next block is refused from the block where
+/// the network changes how records are signed, and a node evicts it from its
+/// mempool there. Unless the spend has the next block and this many after it to
+/// confirm in before the change, it is not built at all.
+const SIGNING_MARGIN = 3;
+
+/// Whether the vendored wasm build can create a record the way the network
+/// requires and SPEND one. Shipping "join a pool" without "leave a pool" would
+/// be a one-way door, so the whole feature reports itself unavailable rather
+/// than offering half of it.
 export function supported() {
   return typeof lwk.findDelegationRecords === 'function'
-      && typeof lwk.buildDelegationSpendTx === 'function';
+      && typeof lwk.buildDelegationSpendTx === 'function'
+      && typeof lwk.buildDelegationCreateTx === 'function'
+      && typeof lwk.stakeRecordSigning === 'function'
+      && typeof lwk.TxBuilder === 'function'
+      && typeof lwk.TxBuilder.prototype.addRecordAuthorization === 'function';
+}
+
+const hexOf = (bytes) => [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('');
+
+/// The scriptPubKey of the staking key's P2WPKH: where the authorization pays,
+/// and the coin a record is created from.
+export function stakerScript(controller) {
+  const bytes = Uint8Array.from(controller.match(/../g).map((b) => parseInt(b, 16)));
+  return hexOf(btc.p2wpkh(bytes).script);
 }
 
 /// The public pool board's feed. Read-only and advisory: everything here is
@@ -114,20 +152,59 @@ async function scriptHash(scriptHex) {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
+/// Records naming `controller` in transactions that spend a coin of the
+/// staking key's P2WPKH, from that script's history on the explorer, newest
+/// first. The explorer pages confirmed history 25 at a time; the walk is
+/// bounded, and the newest pages are the ones that matter.
+const HISTORY_PAGES = 40;
+async function recordsFromStakerScript(controller) {
+  const found = [];
+  let spk;
+  try { spk = stakerScript(controller); } catch { return found; }
+  let url = `${ESPLORA}/scripthash/${await scriptHash(spk)}/txs`;
+  const h = url.slice(0, -'/txs'.length);
+  for (let page = 0; page < HISTORY_PAGES && url; page++) {
+    let txs;
+    try {
+      const r = await fetch(url);
+      if (!r.ok) break;
+      txs = await r.json();
+    } catch { break; }
+    if (!Array.isArray(txs) || !txs.length) break;
+    for (const t of txs) {
+      const spends = (t.vin || []).some((i) => i && i.prevout && i.prevout.scriptpubkey === spk);
+      if (!spends) continue;
+      (t.vout || []).forEach((o, vout) => {
+        let parsed = null;
+        try { parsed = lwk.parseDelegationScript(o.scriptpubkey || ''); } catch {}
+        if (!parsed || parsed.controller !== controller || o.value == null) return;
+        found.push({ txid: t.txid, vout, signer: parsed.signer, atoms: BigInt(o.value),
+                     height: t.status && t.status.confirmed ? t.status.block_height : null,
+                     fromHistory: true });
+      });
+    }
+    const confirmed = txs.filter((t) => t.status && t.status.confirmed);
+    url = confirmed.length >= 25 ? `${h}/txs/chain/${confirmed[confirmed.length - 1].txid}` : null;
+  }
+  return found;
+}
+
 /// This wallet's live delegation record, or null.
 ///
-/// Two ways of looking, because neither alone is enough:
+/// Three ways of looking, because no one of them is enough:
 ///
-///  * the wallet's own history finds the record it FUNDED, since that
-///    transaction spent this wallet's coins. It cannot find one created by a
-///    MOVE: that transaction spends only the old bare record and pays only the
-///    new one, so nothing in it belongs to this wallet and no scan will ever
-///    download it.
+///  * the history of the staking key's P2WPKH finds the record a JOIN created:
+///    that transaction spends the authorization coin at that script and
+///    nothing of the wallet's, so the wallet's own scan never downloads it;
+///  * the wallet's own history finds a record funded straight from its coins,
+///    which is how records were created before the network required the
+///    controller's coin;
 ///  * asking the explorer for unspent outputs at the record script for each
-///    candidate signer finds it whatever created it, and survives a restore onto
-///    a device that has never seen any of this.
+///    candidate signer finds one created by a MOVE (which spends only the old
+///    bare record and pays only the new one), and survives a restore onto a
+///    device that has never seen any of this.
 ///
-/// The record is a bare script, so the wallet cannot answer either question by
+/// The record is a bare script, so the wallet cannot answer any of these by
 /// itself.
 export async function findDelegation(board) {
   if (!supported()) return null;
@@ -135,7 +212,12 @@ export async function findDelegation(board) {
   const byOutpoint = new Map();
   const key = (c) => `${c.txid}:${c.vout}`;
 
-  // 1) What this wallet funded itself.
+  // 1) What a join created: a transaction spending a coin of the staking
+  //    key's P2WPKH. Only those are read; the same script also receives
+  //    payouts, and they create no record.
+  for (const c of await recordsFromStakerScript(controller)) byOutpoint.set(key(c), c);
+
+  // 2) What this wallet funded itself.
   try {
     for (const wtx of getWollet().transactions()) {
       let hex;
@@ -150,7 +232,7 @@ export async function findDelegation(board) {
     }
   } catch { /* an unreadable history must not stop the explorer probe */ }
 
-  // 2) What is out there under our controller, whoever created it. These come
+  // 3) What is out there under our controller, whoever created it. These come
   //    back already filtered to UNSPENT, which is the question that matters.
   //    The second group is only swept when the first found nothing, so the
   //    ordinary case costs one request rather than one per pool.
@@ -208,9 +290,9 @@ export async function findDelegation(board) {
   return null;
 }
 
-/// The chain tip, for the spend's nLockTime (anti fee-sniping). A height in the
-/// future would make the transaction unminable, so any doubt falls back to 0,
-/// which is always valid.
+/// The chain tip. A record spend is signed for the block after it, and every
+/// transaction here uses it as nLockTime (anti fee-sniping). 0 means unknown:
+/// a record spend refuses to be built on it.
 async function tipHeight() {
   try {
     const r = await fetch(`${ESPLORA}/blocks/tip/height`);
@@ -228,24 +310,97 @@ function requireSupport() {
   }
 }
 
-/// Join a pool: fund a delegation record. Returns the unsigned PSET for the
-/// normal review-and-sign path.
-export async function buildDelegate(signerPubkey) {
-  requireSupport();
-  const controller = getSigner().stakerPublicKey();
+function checkSigner(signerPubkey) {
   const target = String(signerPubkey || '').trim().toLowerCase();
   if (!/^0[23][0-9a-f]{64}$/.test(target)) throw new Error('a pool signer key is 66 hex characters');
+  return target;
+}
+
+/// A transaction of this wallet's history, as hex. A broadcast applies the
+/// transaction to the wallet at once; the explorer is the fallback.
+async function ownTxHex(txid) {
+  const hex = await withWollet(async () => {
+    for (const wtx of getWollet().transactions()) {
+      if (wtx.txid().toString() === txid) return wtx.tx().toString();
+    }
+    return null;
+  });
+  if (hex) return hex;
+  const r = await fetch(`${ESPLORA}/tx/${txid}/hex`);
+  if (!r.ok) throw new Error('could not read transaction ' + txid);
+  return (await r.text()).trim();
+}
+
+/// An authorization this wallet paid that no record has spent yet: what is
+/// left when a join's second transaction was refused. Joining again reuses it
+/// rather than paying the staking key a second time. Only a coin of exactly
+/// the amount a join pays, in a transaction this wallet sent, counts: the same
+/// script receives payouts, and those are not this wallet's to put in a record.
+async function unspentAuthorization(controller, atoms) {
+  let utxos;
+  try {
+    const r = await fetch(`${ESPLORA}/scripthash/${await scriptHash(stakerScript(controller))}/utxo`);
+    if (!r.ok) return null;
+    utxos = await r.json();
+  } catch { return null; }
+  const policy = getPolicyHex();
+  for (const u of utxos || []) {
+    if (u.value == null || BigInt(u.value) !== atoms) continue;
+    if (u.asset && u.asset !== policy) continue;
+    const sent = await withWollet(async () => {
+      for (const wtx of getWollet().transactions()) {
+        if (wtx.txid().toString() === u.txid) return wtx.txType() === 'outgoing';
+      }
+      return false;
+    });
+    if (!sent) continue;
+    try { return { txid: u.txid, vout: u.vout, hex: await ownTxHex(u.txid) }; } catch {}
+  }
+  return null;
+}
+
+/// Join a pool: pay the staking key's P2WPKH the record's value and the
+/// second transaction's fee (an ordinary wallet payment), then create the
+/// record from that coin alone. Both are broadcast at once and mined together.
+/// Returns `{ txid, authorizationTxid, recordAtoms }`, amounts as strings.
+export async function delegate(signerPubkey) {
+  requireSupport();
+  const controller = getSigner().stakerPublicKey();
+  const target = checkSigner(signerPubkey);
   if (target === controller) {
     throw new Error('that is this wallet\'s own staking key; delegating to yourself is what already happens with no pool at all');
   }
   await rememberSigner(target);
-  return withWollet(async () => {
-    const pset = getNetwork().txBuilder()
-      .addDelegationOutput(controller, target, RECORD_ATOMS)
+  const fee = createFee();
+  const coinAtoms = RECORD_ATOMS + fee;
+
+  let coin = await unspentAuthorization(controller, coinAtoms);
+  if (!coin) {
+    const pset = await withWollet(async () => getNetwork().txBuilder()
+      .addRecordAuthorization(controller, coinAtoms)
       .feeRate(Number(FEE_RATE_SAT_KVB))
-      .finish(getWollet());
-    return pset.toString();
-  });
+      .finish(getWollet())
+      .toString());
+    const { txid } = await broadcastRaw({ psetB64: await signPset(pset) });
+    coin = { txid, vout: undefined, hex: await ownTxHex(txid) };
+  }
+
+  const built = lwk.buildDelegationCreateTx({
+    mnemonic: getMnemonic(),
+    coinTxHex: coin.hex,
+    coinVout: coin.vout,
+    signer: target,
+    recordValue: RECORD_ATOMS.toString(),
+    feeAtoms: fee.toString(),
+    locktime: await tipHeight(),
+  }, getNetwork());
+  try {
+    const { txid } = await broadcastRaw({ hex: built.rawHex });
+    return { txid, authorizationTxid: coin.txid, recordAtoms: built.recordValue };
+  } catch (e) {
+    throw new Error(`the payment to this wallet's staking key went through (${coin.txid}) but the record was refused: `
+      + `${(e && e.message) ?? e}. Delegating again reuses that payment.`);
+  }
 }
 
 /// Move to another pool, or leave. `rotateTo` null means leave.
@@ -254,15 +409,29 @@ export async function buildDelegate(signerPubkey) {
 /// consensus permits at most one live record per staking key, so leaving and
 /// re-joining as two loose transactions could be mined in the order that leaves
 /// two live records, which invalidates the block carrying the second.
+///
+/// The spend is signed for the block after the tip, the way the network signs
+/// stake records there; without a tip it is not built at all.
 export async function buildSpend(record, rotateTo) {
   requireSupport();
   if (!record) throw new Error('this wallet is not delegating');
   if (!record.confirmed) throw new Error('the last delegation change has not confirmed yet; wait for it');
-  const target = rotateTo ? String(rotateTo).trim().toLowerCase() : null;
-  if (target) {
-    if (!/^0[23][0-9a-f]{64}$/.test(target)) throw new Error('a pool signer key is 66 hex characters');
-    if (target === record.signer) throw new Error('you are already delegating to that pool');
+  const target = rotateTo ? checkSigner(rotateTo) : null;
+  if (target && target === record.signer) throw new Error('you are already delegating to that pool');
+
+  const tip = await tipHeight();
+  if (!tip) throw new Error('could not read the chain height, which decides how this must be signed; try again');
+  const network = getNetwork();
+  const v2 = RECORDS_V2_HEIGHT ?? undefined;
+  const signing = lwk.stakeRecordSigning(network, tip, v2);
+  for (let k = 1; k <= SIGNING_MARGIN; k++) {
+    if (lwk.stakeRecordSigning(network, tip + k, v2) !== signing) {
+      const change = tip + k + 1;   // the first block signed the other way
+      throw new Error(`block ${change} changes how the network signs stake records, and a spend signed now `
+        + `could miss the blocks before it; try again once block ${change - 1} is mined`);
+    }
   }
+
   // Leaving needs somewhere to put the record's coins: a fresh address of this
   // wallet, unblinded, because the record spend creates an explicit output.
   const reclaim = target ? undefined
@@ -277,7 +446,12 @@ export async function buildSpend(record, rotateTo) {
     rotateTo: target || undefined,
     reclaimAddress: reclaim,
     feeAtoms: spendFee().toString(),
-    locktime: await tipHeight(),
-  }, getNetwork());
-  return built;   // { rawHex, txid, outValue, repointed }
+    locktime: tip,
+    tipHeight: tip,
+    recordsV2Height: v2,
+  }, network);
+  if (built.signing !== signing) {
+    throw new Error(`the kit signed this spend "${built.signing}" where block ${tip + 1} needs "${signing}"; not broadcasting it`);
+  }
+  return built;   // { rawHex, txid, outValue, repointed, signing }
 }

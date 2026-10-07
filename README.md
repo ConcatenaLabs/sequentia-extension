@@ -35,11 +35,17 @@ confidential `tsqb1…` addresses are an explicit opt-in).
   restricted assets in rather than a second identity generated in a browser tab.
   Protocol spec: [doc/PROVIDER.md](doc/PROVIDER.md).
 - **Staking pool delegation** — the Stake tab lends an existing stake's weight
-  to a pool, and takes it back, without moving any coins.
+  to a pool, moves it to another pool, and takes it back. The staked coins
+  never move. Delegating puts a small record on-chain (0.001 of the Sequence
+  token, which leaving returns less its fee), and the network accepts that
+  record only from a coin of the wallet's staking key, so joining is two
+  transactions mined together: a payment from the wallet to its staking key,
+  then the record created from that coin. If the second is refused, joining
+  again reuses the payment.
 
 Not included in the popup (use the [web wallet](https://sequentiatestnet.com/wallet)
-or the desktop node wallet): creating a stake, running a pool, asset issuance,
-and a DEX trading UI.
+or the desktop node wallet): creating or unbonding a stake, running a pool,
+asset issuance, and a DEX trading UI.
 
 ## Security model
 
@@ -75,6 +81,15 @@ build step is needed to load the extension.
   run in a persistent offscreen document so a service-worker death cannot
   lose their outcome.
 - Tests: `node --test 'test/*.test.mjs'`
+- Staking against a private chain: `SEQUENTIAD=/path/to/sequentiad node
+  test/regtest/stake-records.mjs block-one` (and `fork`) starts a regtest
+  node, serves it through a small esplora stand-in (`test/regtest/esplora-shim.mjs`),
+  and drives join, move and leave through the service worker's own message
+  handlers, checking every transaction into a block.
+- Service-worker console: `CHROME=/path/to/chrome node scripts/sw-console-check.mjs`
+  loads the unpacked extension in a headless Chromium twice and fails on any
+  exception or console error the worker raises. Run it after any change to a
+  module or to `pkg/`.
 - Icons: `node scripts/gen-icons.mjs`
 - Rebuild the SWK wasm (needs the SWK checkout + clang):
   ```sh

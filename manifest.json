@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Ambra",
-  "version": "0.5.17",
+  "version": "0.5.18",
   "description": "Ambra: the non-custodial dual-chain wallet for the Sequentia network and Bitcoin testnet4. Balances, send and receive, Lightning, OpenAMP restricted assets, DEX trading and website connections.",
   "action": {
     "default_popup": "popup/popup.html",
