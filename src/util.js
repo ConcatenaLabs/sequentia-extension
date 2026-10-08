@@ -1,4 +1,5 @@
 // Small pure helpers shared by the background engine and the popup.
+import { decodeBolt11 } from '../vendor/bolt11.js';
 
 // lwk takes u64 -> JS BigInt. `d` = decimal precision of the asset.
 export function fmtAtoms(atoms, d) {
@@ -50,6 +51,16 @@ export function prettyErr(e) {
 // A bolt11 Lightning invoice (any network prefix used by SeqLN nodes).
 export function looksLikeBolt11(s) {
   return /^ln(bc|tb|tbs|ert|sq|tsq)[0-9a-z]+$/i.test((s || '').trim());
+}
+
+// What a Lightning invoice is paid in, as the wallet keys its Lightning nodes: 'BTC' for a
+// Bitcoin invoice, the asset id an invoice on Sequentia names in its `a` field. The node that
+// pays it must hold that: { kind } or { error } (a Sequentia invoice naming no asset is not one
+// the node pays).
+export function lnInvoiceKind(bolt11) {
+  const d = decodeBolt11(bolt11);
+  if (!d.ok) return { error: 'not an invoice this wallet can pay: ' + d.error };
+  return { kind: d.chain === 'btc' ? 'BTC' : d.asset };
 }
 
 // chrome.storage helpers (promise-style, single-key).

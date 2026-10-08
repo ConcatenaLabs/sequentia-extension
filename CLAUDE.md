@@ -41,7 +41,7 @@ wasm. Read this before changing anything.
 
 - `vendor/btc.js`, `vendor/seqln.js`, `vendor/seqln-keys.js`,
   `vendor/seqob.js`, `vendor/covenant.js`, `vendor/covenant-order.js`,
-  `vendor/covenant-fill-host.js`, `vendor/noble-ciphers.js`, `vendor/contracts.js` and
+  `vendor/covenant-fill-host.js`, `vendor/noble-ciphers.js`, `vendor/contracts.js`, `vendor/bolt11.js` and
   `vendor/lightning/` are copied from `sequentia-web-wallet` — fix bugs THERE
   and re-copy, don't fork them silently.
 - `pkg/` is the SWK `lwk_wasm` build (size-optimized). Rebuild recipe in

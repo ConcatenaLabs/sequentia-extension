@@ -24,7 +24,7 @@ import { lnDeriveNode, lnDeriveAsset } from '../vendor/seqln-keys.js';
 import { LSP } from './config.js';
 import * as A from './assets.js';
 import * as engine from './engine.js';
-import { stGet, stSet, stDel } from './util.js';
+import { stGet, stSet, stDel, lnInvoiceKind } from './util.js';
 
 let inited = false;
 let lastStatus = null;
@@ -246,6 +246,14 @@ export async function createInvoice({ kind, atoms, memo }) {
 export async function payInvoice({ kind, bolt11 }) {
   lnInit();
   const meta = kind === 'BTC' ? { ticker: 'BTC' } : A.assetMeta(kind);
+  // The invoice names what it is paid in, and only a node holding that can pay it: refuse
+  // another before any node is brought online.
+  const inv = lnInvoiceKind(bolt11);
+  if (inv.error) throw new Error(inv.error);
+  if (inv.kind !== kind) {
+    const want = inv.kind === 'BTC' ? 'BTC' : (A.assetMeta(inv.kind).ticker || inv.kind.slice(0, 8) + '…');
+    throw new Error('this invoice is paid in ' + want + ', not ' + meta.ticker + '; pay it from your ' + want + ' Lightning node');
+  }
   say('Bringing your ' + meta.ticker + ' Lightning node online…');
   const prov = await connectOwnNode(kind);
   say('Preparing your Lightning node…');
