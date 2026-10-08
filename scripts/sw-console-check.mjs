@@ -129,6 +129,29 @@ async function session(label) {
     if (ping.exceptionDetails) throw new Error('UI message: ' + ping.exceptionDetails.exception.description);
     console.log(`${label}: worker answers stakingOverview (no wallet open):`, JSON.stringify(ping.result.value));
     if (!ping.result.value) problems.push('the service worker did not answer a UI message');
+
+    // The offscreen document, as the worker brings it up for a job: it must
+    // load and answer the build handshake with this build's version, or every
+    // offscreen job (Lightning swaps, orders, the leaf wallet) fails.
+    const hello = await send('Runtime.evaluate', {
+      expression: `(async () => {
+        const v = chrome.runtime.getManifest().version;
+        try { await chrome.offscreen.closeDocument(); } catch {}
+        await chrome.offscreen.createDocument({ url: 'offscreen.html?v=' + v, reasons: ['WORKERS'], justification: 'check' });
+        let got = null;
+        for (let i = 0; i < 60 && !got; i++) {
+          try { got = await chrome.runtime.sendMessage({ scope: 'oln', op: 'hello' }); } catch {}
+          if (!got) await new Promise((r) => setTimeout(r, 250));
+        }
+        return { manifest: v, offscreen: got && got.version };
+      })()`,
+      awaitPromise: true, returnByValue: true,
+    }, worker.sessionId);
+    if (hello.exceptionDetails) throw new Error('offscreen document: ' + hello.exceptionDetails.exception.description);
+    console.log(`${label}: offscreen handshake:`, JSON.stringify(hello.result.value));
+    if (hello.result.value.offscreen !== hello.result.value.manifest) {
+      problems.push(`the offscreen document answers build ${hello.result.value.offscreen}, the manifest is ${hello.result.value.manifest}: every offscreen job would fail`);
+    }
   } catch (e) {
     problems.push(String(e.message || e));
   }
