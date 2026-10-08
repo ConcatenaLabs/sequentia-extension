@@ -14,6 +14,7 @@ import * as A from './assets.js';
 import { sessionMnemonic } from './vault.js';
 import { checkSigningRequest } from './tagpolicy.js';
 import { stGet } from './util.js';
+import * as contracts from './contracts.js';
 
 // ---- pending approvals ----
 const pending = new Map();
@@ -44,6 +45,7 @@ async function openApprovalWindow(id) {
 
 // Ask the user. `display` is the serializable summary the approval page renders.
 function requestApproval(origin, method, display, exec) {
+  // `exec(shown)` receives what the approval page says it showed (`decideApproval`).
   return new Promise((resolve, reject) => {
     const id = newRequestId();
     pending.set(id, { origin, method, display, exec, resolve, reject, at: Date.now() });
@@ -63,7 +65,7 @@ function requestApproval(origin, method, display, exec) {
 // the approval tab closes immediately (no "Working…" purgatory, and its own
 // message channel cannot outlive Chrome's cap anyway); the outcome flows to
 // the requesting page over the port channel.
-export async function decideApproval(id, approve) {
+export async function decideApproval(id, approve, shown = null) {
   const p = pending.get(id);
   if (!p) throw new Error('this request has expired');
   pending.delete(id);
@@ -72,7 +74,7 @@ export async function decideApproval(id, approve) {
     return { done: true };
   }
   (async () => {
-    try { p.resolve(await p.exec()); }
+    try { p.resolve(await p.exec(shown)); }
     catch (e) { p.reject(e instanceof Error ? e : new Error(String(e))); }
   })();
   return { done: true };
@@ -118,12 +120,14 @@ export async function handleDappRequest(origin, method, params = {}) {
           'signPset', 'signMessage', 'signStakerMessage', 'getStakerPublicKey',
           'broadcast', 'createInvoice', 'payInvoice',
           'getUtxos', 'lnChannels', 'lnRequestInbound', 'dexFillOnchain', 'dexSwapLn', 'dexJobResult', 'dexMarketOrder', 'dexPlaceLimit', 'getBtcPublicKey', 'getBtcAddress', 'signBtcTaproot', 'prepareBtcSend',
-          'openampGetIdentity', 'openampSignTagged', 'openampSignSpend', 'openampSignSupervision'],
+          'openampGetIdentity', 'openampSignTagged', 'openampSignSpend', 'openampSignSupervision',
+          'signContractSpend'],
         // What this build can do beyond the method names, for sites that have
         // to know before they build something: 'pset-site-built' means
         // signPset fills in this wallet's key origins itself, so a PSET a site
         // composed (with only the outputs it spends) can be signed here.
-        features: ['pset-site-built'],
+        // 'contract-spend' means signContractSpend runs the kit's contract engine.
+        features: ['pset-site-built', 'contract-spend'],
         events: ['accountsChanged', 'disconnect'],
       };
 
@@ -436,6 +440,17 @@ export async function handleDappRequest(origin, method, params = {}) {
         display.warning = 'The wallet could not fully decode this PSET; only sign it if you trust this site.';
       }
       return requestApproval(origin, 'signPset', display, async () => { await ensureOpenOrThrow(); return { pset: await engine.signPset(psetB64) }; });
+    }
+
+    case 'signContractSpend': {
+      // A spend of a contract (a sequentia-contracts template), under the five-point
+      // rule: the engine refuses what it cannot account for before any approval opens,
+      // and the approval signs only the digest of the summary it showed.
+      await requireConnected(origin);
+      await ensureOpenOrThrow();
+      const prepared = await contracts.prepareForSite(params);
+      return requestApproval(origin, 'signContractSpend', contracts.display(origin, prepared.summary),
+        async (shown) => { await ensureOpenOrThrow(); return contracts.signShown(prepared, shown, { broadcastIt: params.broadcast !== false }); });
     }
 
     case 'broadcast': {

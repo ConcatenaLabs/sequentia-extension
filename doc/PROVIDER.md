@@ -101,6 +101,52 @@ from its bytes, since the wallet's own decoder handles blinded transactions
 only. The approval window shows the same "You send / You receive" lines either
 way.
 
+### `signContractSpend({ templateHash | descriptor+sources, instance, drip | request, broadcast? })` — approval per request
+A spend of a contract written with
+[`sequentia-contracts`](https://github.com/ConcatenaLabs/sequentia-contracts),
+signed by this wallet's contract key (`m/8383h/1h/0h/0/0`) under the five-point
+rule. The kit's contract engine (SWK `lwk_contracts`) does every step; the
+wallet signs only when all five hold:
+
+1. the template is on the wallet's list, which is the templates the kit carries
+   (`sequentia/one-key`, `sequentia/one-key-exit`, `sequentia/faucet-drip`); a
+   site can pass a template it wrote (`descriptor` and `sources`, each source
+   with its includes resolved), which is read and checked but never signed for;
+2. the engine recomputed the output from the template and the instance, and the
+   coin pays it;
+3. the engine ran the program against the final transaction;
+4. the approval window showed the template (by the registry's name, which the
+   wallet looks up itself, else its commitment root), the path, every
+   parameter by role, the wallet's balance change in every asset, where the
+   coins go, and the checks;
+5. the key is a contract key, the one the path names.
+
+Parameters:
+
+- `templateHash`: a template the kit carries; or `descriptor` (the
+  descriptor JSON) and `sources` (`{"<name>.simf": "<text>"}`).
+- `instance`: the instance record, `{instance, template_hash, params, slots,
+  genesis}`.
+- `drip`: for the faucet drip covenant, `{coin, amount, to?, ratePerKvb?}`:
+  the reserve coin (`{txid, vout, script_pubkey, asset, amount}`, asset in
+  display hex), the atoms to drip, the address paid (this wallet's by
+  default), and the fee rate in atoms of the dripped asset per 1,000 vB
+  (1,000 by default). The wallet plans the drip at its real size.
+- `request`: for any other spend, the engine's request: `{path, coin,
+  sequence?, lock_time?, outputs: [{to, address | script, asset, amount}],
+  spender?, next_slots?}`. Each output says what it does: `contract` (back to
+  the contract, or to its next state), `wallet`, `pay`, or `fee`.
+- `broadcast`: `false` returns the signed transaction without broadcasting it.
+
+Returns `{ txid, hex }` (or `{ hex }`). A spend the engine refuses is refused
+to the site, with the engine's reason, before any window opens: an output that
+does not do what the request says, a confidential output, outputs that do not
+balance the coin, a relative lock or lock time the chain would refuse now, an
+amount or output the program forbids (naming the check that fails), a key
+that is not the one the path names, and a template not on the wallet's list.
+Approving signs the digest of the summary the window showed, and nothing else.
+`getCapabilities().features` carries `contract-spend` on builds that do this.
+
 ### `signMessage({ message })` — approval per request
 `{ signature }` over the given UTF-8 message with the wallet's key.
 

@@ -41,7 +41,7 @@ wasm. Read this before changing anything.
 
 - `vendor/btc.js`, `vendor/seqln.js`, `vendor/seqln-keys.js`,
   `vendor/seqob.js`, `vendor/covenant.js`, `vendor/covenant-order.js`,
-  `vendor/covenant-fill-host.js`, `vendor/noble-ciphers.js` and
+  `vendor/covenant-fill-host.js`, `vendor/noble-ciphers.js`, `vendor/contracts.js` and
   `vendor/lightning/` are copied from `sequentia-web-wallet` — fix bugs THERE
   and re-copy, don't fork them silently.
 - `pkg/` is the SWK `lwk_wasm` build (size-optimized). Rebuild recipe in
@@ -66,6 +66,11 @@ token (already public in sequentia-web-wallet) — not a secret.
   of silently killing the service worker. After rebuilding `pkg/`, run it.
 - Service worker in a real browser: `CHROME=… node scripts/sw-console-check.mjs`
   (headless; no network). Run it before saying anything works in the browser.
+- A contract spend on a private chain: `SEQUENTIAD=… SWK_TEMPLATES=… CHROME=…
+  node test/regtest/contract-spend.mjs`. Every contract check and signature is
+  the kit's contract engine (`src/contracts.js` hands it the request); never
+  decide anything about a contract in JavaScript, and sign only the digest the
+  approval page showed.
 - Staking on a private chain: `SEQUENTIAD=… node test/regtest/stake-records.mjs
   block-one|fork`. It rewrites `src/config.js` and the engine's network only
   through `test/regtest/loader.mjs`, which fails if either source text it
