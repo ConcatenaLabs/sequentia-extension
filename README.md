@@ -121,7 +121,8 @@ popup/                 wallet UI     approval/  site-request approval window
 vendor/                modules copied from sequentia-web-wallet (btc.js,
                        seqln.js, seqln-keys.js, seqob.js, covenant.js,
                        covenant-order.js, covenant-fill-host.js,
-                       noble-ciphers.js, contracts.js, lightning/ signer SDK)
+                       noble-ciphers.js, contracts.js, bolt11.js,
+                       lightning/ signer SDK)
 pkg/                   SWK lwk_wasm build (committed)
 doc/PROVIDER.md        the website provider protocol
 ```

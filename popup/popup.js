@@ -1,5 +1,6 @@
 // Popup UI. All wallet logic lives in the background engine; this file only
 // renders state and relays user intents over the ui RPC scope.
+import { lnInvoiceKind } from '../src/util.js';
 
 const $ = (id) => document.getElementById(id);
 const el = (t, c, txt) => { const e = document.createElement(t); if (c) e.className = c; if (txt != null) e.textContent = txt; return e; };
@@ -285,6 +286,18 @@ function updateSendUi() {
   const isLn = looksLikeBolt11(to);
   $('sendOnchain').classList.toggle('hide', isLn);
   $('sendLn').classList.toggle('hide', !isLn);
+  if (isLn) {
+    // The invoice names what it is paid in: select that node, or say why it cannot be paid.
+    const inv = lnInvoiceKind(to), lsel = $('lnPayAsset');
+    if (inv.error) { $('sendErr').className = 'status err'; $('sendErr').textContent = 'This is ' + inv.error + '.'; }
+    else if ([...lsel.options].some((o) => o.value === inv.kind)) {
+      lsel.value = inv.kind;
+      $('sendErr').className = 'status'; $('sendErr').textContent = 'This invoice is paid in ' + lsel.selectedOptions[0].textContent + '.';
+    } else {
+      $('sendErr').className = 'status err';
+      $('sendErr').textContent = 'This invoice is paid in an asset this wallet holds no Lightning balance in (' + inv.kind.slice(0, 8) + '…).';
+    }
+  }
   if (!isLn && OV) {
     const key = $('sendAsset').value;
     const row = OV.rows.find((r) => r.key === key);
