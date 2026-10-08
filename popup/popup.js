@@ -257,6 +257,10 @@ chrome.runtime.onMessage.addListener((msg) => {
     }
     if (msg.event === 'locked') view('vUnlock');
   }
+  // A leaf sync finished (on the schedule, or asked): show what it changed.
+  if (msg && msg.scope === 'leaf-event' && msg.event === 'leafSynced' && !$('leafCard').classList.contains('hide')) {
+    renderLeaves().catch(() => {});
+  }
 });
 
 // ---- send ----
@@ -523,8 +527,65 @@ async function renderSettings() {
     }
     const s = await rpc('getSettings');
     $('setAutolock').value = s.autoLockMin || 30;
+    await renderLeaves();
   } catch (e) { $('settingsStatus').className = 'status err'; $('settingsStatus').textContent = e.message; }
 }
+
+// ---- the mode, and leaves (developer mode) ----
+// Every figure and refusal here is the leaf wallet library's, shown in its words.
+async function renderLeaves() {
+  const st = await rpc('leaves.state');
+  $('setMode').value = st.mode;
+  $('leafCard').classList.toggle('hide', st.mode !== 'developer');
+  if (st.mode !== 'developer') return;
+  $('leafJoin').classList.toggle('hide', st.joined);
+  $('leafJoined').classList.toggle('hide', !st.joined);
+  $('leafStatus').className = st.error ? 'status err' : 'status';
+  $('leafStatus').textContent = st.error || '';
+  if (!st.joined) return;
+  $('leafOperator').textContent = st.operator || '';
+  $('leafServerShown').textContent = 'Server ' + (st.server || '') + ' · node ' + (st.nodeUrl || '');
+  const box = $('leafBalances'); box.innerHTML = '';
+  const arca = (st.balance && st.balance.arca) || {};
+  const ids = Object.keys(arca);
+  if (!ids.length) box.appendChild(el('p', 'sub', 'No leaves held. BTC is never a leaf: a tree on the Sequentia network holds no BTC.'));
+  for (const id of ids) {
+    const row = el('div', 'kv leaf-row'); row.dataset.asset = id;
+    let total = 0n; const parts = [];
+    for (const [state, v] of Object.entries(arca[id])) { total += BigInt(v); parts.push(state + ' ' + v); }
+    row.appendChild(el('span', 'k mono', id.slice(0, 12) + '…'));
+    row.appendChild(el('span', 'v', total.toString() + ' atoms (' + parts.join(', ') + ')'));
+    box.appendChild(row);
+  }
+  const sc = st.schedule || {};
+  const last = st.status && st.status.lastSync;
+  $('leafSchedule').textContent = (sc.next_sync_at ? 'Next sync the schedule asks for: ' + new Date(sc.next_sync_at * 1000).toISOString() : 'Nothing held off the chain, nothing awaited.')
+    + (last ? ' · Last sync ' + new Date(last.at).toISOString() + ' (' + last.by + ')' : '');
+}
+$('setMode').onchange = async () => {
+  try { await rpc('setMode', { mode: $('setMode').value }); await renderLeaves(); }
+  catch (e) { $('settingsStatus').className = 'status err'; $('settingsStatus').textContent = e.message; }
+};
+$('btnLeafJoin').onclick = async () => {
+  const v = (id) => $(id).value.trim();
+  const cfg = { server: v('leafServer'), node_url: v('leafNodeUrl') };
+  if (v('leafNodeUser')) cfg.node_user = v('leafNodeUser');
+  if (v('leafNodePassword')) cfg.node_password = v('leafNodePassword');
+  if (v('leafDelay')) cfg.exit_delay_units = v('leafDelay');
+  if (v('leafMinDelay')) cfg.min_exit_delay_units = v('leafMinDelay');
+  $('btnLeafJoin').disabled = true;
+  $('leafStatus').className = 'status'; $('leafStatus').textContent = 'Joining…';
+  try { await rpc('leaves.join', cfg); await renderLeaves(); }
+  catch (e) { $('leafStatus').className = 'status err'; $('leafStatus').textContent = e.message; }
+  finally { $('btnLeafJoin').disabled = false; }
+};
+$('btnLeafSync').onclick = async () => {
+  $('btnLeafSync').disabled = true;
+  $('leafStatus').className = 'status'; $('leafStatus').textContent = 'Syncing…';
+  try { await rpc('leaves.sync'); $('leafStatus').textContent = ''; await renderLeaves(); }
+  catch (e) { $('leafStatus').className = 'status err'; $('leafStatus').textContent = e.message; }
+  finally { $('btnLeafSync').disabled = false; }
+};
 $('btnSaveSettings').onclick = async () => {
   const v = parseInt($('setAutolock').value, 10);
   if (!(v > 0)) { $('settingsStatus').className = 'status err'; $('settingsStatus').textContent = 'Enter a positive number of minutes.'; return; }

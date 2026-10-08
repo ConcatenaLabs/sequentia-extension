@@ -26,6 +26,8 @@ const TITLES = {
   openampSignSpend: 'Co-sign a restricted-asset spend?',
   openampSignSupervision: 'Authorize this as the asset\u2019s issuer?',
   signContractSpend: 'Sign this contract spend?',
+  requestLeafReceive: 'Hand out a receive request for leaves?',
+  sendLeaves: 'Pay from your leaves?',
 };
 
 function fmtAtoms(atoms, d) {

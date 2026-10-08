@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Leaf provider test site</title>
+<style>
+  body { font: 14px system-ui, sans-serif; margin: 16px; max-width: 900px; }
+  pre { background: #f4f4f4; padding: 8px; white-space: pre-wrap; word-break: break-all; font-size: 12px; }
+  .err { color: #a00; }
+  input { width: 100%; box-sizing: border-box; font-family: monospace; }
+  button { margin: 4px 4px 4px 0; }
+</style>
+</head>
+<body>
+<h1>A site using the wallet's leaf methods</h1>
+<p>This page is the extension's test site: it calls <code>window.sequentia</code> as any site would.</p>
+<div>
+  <button id="btnConnect">Connect</button>
+  <button id="btnMode">Read the wallet's mode</button>
+  <button id="btnBalances">Read leaf balances</button>
+</div>
+<div>
+  <label>Asset id <input id="asset"></label>
+  <label>Amount (atoms) <input id="amount"></label>
+  <button id="btnReceive">Ask for a receive request</button>
+</div>
+<div>
+  <label>A receive request to pay <input id="request"></label>
+  <button id="btnSend">Pay it from leaves</button>
+</div>
+<h2>Last answer</h2>
+<pre id="out"></pre>
+<h2>Events</h2>
+<pre id="events"></pre>
+<script src="site.js"></script>
+</body>
+</html>

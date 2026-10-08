@@ -38,6 +38,17 @@ confidential `tsqb1…` addresses are an explicit opt-in).
   template, the path, the parameters and the wallet's balance change, and the
   wallet signs only what it showed.
   Protocol spec: [doc/PROVIDER.md](doc/PROVIDER.md).
+- **Mode, and leaves** — one setting (Settings → Mode): user mode shows one
+  balance per asset; developer mode shows every rail and lets each step be
+  chosen by hand. Sites read it (`getWalletMode`, the `modeChanged` event). In
+  developer mode the wallet can join an operator and hold Sequentia assets as
+  leaves of the operator's tree, paid and received off the chain: a site reads
+  the leaf balances (`getLeafBalances`), asks for a receive request
+  (`requestLeafReceive`) or a payment to one (`sendLeaves`), each payment
+  behind the approval window, and hears `leafArrived` and `leafSyncDue`. The
+  leaf wallet runs in the offscreen document and syncs on its own schedule
+  while the browser runs and the wallet is unlocked. BTC is never a leaf: it
+  stays on its own chain and on Lightning.
 - **Staking pool delegation** — the Stake tab lends an existing stake's weight
   to a pool, moves it to another pool, and takes it back. The staked coins
   never move. Delegating puts a small record on-chain (0.001 of the Sequence
@@ -74,8 +85,8 @@ asset issuance, and a DEX trading UI.
 1. Open `chrome://extensions`, enable **Developer mode**.
 2. **Load unpacked** → select this repository's root directory.
 
-The wasm artifacts (`pkg/`, `vendor/lightning/pkg/`) are committed, so no
-build step is needed to load the extension.
+The wasm artifacts (`pkg/`, `leaves/pkg/`, `vendor/lightning/pkg/`) are
+committed, so no build step is needed to load the extension.
 
 ## Development
 
@@ -99,6 +110,17 @@ build step is needed to load the extension.
   loads the unpacked extension in a headless Chromium twice and fails on any
   exception or console error the worker raises. Run it after any change to a
   module or to `pkg/`.
+- A site using the leaf methods, end to end in a headed Chromium:
+  `CHROME=/path/to/chrome ARCA_OPERATOR_CONTROL=127.0.0.1:18640
+  ARCA_CLI=/path/to/arca node test/leaves/drive.mjs <evidence-dir> <work-dir>`
+  needs the `arca` repository's operator harness running
+  (`bark-cli/tests/arca_operator_for_browsers.rs`, started fresh for each run)
+  and its command-line wallet as the counterparty. The test site
+  (`test/leaves/site.html`) connects, reads the mode and the leaf balances, asks
+  for a receive request and a send through the approval window, and hears the
+  events; every step is a DOM assertion and a screenshot, every console line of
+  the extension's contexts is logged, and an error from any of them fails the
+  drive.
 - Icons: `node scripts/gen-icons.mjs`
 - Rebuild the SWK wasm (needs the SWK checkout + clang):
   ```sh
@@ -106,6 +128,10 @@ build step is needed to load the extension.
   CARGO_PROFILE_RELEASE_OPT_LEVEL=z ./build-web.sh pkg_ext   # build paths remapped
   cp pkg_ext/{lwk_wasm.js,lwk_wasm.d.ts,lwk_wasm_bg.wasm,package.json} ../../sequentia-extension/pkg/
   ```
+- Rebuild the leaf wallet (`leaves/pkg/`, the `arca` repository's
+  `wallet-wasm/`; needs the wasm32 target, `wasm-pack` and `protoc`):
+  `scripts/build-leaf-wallet.sh ../arca`. Build paths are remapped, and the
+  script refuses to copy a package that still names the build machine.
 
 ## Repository layout
 
@@ -116,6 +142,9 @@ src/                   engine (SWK wasm, dual-chain), vault, assets, openamp,
                        ln, dex, staking, permissions, provider router
 offscreen.html/.js     persistent offscreen document: long Lightning and DEX
 offscreen-boot.js      jobs (taker swaps, wallet-as-maker), survives SW death
+offscreen-leaves.js    the leaf wallet's host in that document: its worker,
+                       its schedule, its events
+leaves/                the leaf wallet's worker and its wasm (committed)
 content/               inpage provider (MAIN world) + relay (isolated world)
 popup/                 wallet UI     approval/  site-request approval window
 vendor/                modules copied from sequentia-web-wallet (btc.js,

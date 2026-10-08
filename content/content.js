@@ -63,6 +63,17 @@
     });
   }
 
+  // Events the wallet sends through every tab (they reach a page even after the
+  // wallet's service worker has slept, which closes the port above): passed on only to
+  // a page of one of the origins named (none named: any page).
+  try {
+    chrome.runtime.onMessage.addListener((m) => {
+      if (!m || m.scope !== 'dapp-event' || typeof m.event !== 'string') return;
+      if (Array.isArray(m.origins) && !m.origins.includes(window.location.origin)) return;
+      window.postMessage({ [TAG]: 'event', event: m.event, data: m.data }, window.location.origin);
+    });
+  } catch {}
+
   window.addEventListener('message', (ev) => {
     if (ev.source !== window || !ev.data || ev.data[TAG] === undefined) return;
     const m = ev.data;

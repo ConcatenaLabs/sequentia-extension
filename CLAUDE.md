@@ -31,6 +31,14 @@ wasm. Read this before changing anything.
 - **Scan cache**: IndexedDB persists exactly ONE kind of Update — one computed
   against an EMPTY wollet (from a throwaway scan), aged out weekly. Never
   persist a mid-session incremental update.
+- **The leaf wallet lives in the offscreen document** (`offscreen-leaves.js`,
+  its worker `leaves/worker.js`), never in the service worker: the library
+  blocks on synchronous requests, which only a dedicated worker may make. Its
+  store (SQLite on the extension's private file system) admits one worker at a
+  time. The worker opens it only while the wallet is unlocked, in developer
+  mode, with an operator joined; locking closes it. Mode and leaf events reach
+  pages through `chrome.tabs.sendMessage` to the content script, not the
+  service worker's ports, which die when it sleeps.
 - **BigInt never crosses the message boundary** — all RPC amounts are strings.
 - **No bundler, no framework, plain ES modules** (matches the web wallet).
   Content scripts: inpage.js runs in the MAIN world, content.js relays.
@@ -44,6 +52,11 @@ wasm. Read this before changing anything.
   `vendor/covenant-fill-host.js`, `vendor/noble-ciphers.js`, `vendor/contracts.js`, `vendor/bolt11.js` and
   `vendor/lightning/` are copied from `sequentia-web-wallet` — fix bugs THERE
   and re-copy, don't fork them silently.
+- `leaves/worker.js` is copied from `sequentia-web-wallet/leaves/worker.js`
+  (fix it there and re-copy). `leaves/pkg/` is the `arca` repository's
+  `wallet-wasm/` build, made with `scripts/build-leaf-wallet.sh`; nothing about
+  a leaf is decided in this repository's JavaScript, every check, fee and
+  refusal is that library's.
 - `pkg/` is the SWK `lwk_wasm` build (size-optimized). Rebuild recipe in
   README.md. It is committed deliberately so the extension loads unpacked
   without a Rust toolchain.
@@ -82,6 +95,10 @@ token (already public in sequentia-web-wallet) — not a secret.
   block-one|fork`. It rewrites `src/config.js` and the engine's network only
   through `test/regtest/loader.mjs`, which fails if either source text it
   replaces has changed.
+- A site using the leaf methods, headed, against a local operator:
+  `CHROME=… ARCA_OPERATOR_CONTROL=… ARCA_CLI=… node test/leaves/drive.mjs
+  <evidence-dir> <work-dir>` (README, Development). Start the operator harness
+  fresh for each run: the drive moves the chain's median time.
 - Icons: `node scripts/gen-icons.mjs`
 
 ## Known limitations (candidates for future work)

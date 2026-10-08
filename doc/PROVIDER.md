@@ -50,7 +50,8 @@ restricted assets.
 Returns provider metadata; safe to call before connecting.
 ```js
 { provider: 'sequentia-wallet-extension', version, network: 'sequentia-testnet',
-  methods: [...], events: ['accountsChanged', 'disconnect'] }
+  methods: [...], features: [...],
+  events: ['accountsChanged', 'disconnect', 'modeChanged', 'leafArrived', 'leafSyncDue'] }
 ```
 
 ### `getNetwork()` — silent
@@ -335,6 +336,146 @@ refused by `openampSignTagged`: a message under one of those is a consensus
 instruction rather than a statement, and only the method that can decode and
 display it may produce one.
 
+## The wallet's mode
+
+### `getWalletMode()` — silent, no connection needed
+`{ mode: 'developer' | 'user' }`. The wallet has one mode setting (Settings →
+Mode), `'user'` until the user changes it. Developer mode shows every rail and
+lets each step be chosen by hand; user mode is one balance and one action per
+asset, with no rail named. A site reads the mode and follows it, with an
+override of its own if it wants one. The read needs no connection, so a site
+can choose its layout before it asks to connect.
+
+The `modeChanged` event (`{ mode }`) fires on every page that listens when the
+user changes the setting.
+
+## Leaves (developer mode)
+
+A leaf is a coin of a Sequentia asset held in an operator's tree off the chain:
+paid and received without a transaction, and taken on-chain by the wallet alone
+whenever it must be. Leaves are one rail among the wallet's rails (on-chain,
+leaves, Lightning), and a developer-mode one: in user mode every method in this
+section refuses.
+
+The wallet runs the operator's wallet library, compiled to wasm, in a worker of
+its offscreen document (`leaves/`). Every script, record, check, fee and
+refusal is the library's; the extension shows what it answers and refuses in its
+words. The user joins an operator in Settings (its server, and a node that
+validates anchors and keeps a transaction index); the wallet pins the
+operator's key and the node's chain when it joins, and refuses any server that
+names another.
+
+Every asset is a leaf asset on equal terms; none is a default, so a send names
+its asset or pays a request that names one. Native BTC is not a leaf: a tree on
+Sequentia holds no BTC, which stays on its own chain and its own rail
+(`getBalances().btc`, Lightning).
+
+While the browser runs and the wallet is unlocked, the offscreen document keeps
+the leaf wallet open and syncs it on the library's own schedule (when a coin's
+refresh window opens, while a receive request waits, while anything is moving),
+without the service worker waiting on it. Locking the wallet closes the leaf
+wallet; unlocking opens it again and syncs at once if anything fell due.
+
+Errors common to the methods below, besides the connection and lock errors
+above:
+
+- `'leaves are a developer-mode rail: turn developer mode on in the wallet\'s Settings'`
+- `'this wallet has not joined a leaf operator: join one in the wallet\'s Settings'`
+- `'the leaf wallet did not start: …'` with the reason (for example its storage
+  held by another browser profile's worker).
+- A refusal of the library, as the library words it: its kind, a colon, and its
+  reason (`refused: …`, `the server refused …`; examples below).
+
+### `getLeafBalances()` — silent, requires connection and developer mode
+What the leaf wallet holds, as the library's `balance` answers it:
+```js
+{ leaves: { '<assetHexId>': { total: '<atoms>',
+                              states: { 'live': '<atoms>', 'operator-confirmed': '<atoms>', 'pending': '<atoms>', … } } },
+  onchain: { '<assetHexId>': '<atoms>' },  // the leaf wallet's own on-chain coins (its boarding address)
+  value: { value: '<atoms of the reference unit>' | null, unit: 'reference', values: {…}, unvalued?: [...], note },
+  schedule: { now, next_sync_at, due } }   // median times, seconds
+```
+A coin's state is the library's: `live` (in a tree whose round is final),
+`operator-confirmed` (received out of round and not yet refreshed, which holds
+on the operator's co-signature until then), `pending` (boarded, waiting for its
+round), and the transitional `sending`, `given`, `forfeited`, `exiting`. `total`
+sums them. `value` is the library's headline: every asset held, leaves and the
+leaf wallet's on-chain coins together, valued at the rates of the wallet's own
+node, with any asset the node has no rate for listed in `unvalued` and left out.
+No asset comes first.
+
+### `requestLeafReceive({ asset?, amount? })` — approval per request
+A single-use receive request: a fresh key, this wallet's mailbox, and the exit
+delay the wallet asks for. `asset` is a 64-hex asset id the operator serves;
+`amount` is an atoms string. Both may be left out (the payer then names them).
+Returns the library's answer:
+```js
+{ request: 'request:…',   // the text to hand the payer
+  details: { owner, mailbox, exit_delay_units, until, asset?, value?, … } }
+```
+`until` is the median time at which the request lapses; nobody pays it after
+that. The payment arrives in the wallet's mailbox. For an hour after a request
+is handed out the wallet reads its mailbox about once a minute; after that the
+library's schedule reads it at least daily until the request is paid or lapses.
+Each coin read fires `leafArrived`.
+
+The approval window says the site asks for a receive request for leaves, and
+shows the asset and the amount, or "any" for each left out.
+
+Refusals before the window: `asset` not a 64-hex id, `amount` not a positive
+integer, user mode, no operator joined. Refusals of the library after approval,
+for example an asset the operator does not serve
+(`refused: the server does not serve asset <id>`).
+
+### `sendLeaves({ request, asset?, amount? })` — approval per request
+Pays a receive request from this wallet's leaves, out of round: no transaction
+and no round. `request` is the text a receiver handed out (`request:…`, or any
+other prefix the library reads). `asset` and `amount` are needed only when the
+request leaves them out; a request that names an asset is paid in that asset
+alone.
+
+Before the window opens the wallet reads the request and refuses one it cannot
+pay as asked: not a receive request (`the receive request: the text is not
+one`), for another chain or operator (`the receive request is for operator
+<key>, not this wallet's`), an asset other than the request's (`the request
+asks for asset <a>, not <b>`), no asset or no amount from either side. The
+window shows the asset and the amount paid, the receiver's key and mailbox, and
+when the request lapses; what is approved is what is paid, since the wallet
+passes the shown asset and amount to the library, which refuses a mismatch with
+the request. Returns the library's answer:
+```js
+{ sent: { asset, value, to },          // `to`: the receiver's leaf key
+  inputs: ['<leaf id>', …],            // this wallet's coins spent
+  margins: { asset, checkpoints: ['<atoms>', …], reassignment: '<atoms>' },
+  change: '<atoms>' | null,
+  transfer: { … } }                    // the operator's co-signed transfer
+```
+The margins are atoms of the asset moved, left in the tree for the fees of
+taking the coins on-chain; nothing is paid to the operator for a payment out of
+round. Refusals of the library after approval, in its words, for example:
+
+- `refused: the request lapsed at <t> (a median time; the chain's is <now>): ask the receiver for a new one`
+- `refused: <amount> is below the operator's smallest leaf in asset <id>, <min>`
+- `refused: the wallet holds <n> of asset <id> in live coins, and paying <amount> takes …`
+  (not enough live leaves of the asset, with what the margins need);
+- the operator's refusal, with its code and status, for example
+  `the server refused cosign_transfer (409 key_reused): …` for a second payment
+  of one request.
+
+### Leaf events
+
+Delivered to connected sites only:
+
+- `leafArrived` — `{ leaf_id, asset, value, kind }` for each coin a sync
+  accepted from the mailbox (`value` in atoms). It fires once per coin, from
+  the sync that accepted it, whoever asked for that sync.
+- `leafSyncDue` — `{ now, next_sync_at, why? }` when the library's schedule
+  falls due, just before the wallet runs the sync it asks for. `why` is the
+  library's reason when something holds the time (a waiting receive request).
+
+`getCapabilities().features` carries `leaves` on builds that serve this
+section, and `events` lists `modeChanged`, `leafArrived` and `leafSyncDue`.
+
 ## Events
 
 Subscribe with `window.sequentia.on(event, handler)` and unsubscribe with
@@ -343,6 +484,12 @@ Subscribe with `window.sequentia.on(event, handler)` and unsubscribe with
 - `accountsChanged` — `{ accounts: [] }` fires when the wallet locks (site
   should treat the session as suspended).
 - `disconnect` — `{}` fires when the user revokes this site in Settings.
+- `modeChanged` — `{ mode }` fires on every page when the user changes the
+  wallet's mode (see "The wallet's mode").
+- `leafArrived`, `leafSyncDue` — connected sites only (see "Leaf events").
+
+The mode and leaf events reach a page through its tab, so a page that
+subscribed keeps hearing them after the wallet's service worker has slept.
 
 The provider also carries `isSequentia: true` and `network:
 'sequentia-testnet'` as plain properties, readable without a request.
