@@ -47,6 +47,13 @@ wasm. Read this before changing anything.
 - `pkg/` is the SWK `lwk_wasm` build (size-optimized). Rebuild recipe in
   README.md. It is committed deliberately so the extension loads unpacked
   without a Rust toolchain.
+- **The offscreen build stamp is the manifest version.** `OFFSCREEN_BUILD`, the
+  literal on the first line of `offscreen.js`, is what the document answers the
+  worker's `hello` with; the worker reuses a document only when it equals
+  `manifest.json`'s `version`, and otherwise replaces it and waits for one that
+  does. Raise both together on every version change, or every offscreen job
+  fails with "the wallet engine did not come up".
+  `test/offscreen-stamp.test.mjs` and `scripts/sw-console-check.mjs` check it.
 - `doc/PROVIDER.md` is the contract with websites (the SeqDEX site first
   among them). `src/provider-router.js` and that document MUST change together.
 
