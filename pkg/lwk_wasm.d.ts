@@ -1,6 +1,41 @@
 /* tslint:disable */
 /* eslint-disable */
 /**
+ * `adaptorSign(privkey_hex, msg_hex, tPointHex) -> â` (spec §8).
+ *
+ * - `privkey_hex`: the signer secret `d`, 64-hex (BIP340-normalized internally).
+ * - `msg_hex`: the 32-byte sighash the pre-signature commits to, 64-hex.
+ * - `t_point_hex`: the adaptor point `T = t·G`, 66-hex COMPRESSED sec1.
+ *
+ * Returns the 65-byte pre-signature `â` (130-hex) `= compressed(R+T) || ŝ`.
+ * Deterministic for fixed inputs (spec 0.4(4)).
+ */
+export function adaptorSign(privkey_hex: string, msg_hex: string, t_point_hex: string): string;
+/**
+ * `adaptorComplete(presig_hex, t_hex) -> σ` (spec §8).
+ *
+ * Completes the pre-signature with the coupling secret `t` (64-hex) into a standard
+ * 64-byte BIP340 signature (128-hex) that verifies byte-identically under stock
+ * `secp256k1` schnorr verification.
+ */
+export function adaptorComplete(presig_hex: string, t_hex: string): string;
+/**
+ * `adaptorExtract(sig_hex, presig_hex) -> t` (spec §8).
+ *
+ * Recovers the coupling secret `t` (64-hex) from the completed signature `σ`
+ * (128-hex) and the pre-signature `â` (130-hex) it was completed from.
+ */
+export function adaptorExtract(sig_hex: string, presig_hex: string): string;
+/**
+ * `adaptorVerify(pubkey_xonly_hex, msg_hex, tPointHex, presig_hex) -> bool` (spec §8).
+ *
+ * The seller's normative release gate: returns `true` only for a well-formed
+ * pre-signature `â` that is valid under the buyer key `P` (64-hex x-only), message
+ * `m` (64-hex), and adaptor point `T` (66-hex compressed). Returns `false` for any
+ * tampered or malformed input; never throws for a bad `â`.
+ */
+export function adaptorVerify(pubkey_xonly_hex: string, msg_hex: string, t_point_hex: string, presig_hex: string): boolean;
+/**
  * The 32-byte digest (hex) an Arca script verifies for `message`, rebuilt
  * from its fields. Refuses fields a script cannot produce.
  */
@@ -11,76 +46,58 @@ export function csfsDigest(message: any): string;
  */
 export function csfsDescribe(message: any): any;
 /**
- * Sequentia's coinbase maturity, in blocks -- 1,000, not Bitcoin's 100.
+ * Assemble, sign, and serialize the covenant FILL transaction in-browser.
  *
- * Exposed so no wallet has to hard-code it, and so none of them can hard-code
- * it WRONG: a wallet using 100 calls a reward spendable 900 blocks early and
- * then builds a transaction the chain rejects.
+ * Takes the JS FILL recipe (see [`CovenantFillRecipeJson`]) merged with the
+ * wallet's funding selection and recovery phrase. The covenant input at index 0
+ * carries the introspection-only `[leaf, control_block]` witness (NO signature);
+ * each taker funding UTXO is re-derived at `m/84'/coin'/0'/chain/index` and signed
+ * key-path (p2wpkh, segwit-v0 SIGHASH_ALL). Outputs are explicit and placed in the
+ * covenant's fixed order (credit at 0, remainder/gap at 1). Returns
+ * `{ rawHex, txid }`.
  */
-export function sequentiaCoinbaseMaturity(): number;
+export function buildCovenantFillTx(recipe: any, network: Network): any;
 /**
- * Every staking reward in `txs`, newest first.
+ * Assemble, sign, and serialize the covenant REFUND transaction in-browser.
  *
- * `txsJson` is `TxFactsDto[]`, `stakingKeysJson` is `StakingKeyDto[]`.
- * Returns `StakingRewardDto[]`.
+ * Takes the JS REFUND recipe (see [`CovenantRefundRecipeJson`]) plus the wallet's
+ * recovery phrase. Input 0 is the covenant UTXO spent **script-path** via the
+ * CLTV REFUND leaf: the tx `nLockTime` is set to `expiryLocktime`, the input's
+ * `nSequence` enables locktime, the maker key derived at `makerKeyPath` signs the
+ * BIP-341 tapscript sighash, and the witness is
+ * `[maker_sig, refund_leaf, control_block]`. When the fee asset differs from the
+ * covenant asset, `extraFeeUtxos` (the maker's own p2wpkh coins) fund the fee and
+ * are signed key-path. Returns `{ rawHex, txid }`.
  */
-export function attributeStakingRewards(txs_json: string, staking_keys_json: string, tip_height: number, coinbase_maturity: number): any;
+export function buildCovenantRefundTx(recipe: any, network: Network): any;
 /**
- * Group convertible rewards into one batch per asset, skipping the target
- * itself and anything excluded.
+ * Convert a scriptPubKey (hex) to an Elements address for the given network.
  *
- * `alreadyConvertedJson` is `string[]` of `"<txid>:<vout>"` - the coins a
- * conversion has already consumed. That is the idempotence which stops a
- * restart, or a second window, selling the same reward twice.
+ * The maker order flow funds the covenant by paying an address; the covenant spk
+ * is derived in JS (`covenant.js`), and this turns it into the address the wallet
+ * sends to (`hooks.spkToAddress`). Returns the unblinded (transparent) address.
  */
-export function planRewardBatches(rewards_json: string, settings_json: string, already_converted_json: string): any;
+export function scriptToAddress(spk_hex: string, network: Network): string;
 /**
- * Whether one batch converts, given what the book is offering for it.
- *
- * `quoteJson` is a `QuoteDto`, or `"null"` when there is no market for
- * `ASSET/TARGET` - or none deep enough to fill the batch. No market is not an
- * error: the batch waits, and converts if one appears.
+ * The canonical unbonding output script for a 33-byte hex staker key, as hex.
+ * Cross-checked byte-for-byte against the node's `BuildUnbondScript`.
  */
-export function decideRewardConversion(batch_json: string, quote_json: string, settings_json: string): any;
+export function sequentiaUnbondScript(staker_pubkey: string): string;
 /**
- * Compute the OpenAMP AID locally from a set of 64-hex x-only pubkeys (spec 0.2),
- * identical to Go `store.AID`. Wallets MUST call this and assert equality with the
- * server's AID after registration (spec 1.3).
+ * The most unbonding may pay in fees out of a stake of `staked_atoms` (a
+ * decimal string): 1%, rounded as the node rounds it. Returns a string.
  */
-export function openampComputeAid(pubkeys: any): string;
+export function unbondFeeCap(staked_atoms: string): string;
 /**
- * The OpenAMP tagged hash (spec 0.4(2)) over a hex message, returned as 32-byte
- * hex. Exposed for cross-checking / testing; signing uses
- * `Signer.openampSignTagged`.
+ * Unbonding, step 1: spend the staking outputs into an unbonding output of
+ * the same key (vout 0). Returns `{ rawHex, txid, unbondingValue, signing }`.
  */
-export function openampTaggedHash(tag: string, message_hex: string): string;
+export function buildUnbondTx(recipe: any, network: Network): any;
 /**
- * Recompute the Elements taproot enclave sighash (SIGHASH_DEFAULT,
- * genesis-committed) for a foreign NUMS script-path input (SWK-6, spec 0.4(3)).
- *
- * - `tx_hex`: the FULL transaction the wallet is asked to sign.
- * - `input_index`: which input this enclave spend is.
- * - `prevouts`: array of `{asset, value, script}` aligned with the tx inputs.
- * - `leaf_script_hex`: the enclave transfer leaf (`<K_user> CSV <K_policy> CS`).
- * - `control_block_hex`: the leaf control block (its first byte is the leaf
- *   version `0xc4` with the parity bit).
- * - `genesis_hex`: the network genesis block hash (the taproot sighash domain
- *   separator; the wallet supplies its own network's genesis).
- *
- * Returns the 32-byte sighash as hex. The wallet MUST sign THIS value, refusing
- * if it differs from the server's `to_sign` digest.
+ * Unbonding, step 2: send the unbonding outputs to `address`. Returns
+ * `{ rawHex, txid, outValue, signing }`.
  */
-export function enclaveSighash(tx_hex: string, input_index: number, prevouts: any, leaf_script_hex: string, control_block_hex: string, genesis_hex: string): string;
-/**
- * Decode a candidate enclave-spend transaction into the effects to display before
- * signing (SWK-6, spec 0.4(3)): which of my UTXOs are spent, every output's
- * asset/amount/recipient, which outputs are receipts to me, and whether anything
- * is confidential. `my_scripts` is an array of MY enclave scriptPubKeys (hex).
- *
- * Returns a JS object `{ txid, inputs[], outputs[], my_inputs_spent[],
- * any_confidential }`.
- */
-export function decodeEnclaveSpend(tx_hex: string, prevouts: any, my_scripts: any): any;
+export function buildUnbondClaimTx(recipe: any, network: Network): any;
 /**
  * Generate a fresh 32-byte swap secret `s` and its `H = sha256(s)`.
  *
@@ -122,69 +139,6 @@ export function buildSeqHtlcClaimTx(spend: any, redeem_script: string, claim_sec
  */
 export function buildSeqHtlcRefundTx(spend: any, redeem_script: string, refund_secret: string, locktime: number): string;
 /**
- * The canonical unbonding output script for a 33-byte hex staker key, as hex.
- * Cross-checked byte-for-byte against the node's `BuildUnbondScript`.
- */
-export function sequentiaUnbondScript(staker_pubkey: string): string;
-/**
- * The most unbonding may pay in fees out of a stake of `staked_atoms` (a
- * decimal string): 1%, rounded as the node rounds it. Returns a string.
- */
-export function unbondFeeCap(staked_atoms: string): string;
-/**
- * Unbonding, step 1: spend the staking outputs into an unbonding output of
- * the same key (vout 0). Returns `{ rawHex, txid, unbondingValue, signing }`.
- */
-export function buildUnbondTx(recipe: any, network: Network): any;
-/**
- * Unbonding, step 2: send the unbonding outputs to `address`. Returns
- * `{ rawHex, txid, outValue, signing }`.
- */
-export function buildUnbondClaimTx(recipe: any, network: Network): any;
-/**
- * The BIP341 script-path signature hash of input `inputIndex` of `txHex`,
- * spent through `leafScriptHex` at the leaf version its control block
- * carries, with the Elements tagged hashes and the genesis hash.
- *
- * - `prevoutsHex`: every input's spent output, consensus-serialised hex, in
- *   input order.
- * - `sighashType`: the BIP341 type byte; 0 is `SIGHASH_DEFAULT`.
- * - `genesisHex`: the chain's genesis hash, display hex.
- *
- * Refuses when the control block does not commit the leaf to the output the
- * input spends. Returns 32 bytes as hex.
- */
-export function tapscriptSighash(tx_hex: string, input_index: number, prevouts_hex: string[], leaf_script_hex: string, control_block_hex: string, sighash_type: number, genesis_hex: string): string;
-/**
- * What a signature over this spend would authorise, as plain lines for the
- * wallet to show before it asks for approval: the coin and the leaf, what the
- * sighash type covers (under `SIGHASH_NONE`, no output at all), the outputs,
- * the fee and the locks. Takes the same arguments as `tapscriptSighash` and
- * refuses the same spends.
- */
-export function tapscriptDescribe(tx_hex: string, input_index: number, prevouts_hex: string[], leaf_script_hex: string, control_block_hex: string, sighash_type: number, genesis_hex: string): string[];
-/**
- * A fresh random owner nonce, 32 bytes as hex, for a leaf the wallet asks
- * for or publishes in a receive request. Each leaf gets its own, and with it
- * its own key.
- */
-export function arkNewOwnerNonce(): string;
-/**
- * The path of the key for the leaf whose owner nonce is `ownerNonceHex`:
- * `m/6'/account'/c1'/c2'/c3'/c4'`, from `SHA256("Arca/key" ‖ owner_nonce)`.
- */
-export function arkLeafKeyPath(account: number, owner_nonce_hex: string): string;
-/**
- * Read a leaf's record, given as JSON text or as its binary form in hex,
- * and give its fields: `{ leafId, template, hex, json, owner, ownerNonce,
- * operatorNonce, asset, value, entryReserve, unlockHash, genesisHash,
- * operator, token, noticeSeconds, expiries, exitDelaySeconds, burn,
- * position }`. Asset ids, the token and the genesis hash are display hex,
- * amounts decimal strings. Refuses a record that does not decode, naming the
- * kind of error as the Arca vectors do.
- */
-export function arkParseRecord(record: string): any;
-/**
  * Unblind the outputs of a CoinJoin round transaction that belong to this wallet.
  *
  * This is the participant's ONLY way to answer the question that decides whether to sign: does this
@@ -209,38 +163,60 @@ export function coinjoinUnblindOutputs(tx_hex: string, descriptor: WolletDescrip
  */
 export function coinjoinSignInputs(request: any, network: Network): string;
 /**
- * Assemble, sign, and serialize the covenant FILL transaction in-browser.
- *
- * Takes the JS FILL recipe (see [`CovenantFillRecipeJson`]) merged with the
- * wallet's funding selection and recovery phrase. The covenant input at index 0
- * carries the introspection-only `[leaf, control_block]` witness (NO signature);
- * each taker funding UTXO is re-derived at `m/84'/coin'/0'/chain/index` and signed
- * key-path (p2wpkh, segwit-v0 SIGHASH_ALL). Outputs are explicit and placed in the
- * covenant's fixed order (credit at 0, remainder/gap at 1). Returns
- * `{ rawHex, txid }`.
+ * Build the canonical Sequentia delegation-record script for a 33-byte hex
+ * controller and signer; returns the scriptPubKey as hex. Cross-checked
+ * byte-for-byte against the node's `getdelegationscript`, and pinned by a
+ * shared test vector on both sides.
  */
-export function buildCovenantFillTx(recipe: any, network: Network): any;
+export function sequentiaDelegationScript(controller: string, signer: string): string;
 /**
- * Assemble, sign, and serialize the covenant REFUND transaction in-browser.
+ * Read a delegation record back out of a scriptPubKey hex, returning
+ * `{ controller, signer }`, or `null` if the script is not one.
  *
- * Takes the JS REFUND recipe (see [`CovenantRefundRecipeJson`]) plus the wallet's
- * recovery phrase. Input 0 is the covenant UTXO spent **script-path** via the
- * CLTV REFUND leaf: the tx `nLockTime` is set to `expiryLocktime`, the input's
- * `nSequence` enables locktime, the maker key derived at `makerKeyPath` signs the
- * BIP-341 tapscript sighash, and the witness is
- * `[maker_sig, refund_leaf, control_block]`. When the fee asset differs from the
- * covenant asset, `extraFeeUtxos` (the maker's own p2wpkh coins) fund the fee and
- * are signed key-path. Returns `{ rawHex, txid }`.
+ * This is how a wallet finds a delegation it has no local note of, which is the
+ * case that matters: restore a seed on a new device and the record is still
+ * out there lending your weight to a pool. Scanning the wallet's own history
+ * for a script this recognises needs no index, no extra service and no pool
+ * list, because the transaction that funded the record spent this wallet's
+ * coins and is therefore in its history.
  */
-export function buildCovenantRefundTx(recipe: any, network: Network): any;
+export function parseDelegationScript(script_hex: string): any;
 /**
- * Convert a scriptPubKey (hex) to an Elements address for the given network.
+ * Every delegation record in `tx_hex` naming `controller` as its controller,
+ * as `[{ vout, signer, value }]`.
  *
- * The maker order flow funds the covenant by paying an address; the covenant spk
- * is derived in JS (`covenant.js`), and this turns it into the address the wallet
- * sends to (`hooks.spkToAddress`). Returns the unblinded (transparent) address.
+ * This is how a wallet finds a delegation it has no local note of, which is
+ * the case that matters: restore a seed on another device and the record is
+ * still out there lending your weight to a pool. The wallet does not hold the
+ * record as one of its own coins (a bare script matches no descriptor), but
+ * the transaction that FUNDED it spent this wallet's coins and is therefore in
+ * its history, so scanning that history finds it with no index, no pool list
+ * and no stored state. Whether it is still unspent is a separate question only
+ * the explorer can answer, because a transaction spending a bare script need
+ * not touch this wallet at all.
  */
-export function scriptToAddress(spk_hex: string, network: Network): string;
+export function findDelegationRecords(tx_hex: string, controller: string): any;
+/**
+ * Build and sign the spend of a delegation record. Returns
+ * `{ rawHex, txid, outValue, repointed, signing }`.
+ */
+export function buildDelegationSpendTx(recipe: any, network: Network): any;
+/**
+ * Build and sign the transaction that creates a delegation record, funded by
+ * a coin of the wallet's staking key and nothing else. Returns
+ * `{ rawHex, txid, recordValue, changeValue }`.
+ *
+ * Broadcast it right after the transaction holding the coin; it may spend
+ * that coin unconfirmed, and the two are mined together.
+ */
+export function buildDelegationCreateTx(recipe: any, network: Network): any;
+/**
+ * The signature a stake record spend built against `tipHeight` needs in the
+ * next block: `"legacy"` or `"segwitV0"`. `recordsV2Height` overrides the
+ * network's fork height (163,000 on the testnet, 1 elsewhere) for a custom
+ * chain started with `-posrecordsv2height`.
+ */
+export function stakeRecordSigning(network: Network, tip_height: number, records_v2_height?: number | null): string;
 /**
  * `{ secretHex, hashHex }` — a fresh preimage + its hashlock. Persist (sealed)
  * before any money moves; the secret is non-HD and gates the BTC claim.
@@ -322,6 +298,44 @@ export function xchainSeqBroadcast(seq_esplora: string, tx_hex: string): Promise
  */
 export function xchainFindBtcFunding(t4_api: string, txid: string, p2sh_spk_hex: string): Promise<any>;
 /**
+ * Sequentia's coinbase maturity, in blocks -- 1,000, not Bitcoin's 100.
+ *
+ * Exposed so no wallet has to hard-code it, and so none of them can hard-code
+ * it WRONG: a wallet using 100 calls a reward spendable 900 blocks early and
+ * then builds a transaction the chain rejects.
+ */
+export function sequentiaCoinbaseMaturity(): number;
+/**
+ * Every staking reward in `txs`, newest first.
+ *
+ * `txsJson` is `TxFactsDto[]`, `stakingKeysJson` is `StakingKeyDto[]`.
+ * Returns `StakingRewardDto[]`.
+ */
+export function attributeStakingRewards(txs_json: string, staking_keys_json: string, tip_height: number, coinbase_maturity: number): any;
+/**
+ * Group convertible rewards into one batch per asset, skipping the target
+ * itself and anything excluded.
+ *
+ * `alreadyConvertedJson` is `string[]` of `"<txid>:<vout>"` - the coins a
+ * conversion has already consumed. That is the idempotence which stops a
+ * restart, or a second window, selling the same reward twice.
+ */
+export function planRewardBatches(rewards_json: string, settings_json: string, already_converted_json: string): any;
+/**
+ * Whether one batch converts, given what the book is offering for it.
+ *
+ * `quoteJson` is a `QuoteDto`, or `"null"` when there is no market for
+ * `ASSET/TARGET` - or none deep enough to fill the batch. No market is not an
+ * error: the batch waits, and converts if one appears.
+ */
+export function decideRewardConversion(batch_json: string, quote_json: string, settings_json: string): any;
+/**
+ * Build the canonical Sequentia stake script for a 33-byte hex `staker_pubkey`
+ * and a `csv` relative-timelock; returns the scriptPubKey as hex. Can be
+ * cross-checked byte-for-byte against the node's `getstakescript`.
+ */
+export function sequentiaStakeScript(staker_pubkey: string, csv: number): string;
+/**
  * Convert the given string to a QR code image uri
  *
  * The image format is monocromatic bitmap, returned as an encoded in base64 uri.
@@ -331,101 +345,87 @@ export function xchainFindBtcFunding(t4_api: string, txid: string, p2sh_spk_hex:
  */
 export function stringToQr(str: string, pixel_per_module?: number | null): string;
 /**
- * `adaptorSign(privkey_hex, msg_hex, tPointHex) -> â` (spec §8).
+ * A fresh random owner nonce, 32 bytes as hex, for a leaf the wallet asks
+ * for or publishes in a receive request. Each leaf gets its own, and with it
+ * its own key.
+ */
+export function arkNewOwnerNonce(): string;
+/**
+ * The path of the key for the leaf whose owner nonce is `ownerNonceHex`:
+ * `m/6'/account'/c1'/c2'/c3'/c4'`, from `SHA256("Arca/key" ‖ owner_nonce)`.
+ */
+export function arkLeafKeyPath(account: number, owner_nonce_hex: string): string;
+/**
+ * Read a leaf's record, given as JSON text or as its binary form in hex,
+ * and give its fields: `{ leafId, template, hex, json, owner, ownerNonce,
+ * operatorNonce, asset, value, entryReserve, unlockHash, genesisHash,
+ * operator, token, noticeSeconds, expiries, exitDelaySeconds, burn,
+ * position }`. Asset ids, the token and the genesis hash are display hex,
+ * amounts decimal strings. Refuses a record that does not decode, naming the
+ * kind of error as the Arca vectors do.
+ */
+export function arkParseRecord(record: string): any;
+/**
+ * Compute the OpenAMP AID locally from a set of 64-hex x-only pubkeys (spec 0.2),
+ * identical to Go `store.AID`. Wallets MUST call this and assert equality with the
+ * server's AID after registration (spec 1.3).
+ */
+export function openampComputeAid(pubkeys: any): string;
+/**
+ * The OpenAMP tagged hash (spec 0.4(2)) over a hex message, returned as 32-byte
+ * hex. Exposed for cross-checking / testing; signing uses
+ * `Signer.openampSignTagged`.
+ */
+export function openampTaggedHash(tag: string, message_hex: string): string;
+/**
+ * Recompute the Elements taproot enclave sighash (SIGHASH_DEFAULT,
+ * genesis-committed) for a foreign NUMS script-path input (SWK-6, spec 0.4(3)).
  *
- * - `privkey_hex`: the signer secret `d`, 64-hex (BIP340-normalized internally).
- * - `msg_hex`: the 32-byte sighash the pre-signature commits to, 64-hex.
- * - `t_point_hex`: the adaptor point `T = t·G`, 66-hex COMPRESSED sec1.
+ * - `tx_hex`: the FULL transaction the wallet is asked to sign.
+ * - `input_index`: which input this enclave spend is.
+ * - `prevouts`: array of `{asset, value, script}` aligned with the tx inputs.
+ * - `leaf_script_hex`: the enclave transfer leaf (`<K_user> CSV <K_policy> CS`).
+ * - `control_block_hex`: the leaf control block (its first byte is the leaf
+ *   version `0xc4` with the parity bit).
+ * - `genesis_hex`: the network genesis block hash (the taproot sighash domain
+ *   separator; the wallet supplies its own network's genesis).
  *
- * Returns the 65-byte pre-signature `â` (130-hex) `= compressed(R+T) || ŝ`.
- * Deterministic for fixed inputs (spec 0.4(4)).
+ * Returns the 32-byte sighash as hex. The wallet MUST sign THIS value, refusing
+ * if it differs from the server's `to_sign` digest.
  */
-export function adaptorSign(privkey_hex: string, msg_hex: string, t_point_hex: string): string;
+export function enclaveSighash(tx_hex: string, input_index: number, prevouts: any, leaf_script_hex: string, control_block_hex: string, genesis_hex: string): string;
 /**
- * `adaptorComplete(presig_hex, t_hex) -> σ` (spec §8).
+ * Decode a candidate enclave-spend transaction into the effects to display before
+ * signing (SWK-6, spec 0.4(3)): which of my UTXOs are spent, every output's
+ * asset/amount/recipient, which outputs are receipts to me, and whether anything
+ * is confidential. `my_scripts` is an array of MY enclave scriptPubKeys (hex).
  *
- * Completes the pre-signature with the coupling secret `t` (64-hex) into a standard
- * 64-byte BIP340 signature (128-hex) that verifies byte-identically under stock
- * `secp256k1` schnorr verification.
+ * Returns a JS object `{ txid, inputs[], outputs[], my_inputs_spent[],
+ * any_confidential }`.
  */
-export function adaptorComplete(presig_hex: string, t_hex: string): string;
+export function decodeEnclaveSpend(tx_hex: string, prevouts: any, my_scripts: any): any;
 /**
- * `adaptorExtract(sig_hex, presig_hex) -> t` (spec §8).
+ * The BIP341 script-path signature hash of input `inputIndex` of `txHex`,
+ * spent through `leafScriptHex` at the leaf version its control block
+ * carries, with the Elements tagged hashes and the genesis hash.
  *
- * Recovers the coupling secret `t` (64-hex) from the completed signature `σ`
- * (128-hex) and the pre-signature `â` (130-hex) it was completed from.
- */
-export function adaptorExtract(sig_hex: string, presig_hex: string): string;
-/**
- * `adaptorVerify(pubkey_xonly_hex, msg_hex, tPointHex, presig_hex) -> bool` (spec §8).
+ * - `prevoutsHex`: every input's spent output, consensus-serialised hex, in
+ *   input order.
+ * - `sighashType`: the BIP341 type byte; 0 is `SIGHASH_DEFAULT`.
+ * - `genesisHex`: the chain's genesis hash, display hex.
  *
- * The seller's normative release gate: returns `true` only for a well-formed
- * pre-signature `â` that is valid under the buyer key `P` (64-hex x-only), message
- * `m` (64-hex), and adaptor point `T` (66-hex compressed). Returns `false` for any
- * tampered or malformed input; never throws for a bad `â`.
+ * Refuses when the control block does not commit the leaf to the output the
+ * input spends. Returns 32 bytes as hex.
  */
-export function adaptorVerify(pubkey_xonly_hex: string, msg_hex: string, t_point_hex: string, presig_hex: string): boolean;
+export function tapscriptSighash(tx_hex: string, input_index: number, prevouts_hex: string[], leaf_script_hex: string, control_block_hex: string, sighash_type: number, genesis_hex: string): string;
 /**
- * Build the canonical Sequentia delegation-record script for a 33-byte hex
- * controller and signer; returns the scriptPubKey as hex. Cross-checked
- * byte-for-byte against the node's `getdelegationscript`, and pinned by a
- * shared test vector on both sides.
+ * What a signature over this spend would authorise, as plain lines for the
+ * wallet to show before it asks for approval: the coin and the leaf, what the
+ * sighash type covers (under `SIGHASH_NONE`, no output at all), the outputs,
+ * the fee and the locks. Takes the same arguments as `tapscriptSighash` and
+ * refuses the same spends.
  */
-export function sequentiaDelegationScript(controller: string, signer: string): string;
-/**
- * Read a delegation record back out of a scriptPubKey hex, returning
- * `{ controller, signer }`, or `null` if the script is not one.
- *
- * This is how a wallet finds a delegation it has no local note of, which is the
- * case that matters: restore a seed on a new device and the record is still
- * out there lending your weight to a pool. Scanning the wallet's own history
- * for a script this recognises needs no index, no extra service and no pool
- * list, because the transaction that funded the record spent this wallet's
- * coins and is therefore in its history.
- */
-export function parseDelegationScript(script_hex: string): any;
-/**
- * Every delegation record in `tx_hex` naming `controller` as its controller,
- * as `[{ vout, signer, value }]`.
- *
- * This is how a wallet finds a delegation it has no local note of, which is
- * the case that matters: restore a seed on another device and the record is
- * still out there lending your weight to a pool. The wallet does not hold the
- * record as one of its own coins (a bare script matches no descriptor), but
- * the transaction that FUNDED it spent this wallet's coins and is therefore in
- * its history, so scanning that history finds it with no index, no pool list
- * and no stored state. Whether it is still unspent is a separate question only
- * the explorer can answer, because a transaction spending a bare script need
- * not touch this wallet at all.
- */
-export function findDelegationRecords(tx_hex: string, controller: string): any;
-/**
- * Build and sign the spend of a delegation record. Returns
- * `{ rawHex, txid, outValue, repointed, signing }`.
- */
-export function buildDelegationSpendTx(recipe: any, network: Network): any;
-/**
- * Build and sign the transaction that creates a delegation record, funded by
- * a coin of the wallet's staking key and nothing else. Returns
- * `{ rawHex, txid, recordValue, changeValue }`.
- *
- * Broadcast it right after the transaction holding the coin; it may spend
- * that coin unconfirmed, and the two are mined together.
- */
-export function buildDelegationCreateTx(recipe: any, network: Network): any;
-/**
- * The signature a stake record spend built against `tipHeight` needs in the
- * next block: `"legacy"` or `"segwitV0"`. `recordsV2Height` overrides the
- * network's fork height (163,000 on the testnet, 1 elsewhere) for a custom
- * chain started with `-posrecordsv2height`.
- */
-export function stakeRecordSigning(network: Network, tip_height: number, records_v2_height?: number | null): string;
-/**
- * Build the canonical Sequentia stake script for a 33-byte hex `staker_pubkey`
- * and a `csv` relative-timelock; returns the scriptPubKey as hex. Can be
- * cross-checked byte-for-byte against the node's `getstakescript`.
- */
-export function sequentiaStakeScript(staker_pubkey: string, csv: number): string;
+export function tapscriptDescribe(tx_hex: string, input_index: number, prevouts_hex: string[], leaf_script_hex: string, control_block_hex: string, sighash_type: number, genesis_hex: string): string[];
 /**
  * Wallet chain
  */
@@ -1157,6 +1157,172 @@ export class Contract {
    * but you need the same contract after that call.
    */
   clone(): Contract;
+}
+/**
+ * A contract spend checked under the five-point rule, with the summary the
+ * wallet shows before it signs.
+ */
+export class ContractApproval {
+  private constructor();
+  free(): void;
+  [Symbol.dispose](): void;
+  /**
+   * Checks `spend` for `signer`: the template is on the wallet's list
+   * (`viewJson.known`), the output was recomputed and is the coin's, the
+   * chain's locks have passed, the key is the wallet's contract key the
+   * path names (`viewJson.key_path`, by default `0/0` under
+   * `m/8383h/{coin}h/0h`), and the program accepts the final transaction.
+   * `viewJson` may also carry the registry's name for the template
+   * (`registry: {name, version}`) and asset labels
+   * (`assets: {"<id>": {ticker, precision}}`). Throws the first rule that fails.
+   */
+  static prepare(spend: ContractSpend, signer: Signer, view_json: string): ContractApproval;
+  /**
+   * What the wallet shows, as JSON: the template (by registry name, else
+   * its root), the path, the parameters by role, the wallet's balance
+   * change in every asset, the contract's, payments, the fee, the checks,
+   * and the `digest` that `Signer.signContractSpend` takes back.
+   */
+  summary(): string;
+  /**
+   * The digest of the summary.
+   */
+  digest(): string;
+}
+/**
+ * An instance of a template: its output, recomputed by the engine.
+ */
+export class ContractInstance {
+  free(): void;
+  [Symbol.dispose](): void;
+  /**
+   * Reads an instance record (`{"instance": 1|2, "template_hash", "params",
+   * "slots", "genesis"}`) of `template` and recomputes its output.
+   */
+  constructor(template: ContractTemplate, instance_json: string);
+  /**
+   * The output script, hex.
+   */
+  scriptPubkey(): string;
+  /**
+   * The unblinded address on `network`.
+   */
+  address(network: Network): string;
+  /**
+   * The address under a bech32 prefix, as the golden vectors give one per chain.
+   */
+  addressWithPrefix(hrp: string): string;
+  /**
+   * Everything the output is made of, as the golden vectors write it:
+   * `{leaves, merkle_root, tweak, output_key, output_key_parity, script_pubkey}`.
+   */
+  derived(): string;
+  /**
+   * Each spending path and what its spend needs, as JSON.
+   */
+  paths(): string;
+  /**
+   * The instance record, as JSON.
+   */
+  instance(): string;
+  /**
+   * The template hash of this instance.
+   */
+  templateHash(): string;
+  /**
+   * For a faucet drip covenant: the request for a drip of `amount` from
+   * the reserve `coinJson` (`{txid, vout, script_pubkey, asset, amount}`,
+   * asset in display hex) to `toAddress`, paying `fee` in the reserve's
+   * asset. Refuses an amount above the reserve's tier and a fee above the
+   * covenant's cap, as its program would.
+   */
+  planDrip(coin_json: string, to_address: string, amount: bigint, fee: bigint): string;
+  /**
+   * For a faucet drip covenant: the most a drip may pay from a reserve of `reserve`.
+   */
+  dripTier(reserve: bigint): bigint;
+}
+/**
+ * The spend of one path of a contract, built from a request and not yet signed.
+ */
+export class ContractSpend {
+  private constructor();
+  free(): void;
+  [Symbol.dispose](): void;
+  /**
+   * Builds the spend `requestJson` describes (see `SpendRequest`) on
+   * `network`. `walletScriptsJson` lists the wallet's own scripts (hex), so
+   * an output to the wallet is told apart from a payment; `chainJson`
+   * (`{tip_height, tip_median_time, coin_height, coin_start_median_time}`)
+   * lets the engine check the spend's locks. Refuses an output the request
+   * mislabels, a confidential output, a missing or second fee, and outputs
+   * that do not balance the coin, each with the reason.
+   */
+  static build(instance: ContractInstance, network: Network, request_json: string, wallet_scripts_json: string, chain_json?: string | null): ContractSpend;
+  /**
+   * The unsigned transaction, hex.
+   */
+  unsignedTx(): string;
+  /**
+   * What each output does: `[{index, role, script_pubkey, asset, amount}]`.
+   */
+  outputs(): string;
+  /**
+   * The path being spent and what it needs, as JSON.
+   */
+  path(): string;
+  /**
+   * Refuses, with the reason, a spend whose locks the chain would refuse
+   * now; otherwise says which locks have passed.
+   */
+  checkLocks(): string;
+}
+/**
+ * A contract template, checked: the descriptor's every rule, and each
+ * program compiled with the pinned compiler to the root the descriptor gives.
+ */
+export class ContractTemplate {
+  free(): void;
+  [Symbol.dispose](): void;
+  /**
+   * Reads `descriptorJson` with the resolved source of each program,
+   * `sourcesJson` = `{"<source name>": "<text>"}` (what `seqc expand`
+   * prints, the text `source_sha256` hashes). Throws the reason a
+   * descriptor or a source is refused.
+   */
+  constructor(descriptor_json: string, sources_json: string);
+  /**
+   * The templates this kit carries: `[{hash, name, version, summary}]` as JSON.
+   */
+  static knownList(): string;
+  /**
+   * A template this kit carries, by hash.
+   */
+  static known(hash: string): ContractTemplate;
+  /**
+   * A carried template's descriptor text, for a registry or a page to show.
+   */
+  static knownDescriptor(hash: string): string;
+  /**
+   * The template hash: the template's identity.
+   */
+  hash(): string;
+  /**
+   * The name the template gives itself. Only a registry vouches for a name.
+   */
+  selfName(): string;
+  /**
+   * The template's version.
+   */
+  version(): bigint;
+  /**
+   * One sentence a wallet can show.
+   */
+  summary(): string;
+  /**
+   * Parameters, slots, paths (with what each needs) and leaves, as JSON.
+   */
+  describe(): string;
 }
 export class CurrencyCode {
   free(): void;
@@ -2155,15 +2321,26 @@ export class Signer {
   free(): void;
   [Symbol.dispose](): void;
   /**
-   * Derive the taker's dedicated Sequentia cross-chain HTLC claim keypair at m/3/0.
+   * Derive a BIP86 taproot maker-payout address + its 32-byte `maker_prog`.
    *
-   * Deterministic and recoverable from the wallet seed (distinct from staking's
-   * m/2/0). Returns `{ public_key, secret_hex }`: give `public_key` to the daemon
-   * as the Sequentia claim pubkey in `ProposeXchainSwap`, and pass `secret_hex` to
-   * [`buildSeqHtlcClaimTx`] to sign the claim. The matching BTC-refund pubkey the
-   * daemon also needs is produced by the wallet's BTC side (`btc.js`).
+   * The covenant FILL leaf pins a v1-taproot maker payout, so a maker placing an
+   * order needs a taproot (witness v1) receive address it CONTROLS, and that
+   * output key's 32 bytes are the `maker_prog` baked into the order. This derives
+   * `m/86'/coin'/0'/0/index` and returns `{ program, spkHex, address, internalKey,
+   * path }`. The program uses the ELEMENTS TapTweak, so it matches an `eltr`
+   * (BIP86) LWK descriptor: a companion `Wollet` built from that descriptor
+   * watches and key-path-spends the credit (see `covenantMakerDescriptor`).
    */
-  htlcKeypair(): any;
+  covenantMakerAddress(network: Network, index: number): any;
+  /**
+   * The `eltr` (BIP86) taproot descriptor a companion `Wollet` uses to WATCH and
+   * key-path-SPEND covenant maker-credit payouts. The wallet's primary descriptor
+   * is `wpkh` (BIP84) and does not track taproot receives, so the maker runs this
+   * second wollet to see the credits and sweep them. Confidential-blinded (the
+   * scriptPubKey is identical to the unblinded payout, so it still matches the
+   * explicit credit the covenant pays).
+   */
+  covenantMakerDescriptor(): WolletDescriptor;
   /**
    * Creates a `Signer`
    */
@@ -2254,6 +2431,14 @@ export class Signer {
    */
   signTapscript(path: string, tx_hex: string, input_index: number, prevouts_hex: string[], leaf_script_hex: string, control_block_hex: string, sighash_type: number, genesis_hex: string, allow_sighash?: string | null): string;
   /**
+   * Signs a contract spend the wallet has shown: `shownDigest` is the
+   * `digest` of the approval's summary as displayed. Refuses any other
+   * digest, prepares the spend again and refuses if anything differs, then
+   * signs with the contract key and runs the program against the
+   * transaction it returns (hex, ready to broadcast).
+   */
+  signContractSpend(approval: ContractApproval, shown_digest: string): string;
+  /**
    * The genesis hash (display hex) of the network this signer was made for.
    */
   genesisHash(): string;
@@ -2320,6 +2505,16 @@ export class Signer {
    */
   openampSignChallenge(challenge: string): string;
   /**
+   * Derive the taker's dedicated Sequentia cross-chain HTLC claim keypair at m/3/0.
+   *
+   * Deterministic and recoverable from the wallet seed (distinct from staking's
+   * m/2/0). Returns `{ public_key, secret_hex }`: give `public_key` to the daemon
+   * as the Sequentia claim pubkey in `ProposeXchainSwap`, and pass `secret_hex` to
+   * [`buildSeqHtlcClaimTx`] to sign the claim. The matching BTC-refund pubkey the
+   * daemon also needs is produced by the wallet's BTC side (`btc.js`).
+   */
+  htlcKeypair(): any;
+  /**
    * The key for the leaf whose owner nonce is `ownerNonceHex`:
    * `{ ownerNonce, account, path, key }`, the key x-only hex as the leaf's
    * scripts name it.
@@ -2331,27 +2526,6 @@ export class Signer {
    * mnemonic finds its leaves among the records a server returns.
    */
   arkRestoreKey(account: number, record: string): any;
-  /**
-   * Derive a BIP86 taproot maker-payout address + its 32-byte `maker_prog`.
-   *
-   * The covenant FILL leaf pins a v1-taproot maker payout, so a maker placing an
-   * order needs a taproot (witness v1) receive address it CONTROLS, and that
-   * output key's 32 bytes are the `maker_prog` baked into the order. This derives
-   * `m/86'/coin'/0'/0/index` and returns `{ program, spkHex, address, internalKey,
-   * path }`. The program uses the ELEMENTS TapTweak, so it matches an `eltr`
-   * (BIP86) LWK descriptor: a companion `Wollet` built from that descriptor
-   * watches and key-path-spends the credit (see `covenantMakerDescriptor`).
-   */
-  covenantMakerAddress(network: Network, index: number): any;
-  /**
-   * The `eltr` (BIP86) taproot descriptor a companion `Wollet` uses to WATCH and
-   * key-path-SPEND covenant maker-credit payouts. The wallet's primary descriptor
-   * is `wpkh` (BIP84) and does not track taproot receives, so the maker runs this
-   * second wollet to see the credits and sweep them. Confidential-blinded (the
-   * scriptPubKey is identical to the unblinded payout, so it still matches the
-   * explicit credit the covenant pays).
-   */
-  covenantMakerDescriptor(): WolletDescriptor;
 }
 /**
  * The taker half of a SeqDEX same-chain swap, ready to POST to the daemon's
@@ -3006,6 +3180,22 @@ export class Wollet {
   free(): void;
   [Symbol.dispose](): void;
   /**
+   * Get the transaction list
+   *
+   * **Experimental**: This API may change without notice.
+   */
+  txs(opt: TxsOpt): TxDetails[];
+  /**
+   * Number of transactions
+   */
+  numTxs(): number;
+  /**
+   * Get the details of a transaction
+   *
+   * **Experimental**: This API may change without notice.
+   */
+  txDetails(txid: Txid, opt: TxOpt): TxDetails | undefined;
+  /**
    * Create a `Wollet`
    */
   constructor(network: Network, descriptor: WolletDescriptor);
@@ -3149,22 +3339,6 @@ export class Wollet {
    * Whether the wallet is AMP0
    */
   isAmp0(): boolean;
-  /**
-   * Get the transaction list
-   *
-   * **Experimental**: This API may change without notice.
-   */
-  txs(opt: TxsOpt): TxDetails[];
-  /**
-   * Number of transactions
-   */
-  numTxs(): number;
-  /**
-   * Get the details of a transaction
-   *
-   * **Experimental**: This API may change without notice.
-   */
-  txDetails(txid: Txid, opt: TxOpt): TxDetails | undefined;
   /**
    * Build a SeqDEX same-chain SwapRequest (the taker / proposer half).
    *
@@ -3314,12 +3488,502 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 
 export interface InitOutput {
   readonly memory: WebAssembly.Memory;
+  readonly __wbg_wallettxout_free: (a: number, b: number) => void;
+  readonly wallettxout_outpoint: (a: number) => number;
+  readonly wallettxout_scriptPubkey: (a: number) => number;
+  readonly wallettxout_height: (a: number) => number;
+  readonly wallettxout_unblinded: (a: number) => number;
+  readonly wallettxout_isSpent: (a: number) => number;
+  readonly wallettxout_wildcardIndex: (a: number) => number;
+  readonly wallettxout_extInt: (a: number) => number;
+  readonly wallettxout_address: (a: number) => number;
+  readonly __wbg_optionwallettxout_free: (a: number, b: number) => void;
+  readonly optionwallettxout_get: (a: number) => number;
+  readonly __wbg_assetid_free: (a: number, b: number) => void;
+  readonly __wbg_assetids_free: (a: number, b: number) => void;
+  readonly assetid_fromString: (a: number, b: number) => [number, number, number];
+  readonly assetid_fromBytes: (a: number, b: number) => [number, number, number];
+  readonly assetid_toBytes: (a: number) => [number, number];
+  readonly assetid_toString: (a: number) => [number, number];
+  readonly assetids_empty: () => [number, number, number];
+  readonly assetids_toString: (a: number) => [number, number];
+  readonly __wbg_script_free: (a: number, b: number) => void;
+  readonly script_new: (a: number, b: number) => [number, number, number];
+  readonly script_empty: () => number;
+  readonly script_bytes: (a: number) => [number, number];
+  readonly script_jet_sha256_hex: (a: number) => [number, number];
+  readonly script_asm: (a: number) => [number, number];
+  readonly script_newOpReturn: (a: number, b: number) => number;
+  readonly script_isProvablyUnspendable: (a: number) => number;
+  readonly script_isProvablySegwit: (a: number, b: number) => number;
+  readonly script_toString: (a: number) => [number, number];
+  readonly __wbg_transaction_free: (a: number, b: number) => void;
+  readonly transaction_new: (a: number, b: number) => [number, number, number];
+  readonly transaction_fromString: (a: number, b: number) => [number, number, number];
+  readonly transaction_fromBytes: (a: number, b: number) => [number, number, number];
+  readonly transaction_txid: (a: number) => number;
+  readonly transaction_bytes: (a: number) => [number, number];
+  readonly transaction_fee: (a: number, b: number) => bigint;
+  readonly transaction_toString: (a: number) => [number, number];
+  readonly __wbg_txid_free: (a: number, b: number) => void;
+  readonly txid_new: (a: number, b: number) => [number, number, number];
+  readonly txid_toString: (a: number) => [number, number];
+  readonly __wbg_wallettx_free: (a: number, b: number) => void;
+  readonly wallettx_tx: (a: number) => number;
+  readonly wallettx_height: (a: number) => number;
+  readonly wallettx_balance: (a: number) => number;
+  readonly wallettx_txid: (a: number) => number;
+  readonly wallettx_fee: (a: number) => bigint;
+  readonly wallettx_isCoinbase: (a: number) => number;
+  readonly wallettx_txType: (a: number) => [number, number];
+  readonly wallettx_timestamp: (a: number) => number;
+  readonly wallettx_inputs: (a: number) => [number, number];
+  readonly wallettx_outputs: (a: number) => [number, number];
+  readonly wallettx_unblindedUrl: (a: number, b: number, c: number) => [number, number];
+  readonly __wbg_pset_free: (a: number, b: number) => void;
+  readonly pset_new: (a: number, b: number) => [number, number, number];
+  readonly pset_toString: (a: number) => [number, number];
+  readonly pset_extractTx: (a: number) => [number, number, number];
+  readonly pset_uniqueId: (a: number) => [number, number, number];
+  readonly pset_combine: (a: number, b: number) => [number, number];
+  readonly pset_inputs: (a: number) => [number, number];
+  readonly pset_outputs: (a: number) => [number, number];
+  readonly pset_addDetails: (a: number, b: number) => [number, number];
+  readonly __wbg_psetinput_free: (a: number, b: number) => void;
+  readonly psetinput_previousTxid: (a: number) => number;
+  readonly psetinput_previousVout: (a: number) => number;
+  readonly psetinput_previousScriptPubkey: (a: number) => number;
+  readonly psetinput_redeemScript: (a: number) => number;
+  readonly psetinput_issuanceAsset: (a: number) => number;
+  readonly psetinput_issuanceToken: (a: number) => number;
+  readonly psetinput_issuance: (a: number) => number;
+  readonly psetinput_sighash: (a: number) => number;
+  readonly psetinput_issuanceIds: (a: number) => [number, number];
+  readonly __wbg_psetoutput_free: (a: number, b: number) => void;
+  readonly psetoutput_scriptPubkey: (a: number) => number;
+  readonly psetoutput_amount: (a: number) => [number, bigint];
+  readonly psetoutput_asset: (a: number) => number;
+  readonly psetoutput_blinderIndex: (a: number) => number;
+  readonly __wbg_psetdetails_free: (a: number, b: number) => void;
+  readonly __wbg_psetbalance_free: (a: number, b: number) => void;
+  readonly __wbg_psetsignatures_free: (a: number, b: number) => void;
+  readonly __wbg_issuance_free: (a: number, b: number) => void;
+  readonly __wbg_recipient_free: (a: number, b: number) => void;
+  readonly psetdetails_balance: (a: number) => number;
+  readonly psetdetails_signatures: (a: number) => [number, number];
+  readonly psetdetails_fingerprintsMissing: (a: number) => [number, number];
+  readonly psetdetails_fingerprintsHas: (a: number) => [number, number];
+  readonly psetdetails_inputsIssuances: (a: number) => [number, number];
+  readonly psetbalance_fee: (a: number) => bigint;
+  readonly psetbalance_fees: (a: number) => number;
+  readonly psetbalance_feesIn: (a: number, b: number) => bigint;
+  readonly psetbalance_balances: (a: number) => number;
+  readonly psetbalance_recipients: (a: number) => [number, number];
+  readonly psetsignatures_hasSignature: (a: number) => any;
+  readonly psetsignatures_missingSignature: (a: number) => any;
+  readonly issuance_asset: (a: number) => number;
+  readonly issuance_token: (a: number) => number;
+  readonly issuance_prevVout: (a: number) => number;
+  readonly issuance_prevTxid: (a: number) => number;
+  readonly issuance_isIssuance: (a: number) => number;
+  readonly issuance_isReissuance: (a: number) => number;
+  readonly recipient_asset: (a: number) => number;
+  readonly recipient_value: (a: number) => [number, bigint];
+  readonly recipient_address: (a: number) => number;
+  readonly recipient_vout: (a: number) => number;
+  readonly __wbg_txdetails_free: (a: number, b: number) => void;
+  readonly txdetails_tx: (a: number) => number;
+  readonly txdetails_txid: (a: number) => number;
+  readonly txdetails_height: (a: number) => number;
+  readonly txdetails_timestamp: (a: number) => number;
+  readonly txdetails_txType: (a: number) => [number, number];
+  readonly txdetails_balance: (a: number) => number;
+  readonly txdetails_fees: (a: number) => number;
+  readonly txdetails_feesAsset: (a: number, b: number) => bigint;
+  readonly txdetails_unblindedUrl: (a: number, b: number, c: number) => [number, number];
+  readonly txdetails_inputs: (a: number) => [number, number];
+  readonly txdetails_outputs: (a: number) => [number, number];
+  readonly __wbg_txoutdetails_free: (a: number, b: number) => void;
+  readonly txoutdetails_outpoint: (a: number) => number;
+  readonly txoutdetails_script_pubkey: (a: number) => number;
+  readonly txoutdetails_height: (a: number) => number;
+  readonly txoutdetails_address: (a: number) => number;
+  readonly txoutdetails_unblinded: (a: number) => number;
+  readonly txoutdetails_is_explicit: (a: number) => number;
+  readonly txoutdetails_is_spent: (a: number) => number;
+  readonly __wbg_txsopt_free: (a: number, b: number) => void;
+  readonly txsopt_default: () => number;
+  readonly txsopt_withPagination: (a: number, b: number) => number;
+  readonly __wbg_txopt_free: (a: number, b: number) => void;
+  readonly txopt_default: () => number;
+  readonly wollet_txs: (a: number, b: number) => [number, number, number, number];
+  readonly wollet_numTxs: (a: number) => [number, number, number];
+  readonly wollet_txDetails: (a: number, b: number, c: number) => [number, number, number];
+  readonly assetid_new: (a: number, b: number) => [number, number, number];
+  readonly transaction_toBytes: (a: number) => [number, number];
+  readonly adaptorSign: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
+  readonly adaptorComplete: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+  readonly adaptorExtract: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+  readonly adaptorVerify: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number];
   readonly csfsDigest: (a: any) => [number, number, number, number];
   readonly csfsDescribe: (a: any) => [number, number, number];
+  readonly __wbg_unvalidatedliquidexproposal_free: (a: number, b: number) => void;
+  readonly __wbg_validatedliquidexproposal_free: (a: number, b: number) => void;
+  readonly __wbg_assetamount_free: (a: number, b: number) => void;
+  readonly unvalidatedliquidexproposal_new: (a: number, b: number) => [number, number, number];
+  readonly unvalidatedliquidexproposal_fromPset: (a: number) => [number, number, number];
+  readonly unvalidatedliquidexproposal_insecureValidate: (a: number) => [number, number, number];
+  readonly unvalidatedliquidexproposal_validate: (a: number, b: number) => [number, number, number];
+  readonly unvalidatedliquidexproposal_toString: (a: number) => [number, number];
+  readonly assetamount_amount: (a: number) => bigint;
+  readonly assetamount_asset: (a: number) => number;
+  readonly validatedliquidexproposal_input: (a: number) => number;
+  readonly validatedliquidexproposal_output: (a: number) => number;
+  readonly validatedliquidexproposal_toString: (a: number) => [number, number];
+  readonly __wbg_mnemonic_free: (a: number, b: number) => void;
+  readonly mnemonic_new: (a: number, b: number) => [number, number, number];
+  readonly mnemonic_toString: (a: number) => [number, number];
+  readonly mnemonic_fromEntropy: (a: number, b: number) => [number, number, number];
+  readonly mnemonic_fromRandom: (a: number) => [number, number, number];
+  readonly buildCovenantFillTx: (a: any, b: number) => [number, number, number];
+  readonly buildCovenantRefundTx: (a: any, b: number) => [number, number, number];
+  readonly signer_covenantMakerAddress: (a: number, b: number, c: number) => [number, number, number];
+  readonly signer_covenantMakerDescriptor: (a: number) => [number, number, number];
+  readonly scriptToAddress: (a: number, b: number, c: number) => [number, number, number, number];
+  readonly sequentiaUnbondScript: (a: number, b: number) => [number, number, number, number];
+  readonly unbondFeeCap: (a: number, b: number) => [number, number, number, number];
+  readonly buildUnbondTx: (a: any, b: number) => [number, number, number];
+  readonly buildUnbondClaimTx: (a: any, b: number) => [number, number, number];
+  readonly __wbg_signer_free: (a: number, b: number) => void;
+  readonly signer_new: (a: number, b: number) => [number, number, number];
+  readonly signer_sign: (a: number, b: number) => [number, number, number];
+  readonly signer_signMessage: (a: number, b: number, c: number) => [number, number, number, number];
+  readonly signer_wpkhSlip77Descriptor: (a: number) => [number, number, number];
+  readonly signer_getMasterXpub: (a: number) => [number, number, number];
+  readonly signer_stakerPublicKey: (a: number) => [number, number, number, number];
+  readonly signer_signMessageWithStakerKey: (a: number, b: number, c: number) => [number, number, number, number];
+  readonly signer_keyoriginXpub: (a: number, b: number) => [number, number, number, number];
+  readonly signer_fingerprint: (a: number) => [number, number, number, number];
+  readonly signer_mnemonic: (a: number) => number;
+  readonly signer_derive_bip85_mnemonic: (a: number, b: number, c: number) => [number, number, number];
+  readonly signer_xonlyPublicKeyAt: (a: number, b: number, c: number) => [number, number, number, number];
+  readonly signer_signTapscript: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number) => [number, number, number, number];
+  readonly signer_signContractSpend: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+  readonly signer_genesisHash: (a: number) => [number, number];
+  readonly signer_signCsfs: (a: number, b: number, c: number, d: any, e: number, f: number, g: any) => [number, number, number, number];
+  readonly signer_openampXonlyPubkey: (a: number) => [number, number, number, number];
+  readonly signer_openampSignSighash: (a: number, b: number, c: number) => [number, number, number, number];
+  readonly signer_openampSignTagged: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
+  readonly signer_openampSignChallenge: (a: number, b: number, c: number) => [number, number, number, number];
+  readonly __wbg_assetblindingfactor_free: (a: number, b: number) => void;
+  readonly assetblindingfactor_fromString: (a: number, b: number) => [number, number, number];
+  readonly assetblindingfactor_fromBytes: (a: number, b: number) => [number, number, number];
+  readonly assetblindingfactor_zero: () => number;
+  readonly assetblindingfactor_toBytes: (a: number) => [number, number];
+  readonly assetblindingfactor_toString: (a: number) => [number, number];
+  readonly __wbg_valueblindingfactor_free: (a: number, b: number) => void;
+  readonly valueblindingfactor_fromString: (a: number, b: number) => [number, number, number];
+  readonly valueblindingfactor_fromBytes: (a: number, b: number) => [number, number, number];
+  readonly valueblindingfactor_zero: () => number;
+  readonly valueblindingfactor_toBytes: (a: number) => [number, number];
+  readonly valueblindingfactor_toString: (a: number) => [number, number];
+  readonly __wbg_btcscan_free: (a: number, b: number) => void;
+  readonly btcscan_balanceSats: (a: number) => bigint;
+  readonly btcscan_externalNext: (a: number) => number;
+  readonly btcscan_changeNext: (a: number) => number;
+  readonly __wbg_btcprepared_free: (a: number, b: number) => void;
+  readonly btcprepared_hex: (a: number) => [number, number];
+  readonly btcprepared_txid: (a: number) => [number, number];
+  readonly btcprepared_feeSats: (a: number) => bigint;
+  readonly btcprepared_vsize: (a: number) => bigint;
+  readonly btcprepared_inputs: (a: number) => number;
+  readonly __wbg_btcwallet_free: (a: number, b: number) => void;
+  readonly btcwallet_new: (a: number, b: number) => number;
+  readonly btcwallet_address: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
+  readonly btcwallet_scan: (a: number, b: number, c: number) => any;
+  readonly btcwallet_prepare: (a: number, b: number, c: number, d: number, e: number, f: bigint, g: number) => any;
+  readonly btcwallet_broadcast: (a: number, b: number, c: number) => any;
+  readonly __wbg_pricesfetcher_free: (a: number, b: number) => void;
+  readonly __wbg_pricesfetcherbuilder_free: (a: number, b: number) => void;
+  readonly pricesfetcher_new: () => [number, number, number];
+  readonly pricesfetcher_rates: (a: number, b: number) => any;
+  readonly __wbg_currencycode_free: (a: number, b: number) => void;
+  readonly currencycode_new: (a: number, b: number) => [number, number, number];
+  readonly currencycode_name: (a: number) => [number, number];
+  readonly currencycode_alpha3: (a: number) => [number, number];
+  readonly currencycode_exp: (a: number) => number;
+  readonly __wbg_exchangerates_free: (a: number, b: number) => void;
+  readonly exchangerates_median: (a: number) => number;
+  readonly exchangerates_results: (a: number) => [number, number, number];
+  readonly exchangerates_resultsCount: (a: number) => number;
+  readonly exchangerates_serialize: (a: number) => [number, number, number, number];
+  readonly generateSwapSecret: () => [number, number, number];
+  readonly signer_htlcKeypair: (a: number) => [number, number, number];
+  readonly buildSeqHtlcRedeemScript: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
+  readonly buildSeqHtlcClaimTx: (a: any, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
+  readonly buildSeqHtlcRefundTx: (a: any, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
+  readonly coinjoinUnblindOutputs: (a: number, b: number, c: number) => [number, number, number];
+  readonly coinjoinSignInputs: (a: any, b: number) => [number, number, number, number];
+  readonly __wbg_posconfig_free: (a: number, b: number) => void;
+  readonly posconfig_new: (a: number, b: number) => number;
+  readonly posconfig_withOptions: (a: number, b: number, c: number, d: number) => number;
+  readonly posconfig_decode: (a: number, b: number) => [number, number, number];
+  readonly posconfig_encode: (a: number) => [number, number, number, number];
+  readonly posconfig_descriptor: (a: number) => number;
+  readonly posconfig_currency: (a: number) => number;
+  readonly posconfig_show_gear: (a: number) => number;
+  readonly posconfig_show_description: (a: number) => number;
+  readonly posconfig_toString: (a: number) => [number, number];
+  readonly sequentiaDelegationScript: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+  readonly parseDelegationScript: (a: number, b: number) => [number, number, number];
+  readonly findDelegationRecords: (a: number, b: number, c: number, d: number) => [number, number, number];
+  readonly buildDelegationSpendTx: (a: any, b: number) => [number, number, number];
+  readonly buildDelegationCreateTx: (a: any, b: number) => [number, number, number];
+  readonly stakeRecordSigning: (a: number, b: number, c: number) => [number, number];
+  readonly __wbg_wollet_free: (a: number, b: number) => void;
+  readonly wollet_new: (a: number, b: number) => [number, number, number];
+  readonly wollet_address: (a: number, b: number) => [number, number, number];
+  readonly wollet_dwid: (a: number) => [number, number, number, number];
+  readonly wollet_addressFullPath: (a: number, b: number) => [number, number, number, number];
+  readonly wollet_applyUpdate: (a: number, b: number) => [number, number];
+  readonly wollet_applyTransaction: (a: number, b: number) => [number, number, number];
+  readonly wollet_balance: (a: number) => [number, number, number];
+  readonly wollet_assetsOwned: (a: number) => [number, number, number];
+  readonly wollet_transactions: (a: number) => [number, number, number, number];
+  readonly wollet_transactionsPaginated: (a: number, b: number, c: number) => [number, number, number, number];
+  readonly wollet_utxos: (a: number) => [number, number, number, number];
+  readonly wollet_txos: (a: number) => [number, number, number, number];
+  readonly wollet_bumpFeeOf: (a: number, b: number) => [number, number, number];
+  readonly wollet_replaceTxOf: (a: number, b: number) => [number, number, number];
+  readonly wollet_cpfpOf: (a: number, b: number) => [number, number, number];
+  readonly wollet_cpfpSuggestedFeerate: (a: number, b: number, c: number) => [number, number, number];
+  readonly wollet_finalize: (a: number, b: number) => [number, number, number];
+  readonly wollet_psetDetails: (a: number, b: number) => [number, number, number];
+  readonly wollet_descriptor: (a: number) => [number, number, number];
+  readonly wollet_status: (a: number) => bigint;
+  readonly wollet_tip: (a: number) => number;
+  readonly wollet_neverScanned: (a: number) => number;
+  readonly wollet_isAmp0: (a: number) => number;
+  readonly __wbg_tip_free: (a: number, b: number) => void;
+  readonly tip_height: (a: number) => number;
+  readonly tip_hash: (a: number) => [number, number];
+  readonly tip_timestamp: (a: number) => number;
+  readonly __wbg_wolletbuilder_free: (a: number, b: number) => void;
+  readonly wolletbuilder_new: (a: number, b: number) => number;
+  readonly wolletbuilder_withMergeThreshold: (a: number, b: number) => number;
+  readonly wolletbuilder_utxoOnly: (a: number, b: number) => number;
+  readonly wolletbuilder_withExperimentalStore: (a: number, b: any) => number;
+  readonly wolletbuilder_withTxsStore: (a: number, b: any) => number;
+  readonly wolletbuilder_setEncryptionTxsStore: (a: number, b: number) => number;
+  readonly wolletbuilder_build: (a: number) => [number, number, number];
+  readonly __wbg_balance_free: (a: number, b: number) => void;
+  readonly balance_toJSON: (a: number) => [number, number, number];
+  readonly balance_entries: (a: number) => [number, number, number];
+  readonly balance_toString: (a: number) => [number, number];
+  readonly __wbg_address_free: (a: number, b: number) => void;
+  readonly address_new: (a: number, b: number) => [number, number, number];
+  readonly address_parse: (a: number, b: number, c: number) => [number, number, number];
+  readonly address_scriptPubkey: (a: number) => number;
+  readonly address_isBlinded: (a: number) => number;
+  readonly address_isMainnet: (a: number) => number;
+  readonly address_toUnconfidential: (a: number) => number;
+  readonly address_toString: (a: number) => [number, number];
+  readonly address_QRCodeUri: (a: number, b: number) => [number, number, number, number];
+  readonly address_QRCodeText: (a: number) => [number, number, number, number];
+  readonly __wbg_addressresult_free: (a: number, b: number) => void;
+  readonly addressresult_address: (a: number) => number;
+  readonly addressresult_index: (a: number) => number;
+  readonly __wbg_outpoint_free: (a: number, b: number) => void;
+  readonly outpoint_new: (a: number, b: number) => [number, number, number];
+  readonly outpoint_fromParts: (a: number, b: number) => number;
+  readonly outpoint_txid: (a: number) => number;
+  readonly outpoint_vout: (a: number) => number;
+  readonly xchainNewSecret: () => [number, number, number];
+  readonly xchainSeqClaimPubkey: (a: number, b: number) => [number, number, number, number];
+  readonly xchainBtcRefundPubkey: (a: number, b: number) => [number, number, number, number];
+  readonly xchainBtcClaimPubkey: (a: number, b: number) => [number, number, number, number];
+  readonly xchainBtcHtlc: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number];
+  readonly xchainSeqRedeemScript: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
+  readonly xchainSeqClaimFee: (a: bigint, b: bigint) => [bigint, number, number];
+  readonly xchainSeqClaim: (a: number, b: number, c: number, d: number, e: number, f: bigint, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: bigint, q: number, r: number) => [number, number, number, number];
+  readonly xchainBtcRefund: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: bigint, k: bigint, l: number) => [number, number, number, number];
+  readonly xchainBtcClaim: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: bigint, k: bigint, l: number, m: number) => [number, number, number, number];
+  readonly xchainVerifySeqLeg: (a: number, b: number, c: number, d: number, e: number, f: number, g: bigint, h: bigint) => any;
+  readonly xchainClaimDeadlineOk: (a: number, b: number, c: number, d: bigint) => any;
+  readonly xchainSeqBroadcast: (a: number, b: number, c: number, d: number) => any;
+  readonly xchainFindBtcFunding: (a: number, b: number, c: number, d: number, e: number, f: number) => any;
+  readonly __wbg_contract_free: (a: number, b: number) => void;
+  readonly contract_new: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number];
+  readonly contract_toString: (a: number) => [number, number];
+  readonly contract_domain: (a: number) => [number, number];
+  readonly contract_clone: (a: number) => number;
+  readonly __wbg_magicroutinghint_free: (a: number, b: number) => void;
+  readonly magicroutinghint_address: (a: number) => [number, number];
+  readonly magicroutinghint_amount: (a: number) => bigint;
+  readonly magicroutinghint_uri: (a: number) => [number, number];
+  readonly __wbg_network_free: (a: number, b: number) => void;
+  readonly network_mainnet: () => number;
+  readonly network_testnet: () => number;
+  readonly network_sequentiaTestnet: () => number;
+  readonly network_regtest: (a: number) => number;
+  readonly network_regtestWithGenesis: (a: number, b: number, c: number) => [number, number, number];
+  readonly network_regtestDefault: () => number;
+  readonly network_defaultEsploraClient: (a: number) => number;
+  readonly network_isMainnet: (a: number) => number;
+  readonly network_isTestnet: (a: number) => number;
+  readonly network_isRegtest: (a: number) => number;
+  readonly network_isSequentia: (a: number) => number;
+  readonly network_toString: (a: number) => [number, number];
+  readonly network_policyAsset: (a: number) => number;
+  readonly network_genesisBlockHash: (a: number) => [number, number];
+  readonly network_txBuilder: (a: number) => number;
+  readonly network_defaultExplorerUrl: (a: number) => [number, number];
+  readonly __wbg_registry_free: (a: number, b: number) => void;
+  readonly __wbg_registrydata_free: (a: number, b: number) => void;
+  readonly __wbg_assetmeta_free: (a: number, b: number) => void;
+  readonly __wbg_registrypost_free: (a: number, b: number) => void;
+  readonly assetmeta_contract: (a: number) => number;
+  readonly assetmeta_tx: (a: number) => number;
+  readonly registrypost_new: (a: number, b: number) => number;
+  readonly registrypost_toString: (a: number) => [number, number];
+  readonly registry_new: (a: number, b: number, c: number) => any;
+  readonly registry_defaultForNetwork: (a: number, b: number) => any;
+  readonly registry_defaultHardcodedForNetwork: (a: number) => [number, number, number];
+  readonly registry_fetchWithTx: (a: number, b: number, c: number) => any;
+  readonly registry_post: (a: number, b: number) => any;
+  readonly registry_get: (a: number, b: number) => number;
+  readonly registry_getAssetOfToken: (a: number, b: number) => number;
+  readonly registry_addContracts: (a: number, b: number) => [number, number, number];
+  readonly registrydata_precision: (a: number) => number;
+  readonly registrydata_ticker: (a: number) => [number, number];
+  readonly registrydata_name: (a: number) => [number, number];
+  readonly registrydata_domain: (a: number) => [number, number];
   readonly sequentiaCoinbaseMaturity: () => number;
   readonly attributeStakingRewards: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
   readonly planRewardBatches: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
   readonly decideRewardConversion: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
+  readonly __wbg_swaprequest_free: (a: number, b: number) => void;
+  readonly swaprequest_id: (a: number) => [number, number];
+  readonly swaprequest_amountP: (a: number) => bigint;
+  readonly swaprequest_assetP: (a: number) => [number, number];
+  readonly swaprequest_amountR: (a: number) => bigint;
+  readonly swaprequest_assetR: (a: number) => [number, number];
+  readonly swaprequest_transaction: (a: number) => [number, number];
+  readonly swaprequest_unblindedInputs: (a: number) => [number, number, number];
+  readonly swaprequest_toJson: (a: number) => [number, number, number];
+  readonly wollet_seqdexSwapRequest: (a: number, b: number, c: bigint, d: number, e: bigint, f: number, g: number, h: bigint, i: bigint) => [number, number, number];
+  readonly sequentiaStakeScript: (a: number, b: number, c: number) => [number, number, number, number];
+  readonly __wbg_txbuilder_free: (a: number, b: number) => void;
+  readonly txbuilder_finish: (a: number, b: number) => [number, number, number];
+  readonly txbuilder_feeRate: (a: number, b: number) => number;
+  readonly txbuilder_feeAsset: (a: number, b: number, c: bigint) => number;
+  readonly txbuilder_drainLbtcWallet: (a: number) => number;
+  readonly txbuilder_drainLbtcTo: (a: number, b: number) => number;
+  readonly txbuilder_addLbtcRecipient: (a: number, b: number, c: bigint) => [number, number, number];
+  readonly txbuilder_addRecipient: (a: number, b: number, c: bigint, d: number) => [number, number, number];
+  readonly txbuilder_addBurn: (a: number, b: bigint, c: number) => number;
+  readonly txbuilder_addExplicitRecipient: (a: number, b: number, c: bigint, d: number) => [number, number, number];
+  readonly txbuilder_addStakeOutput: (a: number, b: number, c: number, d: number, e: bigint) => [number, number, number];
+  readonly txbuilder_addDelegationOutput: (a: number, b: number, c: number, d: number, e: number, f: bigint) => [number, number, number];
+  readonly txbuilder_addRecordAuthorization: (a: number, b: number, c: number, d: bigint) => [number, number, number];
+  readonly txbuilder_issueAsset: (a: number, b: bigint, c: number, d: bigint, e: number, f: number) => [number, number, number];
+  readonly txbuilder_reissueAsset: (a: number, b: number, c: bigint, d: number, e: number) => [number, number, number];
+  readonly txbuilder_setWalletUtxos: (a: number, b: number, c: number) => number;
+  readonly txbuilder_toString: (a: number) => [number, number];
+  readonly txbuilder_liquidexMake: (a: number, b: number, c: number, d: bigint, e: number) => [number, number, number];
+  readonly txbuilder_liquidexTake: (a: number, b: number, c: number) => [number, number, number];
+  readonly txbuilder_addInputRangeproofs: (a: number, b: number) => number;
+  readonly txbuilder_new: (a: number) => number;
+  readonly __wbg_lastusedindexresponse_free: (a: number, b: number) => void;
+  readonly lastusedindexresponse_external: (a: number) => number;
+  readonly lastusedindexresponse_internal: (a: number) => number;
+  readonly lastusedindexresponse_tip: (a: number) => [number, number];
+  readonly __wbg_esploraclient_free: (a: number, b: number) => void;
+  readonly esploraclient_new: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
+  readonly esploraclient_fullScan: (a: number, b: number) => any;
+  readonly esploraclient_fullScanToIndex: (a: number, b: number, c: number) => any;
+  readonly esploraclient_broadcastTx: (a: number, b: number) => any;
+  readonly esploraclient_broadcast: (a: number, b: number) => any;
+  readonly esploraclient_setWaterfallsServerRecipient: (a: number, b: number, c: number) => any;
+  readonly esploraclient_waterfallsDescriptor: (a: number, b: number) => any;
+  readonly esploraclient_lastUsedIndex: (a: number, b: number) => any;
+  readonly __wbg_jsstorelink_free: (a: number, b: number) => void;
+  readonly jsstorelink_new: (a: any) => number;
+  readonly __wbg_jsteststore_free: (a: number, b: number) => void;
+  readonly jsteststore_new: (a: any) => number;
+  readonly jsteststore_write: (a: number, b: number, c: number, d: number, e: number) => [number, number];
+  readonly jsteststore_read: (a: number, b: number, c: number) => [number, number, number, number];
+  readonly jsteststore_remove: (a: number, b: number, c: number) => [number, number];
+  readonly __wbg_amp2_free: (a: number, b: number) => void;
+  readonly __wbg_amp2descriptor_free: (a: number, b: number) => void;
+  readonly amp2descriptor_descriptor: (a: number) => number;
+  readonly amp2descriptor_toString: (a: number) => [number, number];
+  readonly amp2descriptor_newWithCustomDescriptor: (a: number) => number;
+  readonly amp2_new: (a: number, b: number, c: number, d: number) => [number, number, number];
+  readonly amp2_newTestnet: () => number;
+  readonly amp2_descriptorFromStr: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];
+  readonly amp2_register: (a: number, b: number) => any;
+  readonly amp2_cosign: (a: number, b: number) => any;
+  readonly __wbg_bip_free: (a: number, b: number) => void;
+  readonly bip_bip49: () => number;
+  readonly bip_bip84: () => number;
+  readonly bip_bip87: () => number;
+  readonly bip_bip86: () => number;
+  readonly bip_toString: (a: number) => [number, number];
+  readonly __wbg_txoutsecrets_free: (a: number, b: number) => void;
+  readonly txoutsecrets_fromExplicit: (a: number, b: bigint) => number;
+  readonly txoutsecrets_asset: (a: number) => number;
+  readonly txoutsecrets_assetBlindingFactor: (a: number) => number;
+  readonly txoutsecrets_value: (a: number) => bigint;
+  readonly txoutsecrets_valueBlindingFactor: (a: number) => number;
+  readonly txoutsecrets_isExplicit: (a: number) => number;
+  readonly txoutsecrets_assetCommitment: (a: number) => [number, number];
+  readonly txoutsecrets_valueCommitment: (a: number) => [number, number];
+  readonly __wbg_precision_free: (a: number, b: number) => void;
+  readonly precision_new: (a: number) => [number, number, number];
+  readonly precision_satsToString: (a: number, b: bigint) => [number, number];
+  readonly precision_stringToSats: (a: number, b: number, c: number) => [bigint, number, number];
+  readonly __wbg_update_free: (a: number, b: number) => void;
+  readonly update_new: (a: number, b: number) => [number, number, number];
+  readonly update_serialize: (a: number) => [number, number, number, number];
+  readonly update_serializeEncryptedBase64: (a: number, b: number) => [number, number, number, number];
+  readonly update_deserializeDecryptedBase64: (a: number, b: number, c: number) => [number, number, number];
+  readonly update_onlyTip: (a: number) => number;
+  readonly update_prune: (a: number, b: number) => void;
+  readonly stringToQr: (a: number, b: number, c: number) => [number, number, number, number];
+  readonly __wbg_externalutxo_free: (a: number, b: number) => void;
+  readonly externalutxo_new: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];
+  readonly __wbg_contracttemplate_free: (a: number, b: number) => void;
+  readonly contracttemplate_new: (a: number, b: number, c: number, d: number) => [number, number, number];
+  readonly contracttemplate_knownList: () => [number, number, number, number];
+  readonly contracttemplate_known: (a: number, b: number) => [number, number, number];
+  readonly contracttemplate_knownDescriptor: (a: number, b: number) => [number, number, number, number];
+  readonly contracttemplate_hash: (a: number) => [number, number];
+  readonly contracttemplate_selfName: (a: number) => [number, number];
+  readonly contracttemplate_version: (a: number) => bigint;
+  readonly contracttemplate_summary: (a: number) => [number, number];
+  readonly contracttemplate_describe: (a: number) => [number, number, number, number];
+  readonly __wbg_contractinstance_free: (a: number, b: number) => void;
+  readonly contractinstance_new: (a: number, b: number, c: number) => [number, number, number];
+  readonly contractinstance_scriptPubkey: (a: number) => [number, number];
+  readonly contractinstance_address: (a: number, b: number) => [number, number, number, number];
+  readonly contractinstance_addressWithPrefix: (a: number, b: number, c: number) => [number, number, number, number];
+  readonly contractinstance_derived: (a: number) => [number, number, number, number];
+  readonly contractinstance_paths: (a: number) => [number, number, number, number];
+  readonly contractinstance_instance: (a: number) => [number, number, number, number];
+  readonly contractinstance_templateHash: (a: number) => [number, number];
+  readonly contractinstance_planDrip: (a: number, b: number, c: number, d: number, e: number, f: bigint, g: bigint) => [number, number, number, number];
+  readonly contractinstance_dripTier: (a: number, b: bigint) => [bigint, number, number];
+  readonly __wbg_contractspend_free: (a: number, b: number) => void;
+  readonly contractspend_build: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number];
+  readonly contractspend_unsignedTx: (a: number) => [number, number];
+  readonly contractspend_outputs: (a: number) => [number, number, number, number];
+  readonly contractspend_path: (a: number) => [number, number, number, number];
+  readonly contractspend_checkLocks: (a: number) => [number, number, number, number];
+  readonly __wbg_contractapproval_free: (a: number, b: number) => void;
+  readonly contractapproval_prepare: (a: number, b: number, c: number, d: number) => [number, number, number];
+  readonly contractapproval_summary: (a: number) => [number, number, number, number];
+  readonly contractapproval_digest: (a: number) => [number, number];
   readonly __wbg_boltzsessionbuilder_free: (a: number, b: number) => void;
   readonly __wbg_boltzsession_free: (a: number, b: number) => void;
   readonly boltzsessionbuilder_new: (a: number, b: number) => [number, number, number];
@@ -3364,126 +4028,6 @@ export interface InitOutput {
   readonly lightningpayment_new: (a: number, b: number) => [number, number, number];
   readonly lightningpayment_toString: (a: number) => [number, number];
   readonly lightningpayment_toUriQr: (a: number, b: number) => [number, number, number, number];
-  readonly __wbg_fees_free: (a: number, b: number) => void;
-  readonly fees_entries: (a: number) => [number, number, number];
-  readonly fees_toJSON: (a: number) => [number, number, number];
-  readonly fees_toString: (a: number) => [number, number];
-  readonly __wbg_unvalidatedliquidexproposal_free: (a: number, b: number) => void;
-  readonly __wbg_validatedliquidexproposal_free: (a: number, b: number) => void;
-  readonly __wbg_assetamount_free: (a: number, b: number) => void;
-  readonly unvalidatedliquidexproposal_new: (a: number, b: number) => [number, number, number];
-  readonly unvalidatedliquidexproposal_fromPset: (a: number) => [number, number, number];
-  readonly unvalidatedliquidexproposal_insecureValidate: (a: number) => [number, number, number];
-  readonly unvalidatedliquidexproposal_validate: (a: number, b: number) => [number, number, number];
-  readonly unvalidatedliquidexproposal_toString: (a: number) => [number, number];
-  readonly assetamount_amount: (a: number) => bigint;
-  readonly assetamount_asset: (a: number) => number;
-  readonly validatedliquidexproposal_input: (a: number) => number;
-  readonly validatedliquidexproposal_output: (a: number) => number;
-  readonly validatedliquidexproposal_toString: (a: number) => [number, number];
-  readonly __wbg_mnemonic_free: (a: number, b: number) => void;
-  readonly mnemonic_new: (a: number, b: number) => [number, number, number];
-  readonly mnemonic_toString: (a: number) => [number, number];
-  readonly mnemonic_fromEntropy: (a: number, b: number) => [number, number, number];
-  readonly mnemonic_fromRandom: (a: number) => [number, number, number];
-  readonly __wbg_psetdetails_free: (a: number, b: number) => void;
-  readonly __wbg_psetbalance_free: (a: number, b: number) => void;
-  readonly __wbg_psetsignatures_free: (a: number, b: number) => void;
-  readonly __wbg_issuance_free: (a: number, b: number) => void;
-  readonly __wbg_recipient_free: (a: number, b: number) => void;
-  readonly psetdetails_balance: (a: number) => number;
-  readonly psetdetails_signatures: (a: number) => [number, number];
-  readonly psetdetails_fingerprintsMissing: (a: number) => [number, number];
-  readonly psetdetails_fingerprintsHas: (a: number) => [number, number];
-  readonly psetdetails_inputsIssuances: (a: number) => [number, number];
-  readonly psetbalance_fee: (a: number) => bigint;
-  readonly psetbalance_fees: (a: number) => number;
-  readonly psetbalance_feesIn: (a: number, b: number) => bigint;
-  readonly psetbalance_balances: (a: number) => number;
-  readonly psetbalance_recipients: (a: number) => [number, number];
-  readonly psetsignatures_hasSignature: (a: number) => any;
-  readonly psetsignatures_missingSignature: (a: number) => any;
-  readonly issuance_asset: (a: number) => number;
-  readonly issuance_token: (a: number) => number;
-  readonly issuance_prevVout: (a: number) => number;
-  readonly issuance_prevTxid: (a: number) => number;
-  readonly issuance_isIssuance: (a: number) => number;
-  readonly issuance_isReissuance: (a: number) => number;
-  readonly recipient_asset: (a: number) => number;
-  readonly recipient_value: (a: number) => [number, bigint];
-  readonly recipient_address: (a: number) => number;
-  readonly recipient_vout: (a: number) => number;
-  readonly __wbg_jsstorelink_free: (a: number, b: number) => void;
-  readonly jsstorelink_new: (a: any) => number;
-  readonly __wbg_jsteststore_free: (a: number, b: number) => void;
-  readonly jsteststore_new: (a: any) => number;
-  readonly jsteststore_write: (a: number, b: number, c: number, d: number, e: number) => [number, number];
-  readonly jsteststore_read: (a: number, b: number, c: number) => [number, number, number, number];
-  readonly jsteststore_remove: (a: number, b: number, c: number) => [number, number];
-  readonly __wbg_bip_free: (a: number, b: number) => void;
-  readonly bip_bip49: () => number;
-  readonly bip_bip84: () => number;
-  readonly bip_bip87: () => number;
-  readonly bip_bip86: () => number;
-  readonly bip_toString: (a: number) => [number, number];
-  readonly openampComputeAid: (a: any) => [number, number, number, number];
-  readonly openampTaggedHash: (a: number, b: number, c: number, d: number) => [number, number, number, number];
-  readonly enclaveSighash: (a: number, b: number, c: number, d: any, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number, number];
-  readonly decodeEnclaveSpend: (a: number, b: number, c: any, d: any) => [number, number, number];
-  readonly __wbg_openamp_free: (a: number, b: number) => void;
-  readonly openamp_new: (a: number, b: number) => number;
-  readonly openamp_computeLocalAid: (a: number, b: any) => [number, number, number, number];
-  readonly openamp_registerUser: (a: number, b: any) => any;
-  readonly openamp_getUser: (a: number, b: number, c: number) => any;
-  readonly openamp_enclaveAddress: (a: number, b: number, c: number, d: number, e: number) => any;
-  readonly openamp_balance: (a: number, b: number, c: number, d: number, e: number) => any;
-  readonly openamp_assetInfo: (a: number, b: number, c: number) => any;
-  readonly openamp_assets: (a: number) => any;
-  readonly openamp_createTransfer: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: bigint, i: number, j: number) => any;
-  readonly openamp_completeTransfer: (a: number, b: number, c: number, d: any) => any;
-  readonly openamp_log: (a: number) => any;
-  readonly generateSwapSecret: () => [number, number, number];
-  readonly signer_htlcKeypair: (a: number) => [number, number, number];
-  readonly buildSeqHtlcRedeemScript: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
-  readonly buildSeqHtlcClaimTx: (a: any, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
-  readonly buildSeqHtlcRefundTx: (a: any, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
-  readonly sequentiaUnbondScript: (a: number, b: number) => [number, number, number, number];
-  readonly unbondFeeCap: (a: number, b: number) => [number, number, number, number];
-  readonly buildUnbondTx: (a: any, b: number) => [number, number, number];
-  readonly buildUnbondClaimTx: (a: any, b: number) => [number, number, number];
-  readonly __wbg_signer_free: (a: number, b: number) => void;
-  readonly signer_new: (a: number, b: number) => [number, number, number];
-  readonly signer_sign: (a: number, b: number) => [number, number, number];
-  readonly signer_signMessage: (a: number, b: number, c: number) => [number, number, number, number];
-  readonly signer_wpkhSlip77Descriptor: (a: number) => [number, number, number];
-  readonly signer_getMasterXpub: (a: number) => [number, number, number];
-  readonly signer_stakerPublicKey: (a: number) => [number, number, number, number];
-  readonly signer_signMessageWithStakerKey: (a: number, b: number, c: number) => [number, number, number, number];
-  readonly signer_keyoriginXpub: (a: number, b: number) => [number, number, number, number];
-  readonly signer_fingerprint: (a: number) => [number, number, number, number];
-  readonly signer_mnemonic: (a: number) => number;
-  readonly signer_derive_bip85_mnemonic: (a: number, b: number, c: number) => [number, number, number];
-  readonly signer_xonlyPublicKeyAt: (a: number, b: number, c: number) => [number, number, number, number];
-  readonly signer_signTapscript: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number) => [number, number, number, number];
-  readonly signer_genesisHash: (a: number) => [number, number];
-  readonly signer_signCsfs: (a: number, b: number, c: number, d: any, e: number, f: number, g: any) => [number, number, number, number];
-  readonly signer_openampXonlyPubkey: (a: number) => [number, number, number, number];
-  readonly signer_openampSignSighash: (a: number, b: number, c: number) => [number, number, number, number];
-  readonly signer_openampSignTagged: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
-  readonly signer_openampSignChallenge: (a: number, b: number, c: number) => [number, number, number, number];
-  readonly tapscriptSighash: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number, number, number];
-  readonly tapscriptDescribe: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number, number, number];
-  readonly __wbg_xpub_free: (a: number, b: number) => void;
-  readonly xpub_new: (a: number, b: number) => [number, number, number];
-  readonly xpub_toString: (a: number) => [number, number];
-  readonly xpub_identifier: (a: number) => [number, number];
-  readonly xpub_fingerprint: (a: number) => [number, number];
-  readonly xpub_isValidWithKeyOrigin: (a: number, b: number) => number;
-  readonly __wbg_outpoint_free: (a: number, b: number) => void;
-  readonly outpoint_new: (a: number, b: number) => [number, number, number];
-  readonly outpoint_fromParts: (a: number, b: number) => number;
-  readonly outpoint_txid: (a: number) => number;
-  readonly outpoint_vout: (a: number) => number;
   readonly arkNewOwnerNonce: () => [number, number];
   readonly arkLeafKeyPath: (a: number, b: number, c: number) => [number, number, number, number];
   readonly signer_arkLeafKey: (a: number, b: number, c: number, d: number) => [number, number, number];
@@ -3518,372 +4062,37 @@ export interface InitOutput {
   readonly wolletdescriptor_newMultiWshSlip77: (a: number, b: number, c: number) => [number, number, number];
   readonly wolletdescriptor_isMainnet: (a: number) => number;
   readonly wolletdescriptor_isAmp0: (a: number) => number;
-  readonly __wbg_update_free: (a: number, b: number) => void;
-  readonly update_new: (a: number, b: number) => [number, number, number];
-  readonly update_serialize: (a: number) => [number, number, number, number];
-  readonly update_serializeEncryptedBase64: (a: number, b: number) => [number, number, number, number];
-  readonly update_deserializeDecryptedBase64: (a: number, b: number, c: number) => [number, number, number];
-  readonly update_onlyTip: (a: number) => number;
-  readonly update_prune: (a: number, b: number) => void;
-  readonly __wbg_wollet_free: (a: number, b: number) => void;
-  readonly wollet_new: (a: number, b: number) => [number, number, number];
-  readonly wollet_address: (a: number, b: number) => [number, number, number];
-  readonly wollet_dwid: (a: number) => [number, number, number, number];
-  readonly wollet_addressFullPath: (a: number, b: number) => [number, number, number, number];
-  readonly wollet_applyUpdate: (a: number, b: number) => [number, number];
-  readonly wollet_applyTransaction: (a: number, b: number) => [number, number, number];
-  readonly wollet_balance: (a: number) => [number, number, number];
-  readonly wollet_assetsOwned: (a: number) => [number, number, number];
-  readonly wollet_transactions: (a: number) => [number, number, number, number];
-  readonly wollet_transactionsPaginated: (a: number, b: number, c: number) => [number, number, number, number];
-  readonly wollet_utxos: (a: number) => [number, number, number, number];
-  readonly wollet_txos: (a: number) => [number, number, number, number];
-  readonly wollet_bumpFeeOf: (a: number, b: number) => [number, number, number];
-  readonly wollet_replaceTxOf: (a: number, b: number) => [number, number, number];
-  readonly wollet_cpfpOf: (a: number, b: number) => [number, number, number];
-  readonly wollet_cpfpSuggestedFeerate: (a: number, b: number, c: number) => [number, number, number];
-  readonly wollet_finalize: (a: number, b: number) => [number, number, number];
-  readonly wollet_psetDetails: (a: number, b: number) => [number, number, number];
-  readonly wollet_descriptor: (a: number) => [number, number, number];
-  readonly wollet_status: (a: number) => bigint;
-  readonly wollet_tip: (a: number) => number;
-  readonly wollet_neverScanned: (a: number) => number;
-  readonly wollet_isAmp0: (a: number) => number;
-  readonly __wbg_tip_free: (a: number, b: number) => void;
-  readonly tip_height: (a: number) => number;
-  readonly tip_hash: (a: number) => [number, number];
-  readonly tip_timestamp: (a: number) => number;
-  readonly __wbg_wolletbuilder_free: (a: number, b: number) => void;
-  readonly wolletbuilder_new: (a: number, b: number) => number;
-  readonly wolletbuilder_withMergeThreshold: (a: number, b: number) => number;
-  readonly wolletbuilder_utxoOnly: (a: number, b: number) => number;
-  readonly wolletbuilder_withExperimentalStore: (a: number, b: any) => number;
-  readonly wolletbuilder_withTxsStore: (a: number, b: any) => number;
-  readonly wolletbuilder_setEncryptionTxsStore: (a: number, b: number) => number;
-  readonly wolletbuilder_build: (a: number) => [number, number, number];
-  readonly coinjoinUnblindOutputs: (a: number, b: number, c: number) => [number, number, number];
-  readonly coinjoinSignInputs: (a: any, b: number) => [number, number, number, number];
-  readonly __wbg_posconfig_free: (a: number, b: number) => void;
-  readonly posconfig_new: (a: number, b: number) => number;
-  readonly posconfig_withOptions: (a: number, b: number, c: number, d: number) => number;
-  readonly posconfig_decode: (a: number, b: number) => [number, number, number];
-  readonly posconfig_encode: (a: number) => [number, number, number, number];
-  readonly posconfig_descriptor: (a: number) => number;
-  readonly posconfig_currency: (a: number) => number;
-  readonly posconfig_show_gear: (a: number) => number;
-  readonly posconfig_show_description: (a: number) => number;
-  readonly posconfig_toString: (a: number) => [number, number];
-  readonly buildCovenantFillTx: (a: any, b: number) => [number, number, number];
-  readonly buildCovenantRefundTx: (a: any, b: number) => [number, number, number];
-  readonly signer_covenantMakerAddress: (a: number, b: number, c: number) => [number, number, number];
-  readonly signer_covenantMakerDescriptor: (a: number) => [number, number, number];
-  readonly scriptToAddress: (a: number, b: number, c: number) => [number, number, number, number];
-  readonly __wbg_externalutxo_free: (a: number, b: number) => void;
-  readonly externalutxo_new: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];
-  readonly __wbg_lastusedindexresponse_free: (a: number, b: number) => void;
-  readonly lastusedindexresponse_external: (a: number) => number;
-  readonly lastusedindexresponse_internal: (a: number) => number;
-  readonly lastusedindexresponse_tip: (a: number) => [number, number];
-  readonly __wbg_esploraclient_free: (a: number, b: number) => void;
-  readonly esploraclient_new: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
-  readonly esploraclient_fullScan: (a: number, b: number) => any;
-  readonly esploraclient_fullScanToIndex: (a: number, b: number, c: number) => any;
-  readonly esploraclient_broadcastTx: (a: number, b: number) => any;
-  readonly esploraclient_broadcast: (a: number, b: number) => any;
-  readonly esploraclient_setWaterfallsServerRecipient: (a: number, b: number, c: number) => any;
-  readonly esploraclient_waterfallsDescriptor: (a: number, b: number) => any;
-  readonly esploraclient_lastUsedIndex: (a: number, b: number) => any;
-  readonly __wbg_pset_free: (a: number, b: number) => void;
-  readonly pset_new: (a: number, b: number) => [number, number, number];
-  readonly pset_toString: (a: number) => [number, number];
-  readonly pset_extractTx: (a: number) => [number, number, number];
-  readonly pset_uniqueId: (a: number) => [number, number, number];
-  readonly pset_combine: (a: number, b: number) => [number, number];
-  readonly pset_inputs: (a: number) => [number, number];
-  readonly pset_outputs: (a: number) => [number, number];
-  readonly pset_addDetails: (a: number, b: number) => [number, number];
-  readonly __wbg_psetinput_free: (a: number, b: number) => void;
-  readonly psetinput_previousTxid: (a: number) => number;
-  readonly psetinput_previousVout: (a: number) => number;
-  readonly psetinput_previousScriptPubkey: (a: number) => number;
-  readonly psetinput_redeemScript: (a: number) => number;
-  readonly psetinput_issuanceAsset: (a: number) => number;
-  readonly psetinput_issuanceToken: (a: number) => number;
-  readonly psetinput_issuance: (a: number) => number;
-  readonly psetinput_sighash: (a: number) => number;
-  readonly psetinput_issuanceIds: (a: number) => [number, number];
-  readonly __wbg_psetoutput_free: (a: number, b: number) => void;
-  readonly psetoutput_scriptPubkey: (a: number) => number;
-  readonly psetoutput_amount: (a: number) => [number, bigint];
-  readonly psetoutput_asset: (a: number) => number;
-  readonly psetoutput_blinderIndex: (a: number) => number;
-  readonly __wbg_amp2_free: (a: number, b: number) => void;
-  readonly __wbg_amp2descriptor_free: (a: number, b: number) => void;
-  readonly amp2descriptor_descriptor: (a: number) => number;
-  readonly amp2descriptor_toString: (a: number) => [number, number];
-  readonly amp2descriptor_newWithCustomDescriptor: (a: number) => number;
-  readonly amp2_new: (a: number, b: number, c: number, d: number) => [number, number, number];
-  readonly amp2_newTestnet: () => number;
-  readonly amp2_descriptorFromStr: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];
-  readonly amp2_register: (a: number, b: number) => any;
-  readonly amp2_cosign: (a: number, b: number) => any;
-  readonly __wbg_balance_free: (a: number, b: number) => void;
-  readonly balance_toJSON: (a: number) => [number, number, number];
-  readonly balance_entries: (a: number) => [number, number, number];
-  readonly balance_toString: (a: number) => [number, number];
-  readonly __wbg_assetblindingfactor_free: (a: number, b: number) => void;
-  readonly assetblindingfactor_fromString: (a: number, b: number) => [number, number, number];
-  readonly assetblindingfactor_fromBytes: (a: number, b: number) => [number, number, number];
-  readonly assetblindingfactor_zero: () => number;
-  readonly assetblindingfactor_toBytes: (a: number) => [number, number];
-  readonly assetblindingfactor_toString: (a: number) => [number, number];
-  readonly __wbg_valueblindingfactor_free: (a: number, b: number) => void;
-  readonly valueblindingfactor_fromString: (a: number, b: number) => [number, number, number];
-  readonly valueblindingfactor_fromBytes: (a: number, b: number) => [number, number, number];
-  readonly valueblindingfactor_zero: () => number;
-  readonly valueblindingfactor_toBytes: (a: number) => [number, number];
-  readonly valueblindingfactor_toString: (a: number) => [number, number];
-  readonly __wbg_txoutsecrets_free: (a: number, b: number) => void;
-  readonly txoutsecrets_fromExplicit: (a: number, b: bigint) => number;
-  readonly txoutsecrets_asset: (a: number) => number;
-  readonly txoutsecrets_assetBlindingFactor: (a: number) => number;
-  readonly txoutsecrets_value: (a: number) => bigint;
-  readonly txoutsecrets_valueBlindingFactor: (a: number) => number;
-  readonly txoutsecrets_isExplicit: (a: number) => number;
-  readonly txoutsecrets_assetCommitment: (a: number) => [number, number];
-  readonly txoutsecrets_valueCommitment: (a: number) => [number, number];
-  readonly __wbg_wallettx_free: (a: number, b: number) => void;
-  readonly wallettx_tx: (a: number) => number;
-  readonly wallettx_height: (a: number) => number;
-  readonly wallettx_balance: (a: number) => number;
-  readonly wallettx_txid: (a: number) => number;
-  readonly wallettx_fee: (a: number) => bigint;
-  readonly wallettx_isCoinbase: (a: number) => number;
-  readonly wallettx_txType: (a: number) => [number, number];
-  readonly wallettx_timestamp: (a: number) => number;
-  readonly wallettx_inputs: (a: number) => [number, number];
-  readonly wallettx_outputs: (a: number) => [number, number];
-  readonly wallettx_unblindedUrl: (a: number, b: number, c: number) => [number, number];
-  readonly __wbg_btcscan_free: (a: number, b: number) => void;
-  readonly btcscan_balanceSats: (a: number) => bigint;
-  readonly btcscan_externalNext: (a: number) => number;
-  readonly btcscan_changeNext: (a: number) => number;
-  readonly __wbg_btcprepared_free: (a: number, b: number) => void;
-  readonly btcprepared_hex: (a: number) => [number, number];
-  readonly btcprepared_txid: (a: number) => [number, number];
-  readonly btcprepared_feeSats: (a: number) => bigint;
-  readonly btcprepared_vsize: (a: number) => bigint;
-  readonly btcprepared_inputs: (a: number) => number;
-  readonly __wbg_btcwallet_free: (a: number, b: number) => void;
-  readonly btcwallet_new: (a: number, b: number) => number;
-  readonly btcwallet_address: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
-  readonly btcwallet_scan: (a: number, b: number, c: number) => any;
-  readonly btcwallet_prepare: (a: number, b: number, c: number, d: number, e: number, f: bigint, g: number) => any;
-  readonly btcwallet_broadcast: (a: number, b: number, c: number) => any;
-  readonly xchainNewSecret: () => [number, number, number];
-  readonly xchainSeqClaimPubkey: (a: number, b: number) => [number, number, number, number];
-  readonly xchainBtcRefundPubkey: (a: number, b: number) => [number, number, number, number];
-  readonly xchainBtcClaimPubkey: (a: number, b: number) => [number, number, number, number];
-  readonly xchainBtcHtlc: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number];
-  readonly xchainSeqRedeemScript: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
-  readonly xchainSeqClaimFee: (a: bigint, b: bigint) => [bigint, number, number];
-  readonly xchainSeqClaim: (a: number, b: number, c: number, d: number, e: number, f: bigint, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: bigint, q: number, r: number) => [number, number, number, number];
-  readonly xchainBtcRefund: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: bigint, k: bigint, l: number) => [number, number, number, number];
-  readonly xchainBtcClaim: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: bigint, k: bigint, l: number, m: number) => [number, number, number, number];
-  readonly xchainVerifySeqLeg: (a: number, b: number, c: number, d: number, e: number, f: number, g: bigint, h: bigint) => any;
-  readonly xchainClaimDeadlineOk: (a: number, b: number, c: number, d: bigint) => any;
-  readonly xchainSeqBroadcast: (a: number, b: number, c: number, d: number) => any;
-  readonly xchainFindBtcFunding: (a: number, b: number, c: number, d: number, e: number, f: number) => any;
-  readonly __wbg_contract_free: (a: number, b: number) => void;
-  readonly contract_new: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number];
-  readonly contract_toString: (a: number) => [number, number];
-  readonly contract_domain: (a: number) => [number, number];
-  readonly contract_clone: (a: number) => number;
-  readonly __wbg_precision_free: (a: number, b: number) => void;
-  readonly precision_new: (a: number) => [number, number, number];
-  readonly precision_satsToString: (a: number, b: bigint) => [number, number];
-  readonly precision_stringToSats: (a: number, b: number, c: number) => [bigint, number, number];
-  readonly stringToQr: (a: number, b: number, c: number) => [number, number, number, number];
-  readonly __wbg_assetid_free: (a: number, b: number) => void;
-  readonly __wbg_assetids_free: (a: number, b: number) => void;
-  readonly assetid_fromString: (a: number, b: number) => [number, number, number];
-  readonly assetid_fromBytes: (a: number, b: number) => [number, number, number];
-  readonly assetid_toBytes: (a: number) => [number, number];
-  readonly assetid_toString: (a: number) => [number, number];
-  readonly assetids_empty: () => [number, number, number];
-  readonly assetids_toString: (a: number) => [number, number];
-  readonly __wbg_script_free: (a: number, b: number) => void;
-  readonly script_new: (a: number, b: number) => [number, number, number];
-  readonly script_empty: () => number;
-  readonly script_bytes: (a: number) => [number, number];
-  readonly script_jet_sha256_hex: (a: number) => [number, number];
-  readonly script_asm: (a: number) => [number, number];
-  readonly script_newOpReturn: (a: number, b: number) => number;
-  readonly script_isProvablyUnspendable: (a: number) => number;
-  readonly script_isProvablySegwit: (a: number, b: number) => number;
-  readonly script_toString: (a: number) => [number, number];
-  readonly __wbg_transaction_free: (a: number, b: number) => void;
-  readonly transaction_new: (a: number, b: number) => [number, number, number];
-  readonly transaction_fromString: (a: number, b: number) => [number, number, number];
-  readonly transaction_fromBytes: (a: number, b: number) => [number, number, number];
-  readonly transaction_txid: (a: number) => number;
-  readonly transaction_bytes: (a: number) => [number, number];
-  readonly transaction_fee: (a: number, b: number) => bigint;
-  readonly transaction_toString: (a: number) => [number, number];
-  readonly __wbg_txid_free: (a: number, b: number) => void;
-  readonly txid_new: (a: number, b: number) => [number, number, number];
-  readonly txid_toString: (a: number) => [number, number];
-  readonly __wbg_wallettxout_free: (a: number, b: number) => void;
-  readonly wallettxout_outpoint: (a: number) => number;
-  readonly wallettxout_scriptPubkey: (a: number) => number;
-  readonly wallettxout_height: (a: number) => number;
-  readonly wallettxout_unblinded: (a: number) => number;
-  readonly wallettxout_isSpent: (a: number) => number;
-  readonly wallettxout_wildcardIndex: (a: number) => number;
-  readonly wallettxout_extInt: (a: number) => number;
-  readonly wallettxout_address: (a: number) => number;
-  readonly __wbg_optionwallettxout_free: (a: number, b: number) => void;
-  readonly optionwallettxout_get: (a: number) => number;
-  readonly __wbg_pricesfetcher_free: (a: number, b: number) => void;
-  readonly __wbg_pricesfetcherbuilder_free: (a: number, b: number) => void;
-  readonly pricesfetcher_new: () => [number, number, number];
-  readonly pricesfetcher_rates: (a: number, b: number) => any;
-  readonly __wbg_currencycode_free: (a: number, b: number) => void;
-  readonly currencycode_new: (a: number, b: number) => [number, number, number];
-  readonly currencycode_name: (a: number) => [number, number];
-  readonly currencycode_alpha3: (a: number) => [number, number];
-  readonly currencycode_exp: (a: number) => number;
-  readonly __wbg_exchangerates_free: (a: number, b: number) => void;
-  readonly exchangerates_median: (a: number) => number;
-  readonly exchangerates_results: (a: number) => [number, number, number];
-  readonly exchangerates_resultsCount: (a: number) => number;
-  readonly exchangerates_serialize: (a: number) => [number, number, number, number];
-  readonly __wbg_txdetails_free: (a: number, b: number) => void;
-  readonly txdetails_tx: (a: number) => number;
-  readonly txdetails_txid: (a: number) => number;
-  readonly txdetails_height: (a: number) => number;
-  readonly txdetails_timestamp: (a: number) => number;
-  readonly txdetails_txType: (a: number) => [number, number];
-  readonly txdetails_balance: (a: number) => number;
-  readonly txdetails_fees: (a: number) => number;
-  readonly txdetails_feesAsset: (a: number, b: number) => bigint;
-  readonly txdetails_unblindedUrl: (a: number, b: number, c: number) => [number, number];
-  readonly txdetails_inputs: (a: number) => [number, number];
-  readonly txdetails_outputs: (a: number) => [number, number];
-  readonly __wbg_txoutdetails_free: (a: number, b: number) => void;
-  readonly txoutdetails_outpoint: (a: number) => number;
-  readonly txoutdetails_script_pubkey: (a: number) => number;
-  readonly txoutdetails_height: (a: number) => number;
-  readonly txoutdetails_address: (a: number) => number;
-  readonly txoutdetails_unblinded: (a: number) => number;
-  readonly txoutdetails_is_explicit: (a: number) => number;
-  readonly txoutdetails_is_spent: (a: number) => number;
-  readonly __wbg_txsopt_free: (a: number, b: number) => void;
-  readonly txsopt_default: () => number;
-  readonly txsopt_withPagination: (a: number, b: number) => number;
-  readonly __wbg_txopt_free: (a: number, b: number) => void;
-  readonly txopt_default: () => number;
-  readonly wollet_txs: (a: number, b: number) => [number, number, number, number];
-  readonly wollet_numTxs: (a: number) => [number, number, number];
-  readonly wollet_txDetails: (a: number, b: number, c: number) => [number, number, number];
-  readonly assetid_new: (a: number, b: number) => [number, number, number];
-  readonly transaction_toBytes: (a: number) => [number, number];
-  readonly adaptorSign: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
-  readonly adaptorComplete: (a: number, b: number, c: number, d: number) => [number, number, number, number];
-  readonly adaptorExtract: (a: number, b: number, c: number, d: number) => [number, number, number, number];
-  readonly adaptorVerify: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number];
-  readonly __wbg_address_free: (a: number, b: number) => void;
-  readonly address_new: (a: number, b: number) => [number, number, number];
-  readonly address_parse: (a: number, b: number, c: number) => [number, number, number];
-  readonly address_scriptPubkey: (a: number) => number;
-  readonly address_isBlinded: (a: number) => number;
-  readonly address_isMainnet: (a: number) => number;
-  readonly address_toUnconfidential: (a: number) => number;
-  readonly address_toString: (a: number) => [number, number];
-  readonly address_QRCodeUri: (a: number, b: number) => [number, number, number, number];
-  readonly address_QRCodeText: (a: number) => [number, number, number, number];
-  readonly __wbg_addressresult_free: (a: number, b: number) => void;
-  readonly addressresult_address: (a: number) => number;
-  readonly addressresult_index: (a: number) => number;
-  readonly __wbg_magicroutinghint_free: (a: number, b: number) => void;
-  readonly magicroutinghint_address: (a: number) => [number, number];
-  readonly magicroutinghint_amount: (a: number) => bigint;
-  readonly magicroutinghint_uri: (a: number) => [number, number];
-  readonly __wbg_network_free: (a: number, b: number) => void;
-  readonly network_mainnet: () => number;
-  readonly network_testnet: () => number;
-  readonly network_sequentiaTestnet: () => number;
-  readonly network_regtest: (a: number) => number;
-  readonly network_regtestWithGenesis: (a: number, b: number, c: number) => [number, number, number];
-  readonly network_regtestDefault: () => number;
-  readonly network_defaultEsploraClient: (a: number) => number;
-  readonly network_isMainnet: (a: number) => number;
-  readonly network_isTestnet: (a: number) => number;
-  readonly network_isRegtest: (a: number) => number;
-  readonly network_isSequentia: (a: number) => number;
-  readonly network_toString: (a: number) => [number, number];
-  readonly network_policyAsset: (a: number) => number;
-  readonly network_genesisBlockHash: (a: number) => [number, number];
-  readonly network_txBuilder: (a: number) => number;
-  readonly network_defaultExplorerUrl: (a: number) => [number, number];
-  readonly __wbg_registry_free: (a: number, b: number) => void;
-  readonly __wbg_registrydata_free: (a: number, b: number) => void;
-  readonly __wbg_assetmeta_free: (a: number, b: number) => void;
-  readonly __wbg_registrypost_free: (a: number, b: number) => void;
-  readonly assetmeta_contract: (a: number) => number;
-  readonly assetmeta_tx: (a: number) => number;
-  readonly registrypost_new: (a: number, b: number) => number;
-  readonly registrypost_toString: (a: number) => [number, number];
-  readonly registry_new: (a: number, b: number, c: number) => any;
-  readonly registry_defaultForNetwork: (a: number, b: number) => any;
-  readonly registry_defaultHardcodedForNetwork: (a: number) => [number, number, number];
-  readonly registry_fetchWithTx: (a: number, b: number, c: number) => any;
-  readonly registry_post: (a: number, b: number) => any;
-  readonly registry_get: (a: number, b: number) => number;
-  readonly registry_getAssetOfToken: (a: number, b: number) => number;
-  readonly registry_addContracts: (a: number, b: number) => [number, number, number];
-  readonly registrydata_precision: (a: number) => number;
-  readonly registrydata_ticker: (a: number) => [number, number];
-  readonly registrydata_name: (a: number) => [number, number];
-  readonly registrydata_domain: (a: number) => [number, number];
-  readonly sequentiaDelegationScript: (a: number, b: number, c: number, d: number) => [number, number, number, number];
-  readonly parseDelegationScript: (a: number, b: number) => [number, number, number];
-  readonly findDelegationRecords: (a: number, b: number, c: number, d: number) => [number, number, number];
-  readonly buildDelegationSpendTx: (a: any, b: number) => [number, number, number];
-  readonly buildDelegationCreateTx: (a: any, b: number) => [number, number, number];
-  readonly stakeRecordSigning: (a: number, b: number, c: number) => [number, number];
-  readonly __wbg_swaprequest_free: (a: number, b: number) => void;
-  readonly swaprequest_id: (a: number) => [number, number];
-  readonly swaprequest_amountP: (a: number) => bigint;
-  readonly swaprequest_assetP: (a: number) => [number, number];
-  readonly swaprequest_amountR: (a: number) => bigint;
-  readonly swaprequest_assetR: (a: number) => [number, number];
-  readonly swaprequest_transaction: (a: number) => [number, number];
-  readonly swaprequest_unblindedInputs: (a: number) => [number, number, number];
-  readonly swaprequest_toJson: (a: number) => [number, number, number];
-  readonly wollet_seqdexSwapRequest: (a: number, b: number, c: bigint, d: number, e: bigint, f: number, g: number, h: bigint, i: bigint) => [number, number, number];
-  readonly sequentiaStakeScript: (a: number, b: number, c: number) => [number, number, number, number];
-  readonly __wbg_txbuilder_free: (a: number, b: number) => void;
-  readonly txbuilder_finish: (a: number, b: number) => [number, number, number];
-  readonly txbuilder_feeRate: (a: number, b: number) => number;
-  readonly txbuilder_feeAsset: (a: number, b: number, c: bigint) => number;
-  readonly txbuilder_drainLbtcWallet: (a: number) => number;
-  readonly txbuilder_drainLbtcTo: (a: number, b: number) => number;
-  readonly txbuilder_addLbtcRecipient: (a: number, b: number, c: bigint) => [number, number, number];
-  readonly txbuilder_addRecipient: (a: number, b: number, c: bigint, d: number) => [number, number, number];
-  readonly txbuilder_addBurn: (a: number, b: bigint, c: number) => number;
-  readonly txbuilder_addExplicitRecipient: (a: number, b: number, c: bigint, d: number) => [number, number, number];
-  readonly txbuilder_addStakeOutput: (a: number, b: number, c: number, d: number, e: bigint) => [number, number, number];
-  readonly txbuilder_addDelegationOutput: (a: number, b: number, c: number, d: number, e: number, f: bigint) => [number, number, number];
-  readonly txbuilder_addRecordAuthorization: (a: number, b: number, c: number, d: bigint) => [number, number, number];
-  readonly txbuilder_issueAsset: (a: number, b: bigint, c: number, d: bigint, e: number, f: number) => [number, number, number];
-  readonly txbuilder_reissueAsset: (a: number, b: number, c: bigint, d: number, e: number) => [number, number, number];
-  readonly txbuilder_setWalletUtxos: (a: number, b: number, c: number) => number;
-  readonly txbuilder_toString: (a: number) => [number, number];
-  readonly txbuilder_liquidexMake: (a: number, b: number, c: number, d: bigint, e: number) => [number, number, number];
-  readonly txbuilder_liquidexTake: (a: number, b: number, c: number) => [number, number, number];
-  readonly txbuilder_addInputRangeproofs: (a: number, b: number) => number;
-  readonly txbuilder_new: (a: number) => number;
+  readonly __wbg_fees_free: (a: number, b: number) => void;
+  readonly fees_entries: (a: number) => [number, number, number];
+  readonly fees_toJSON: (a: number) => [number, number, number];
+  readonly fees_toString: (a: number) => [number, number];
+  readonly openampComputeAid: (a: any) => [number, number, number, number];
+  readonly openampTaggedHash: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+  readonly enclaveSighash: (a: number, b: number, c: number, d: any, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number, number];
+  readonly decodeEnclaveSpend: (a: number, b: number, c: any, d: any) => [number, number, number];
+  readonly __wbg_openamp_free: (a: number, b: number) => void;
+  readonly openamp_new: (a: number, b: number) => number;
+  readonly openamp_computeLocalAid: (a: number, b: any) => [number, number, number, number];
+  readonly openamp_registerUser: (a: number, b: any) => any;
+  readonly openamp_getUser: (a: number, b: number, c: number) => any;
+  readonly openamp_enclaveAddress: (a: number, b: number, c: number, d: number, e: number) => any;
+  readonly openamp_balance: (a: number, b: number, c: number, d: number, e: number) => any;
+  readonly openamp_assetInfo: (a: number, b: number, c: number) => any;
+  readonly openamp_assets: (a: number) => any;
+  readonly openamp_createTransfer: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: bigint, i: number, j: number) => any;
+  readonly openamp_completeTransfer: (a: number, b: number, c: number, d: any) => any;
+  readonly openamp_log: (a: number) => any;
+  readonly tapscriptSighash: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number, number, number];
+  readonly tapscriptDescribe: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number, number, number];
+  readonly __wbg_xpub_free: (a: number, b: number) => void;
+  readonly xpub_new: (a: number, b: number) => [number, number, number];
+  readonly xpub_toString: (a: number) => [number, number];
+  readonly xpub_identifier: (a: number) => [number, number];
+  readonly xpub_fingerprint: (a: number) => [number, number];
+  readonly xpub_isValidWithKeyOrigin: (a: number, b: number) => number;
+  readonly rust_0_7_free: (a: number) => void;
+  readonly rust_0_7_malloc: (a: number) => number;
+  readonly rust_0_7_calloc: (a: number, b: number) => number;
   readonly rustsecp256k1_v0_12_context_create: (a: number) => number;
   readonly rustsecp256k1_v0_12_context_destroy: (a: number) => void;
   readonly rustsecp256k1_v0_12_default_illegal_callback_fn: (a: number, b: number) => void;
@@ -3903,11 +4112,11 @@ export interface InitOutput {
   readonly __externref_table_dealloc: (a: number) => void;
   readonly __wbindgen_free: (a: number, b: number, c: number) => void;
   readonly __externref_drop_slice: (a: number, b: number) => void;
-  readonly closure1058_externref_shim: (a: number, b: number, c: any) => void;
+  readonly closure2127_externref_shim: (a: number, b: number, c: any) => void;
+  readonly closure2872_externref_shim: (a: number, b: number, c: any) => void;
+  readonly wasm_bindgen__convert__closures_____invoke__he4358746220713bc: (a: number, b: number) => void;
   readonly wasm_bindgen__convert__closures_____invoke__h3c25c7484968f562: (a: number, b: number) => void;
-  readonly wasm_bindgen__convert__closures_____invoke__hd92f10df28d3d172: (a: number, b: number) => void;
-  readonly closure1905_externref_shim: (a: number, b: number, c: any) => void;
-  readonly closure2759_externref_shim: (a: number, b: number, c: any, d: any) => void;
+  readonly closure3719_externref_shim: (a: number, b: number, c: any, d: any) => void;
   readonly __wbindgen_start: () => void;
 }
 

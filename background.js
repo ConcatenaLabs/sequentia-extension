@@ -421,7 +421,7 @@ const uiMethods = {
     await afterUnlock();
     return { ok: true };
   },
-  'approval.decide': async ({ id, approve }) => await router.decideApproval(id, !!approve),
+  'approval.decide': async ({ id, approve, shown }) => await router.decideApproval(id, !!approve, shown ?? null),
 };
 
 // ---- message dispatch ----

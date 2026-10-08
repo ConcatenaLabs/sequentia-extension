@@ -25,6 +25,7 @@ const TITLES = {
   openampSignTagged: 'Sign a statement?',
   openampSignSpend: 'Co-sign a restricted-asset spend?',
   openampSignSupervision: 'Authorize this as the asset\u2019s issuer?',
+  signContractSpend: 'Sign this contract spend?',
 };
 
 function fmtAtoms(atoms, d) {
@@ -75,6 +76,13 @@ function render(a) {
     }
   }
   if (d.fee != null) add('Network fee (est.)', String(d.fee) + ' atoms');
+  // A contract spend: the engine's summary, section by section (vendor/contracts.js).
+  if (Array.isArray(d.sections)) {
+    for (const sec of d.sections) {
+      const h = document.createElement('div'); h.className = 'section'; h.textContent = sec.title; det.appendChild(h);
+      for (const [k, v] of sec.rows) add(k, String(v), /^[0-9a-f]{20,}$/i.test(String(v)));
+    }
+  }
   if (d.pset) { const p = document.createElement('div'); p.className = 'payload'; p.textContent = d.pset; det.appendChild(p); }
   if (d.warning) { const w = document.createElement('div'); w.className = 'status err'; w.textContent = d.warning; det.appendChild(w); }
 }
@@ -100,7 +108,9 @@ async function decide(approve) {
   $('reqStatus').className = 'status';
   $('reqStatus').textContent = approve ? 'Working…' : 'Rejecting…';
   try {
-    await rpc('approval.decide', { id: approval.id, approve });
+    // What this page showed: a contract spend is signed only for the digest it rendered.
+    const shown = (approval.display && approval.display.digest) || null;
+    await rpc('approval.decide', { id: approval.id, approve, shown });
     closeSelf();
   } catch (e) {
     $('reqStatus').className = 'status err';

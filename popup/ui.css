@@ -93,3 +93,7 @@ button.tiny { padding: 4px 10px; font-size: 11px; margin-top: 0; }
 .phrase span { background: var(--bg2); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; font-family: var(--mono); font-size: 12px; }
 .phrase span i { color: var(--sub); font-style: normal; margin-right: 5px; font-size: 10px; }
 a.link { color: var(--gold); text-decoration: none; cursor: pointer; }
+/* A contract spend's approval: the engine's summary, section by section. */
+.section { margin: 12px 0 2px; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--sub); }
+#reqDetail .kv .k { flex-shrink: 1; max-width: 45%; }
+#reqDetail .kv .v { word-break: normal; overflow-wrap: anywhere; }

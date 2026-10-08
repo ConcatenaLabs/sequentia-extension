@@ -33,6 +33,10 @@ confidential `tsqb1…` addresses are an explicit opt-in).
   `openampSignTagged`, `openampSignSpend`, `openampSignSupervision`), so an
   issuance or transfer-agent platform uses the account the user already holds
   restricted assets in rather than a second identity generated in a browser tab.
+  A site can ask for a spend of a contract (`signContractSpend`): the kit's
+  contract engine builds and checks it, the approval window shows the
+  template, the path, the parameters and the wallet's balance change, and the
+  wallet signs only what it showed.
   Protocol spec: [doc/PROVIDER.md](doc/PROVIDER.md).
 - **Staking pool delegation** — the Stake tab lends an existing stake's weight
   to a pool, moves it to another pool, and takes it back. The staked coins
@@ -86,6 +90,11 @@ build step is needed to load the extension.
   node, serves it through a small esplora stand-in (`test/regtest/esplora-shim.mjs`),
   and drives join, move and leave through the service worker's own message
   handlers, checking every transaction into a block.
+- A contract spend against a private chain: `SEQUENTIAD=/path/to/sequentiad
+  SWK_TEMPLATES=/path/to/SWK/lwk_contracts/templates CHROME=/path/to/chrome node
+  test/regtest/contract-spend.mjs` asks for a faucet drip through the provider
+  router, reads and decides the approval through the worker's own messages,
+  renders the approval page, confirms the drip, and checks each refusal.
 - Service-worker console: `CHROME=/path/to/chrome node scripts/sw-console-check.mjs`
   loads the unpacked extension in a headless Chromium twice and fails on any
   exception or console error the worker raises. Run it after any change to a
@@ -94,7 +103,7 @@ build step is needed to load the extension.
 - Rebuild the SWK wasm (needs the SWK checkout + clang):
   ```sh
   cd ../SWK/lwk_wasm
-  CARGO_PROFILE_RELEASE_OPT_LEVEL=z wasm-pack build --target web --release --out-dir pkg_ext
+  CARGO_PROFILE_RELEASE_OPT_LEVEL=z ./build-web.sh pkg_ext   # build paths remapped
   cp pkg_ext/{lwk_wasm.js,lwk_wasm.d.ts,lwk_wasm_bg.wasm,package.json} ../../sequentia-extension/pkg/
   ```
 
@@ -112,7 +121,7 @@ popup/                 wallet UI     approval/  site-request approval window
 vendor/                modules copied from sequentia-web-wallet (btc.js,
                        seqln.js, seqln-keys.js, seqob.js, covenant.js,
                        covenant-order.js, covenant-fill-host.js,
-                       noble-ciphers.js, lightning/ signer SDK)
+                       noble-ciphers.js, contracts.js, lightning/ signer SDK)
 pkg/                   SWK lwk_wasm build (committed)
 doc/PROVIDER.md        the website provider protocol
 ```

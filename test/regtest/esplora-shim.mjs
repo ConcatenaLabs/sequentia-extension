@@ -160,6 +160,15 @@ export function startEsploraShim({ rpc, port, pools = null }) {
       if (p === '/blocks/tip/height') return send(200, String(await call('getblockcount')));
       if ((m = p.match(/^\/block-height\/(\d+)$/))) return send(200, await call('getblockhash', [Number(m[1])]));
       if ((m = p.match(/^\/block\/([0-9a-f]{64})\/header$/))) return send(200, await call('getblockheader', [m[1], false]));
+      if ((m = p.match(/^\/block\/([0-9a-f]{64})$/))) {
+        const h = await call('getblockheader', [m[1]]);
+        return json({ id: h.hash, height: h.height, mediantime: h.mediantime, timestamp: h.time });
+      }
+      if ((m = p.match(/^\/address\/([^/]+)\/utxo$/))) {
+        const s = await call('scantxoutset', ['start', [`addr(${m[1]})`]]);
+        return json(s.unspents.map((u) => ({ txid: u.txid, vout: u.vout, value: atoms(u.amount), asset: u.asset,
+          status: { confirmed: u.height > 0, block_height: u.height } })));
+      }
       if ((m = p.match(/^\/tx\/([0-9a-f]{64})\/raw$/))) {
         const hex = await call('getrawtransaction', [m[1], 0]);
         res.writeHead(200, { 'content-type': 'application/octet-stream' });
