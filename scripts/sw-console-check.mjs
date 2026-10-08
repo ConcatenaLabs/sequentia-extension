@@ -102,7 +102,7 @@ async function session(label) {
   await send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
 
   try {
-    for (let i = 0; i < 100 && !workers.length; i++) await sleep(100);
+    for (let i = 0; i < 300 && !workers.length; i++) await sleep(100);
     if (!workers.length) throw new Error('no service worker started (it may have failed to register)');
     await sleep(3000);   // let the worker's start-up run its course
     const worker = workers[0];
@@ -149,6 +149,18 @@ async function session(label) {
     }, worker.sessionId);
     if (hello.exceptionDetails) throw new Error('offscreen document: ' + hello.exceptionDetails.exception.description);
     console.log(`${label}: offscreen handshake:`, JSON.stringify(hello.result.value));
+    // The leaf wallet's worker in that document: it loads the library's wasm and
+    // installs its store (SQLite on the extension's private file system). A start with
+    // no operator joined is refused in the host's words only after both have run.
+    const leaf = await send('Runtime.evaluate', {
+      expression: `chrome.runtime.sendMessage({ scope: 'leaf', op: 'start', args: { mnemonic: 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about' } })`,
+      awaitPromise: true, returnByValue: true,
+    }, worker.sessionId);
+    if (leaf.exceptionDetails) throw new Error('leaf host: ' + leaf.exceptionDetails.exception.description);
+    console.log(`${label}: leaf wallet host:`, JSON.stringify(leaf.result.value));
+    if (!leaf.result.value || !/has not joined a leaf operator/.test(JSON.stringify(leaf.result.value))) {
+      problems.push('the leaf wallet did not load in the offscreen document: ' + JSON.stringify(leaf.result.value));
+    }
     if (hello.result.value.offscreen !== hello.result.value.manifest) {
       problems.push(`the offscreen document answers build ${hello.result.value.offscreen}, the manifest is ${hello.result.value.manifest}: every offscreen job would fail`);
     }
@@ -161,7 +173,12 @@ async function session(label) {
 }
 
 const problems = [...await session('first start'), ...await session('restart')];
-fs.rmSync(profile, { recursive: true, force: true });
+// Chromium's helper processes can still be writing the profile for a moment after
+// the browser exits.
+for (let i = 0; ; i++) {
+  try { fs.rmSync(profile, { recursive: true, force: true }); break; }
+  catch (e) { if (i >= 20) { console.log('could not remove ' + profile + ': ' + e.message); break; } await sleep(500); }
+}
 if (problems.length) {
   console.log('PROBLEMS:\n  ' + problems.join('\n  '));
   process.exit(1);

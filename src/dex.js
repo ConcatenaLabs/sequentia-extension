@@ -25,6 +25,7 @@ import { stripBip32 } from './psetbytes.js';
 import * as ln from './ln.js';
 import { BASE, ESPLORA, DEFAULT_FEERATE, EXCHANGE_RATE_SCALE } from './config.js';
 import { fmtAtoms, stGet, stSet } from './util.js';
+import { ensureOffscreen } from './offscreen-doc.js';
 
 const MOUNTS = {
   ln: BASE + '/seqob-pln',
@@ -545,37 +546,6 @@ export async function prepareLnLimitOrder({ base, quote, side, baseAtoms, limitQ
     return { jobId: job, pending: true, fillsNow: slices.length, rests: restBase > 0n };
   };
   return { display, exec };
-}
-
-async function ensureOffscreen() {
-  // REUSE a live document whenever it answers the hello handshake with the
-  // current build version: the document holds the warm Lightning signer wss
-  // links, and recreating it per swap forced a full node bring-up every time
-  // (the bulk of a 24s swap). A silent or version-skewed document — the stale-
-  // code hazard the old always-recreate policy guarded against — is torn down
-  // and rebuilt.
-  const version = chrome.runtime.getManifest().version;
-  try {
-    const r = await chrome.runtime.sendMessage({ scope: 'oln', op: 'hello' });
-    if (r && r.version === version) return;
-  } catch {}
-  try { await chrome.offscreen.closeDocument(); } catch {}
-  await chrome.offscreen.createDocument({
-    url: 'offscreen.html?v=' + encodeURIComponent(version),
-    reasons: ['WORKERS'],
-    justification: 'Long-lived Lightning signer sessions outlive service worker limits',
-  });
-  // The loader imports the engine asynchronously; dispatching before its
-  // listener exists dies with "receiving end does not exist". Wait for hello.
-  const t0 = Date.now();
-  for (;;) {
-    try {
-      const r = await chrome.runtime.sendMessage({ scope: 'oln', op: 'hello' });
-      if (r && r.version === version) return;
-    } catch {}
-    if (Date.now() - t0 > 15_000) throw new Error('the wallet engine did not come up');
-    await new Promise((res) => setTimeout(res, 250));
-  }
 }
 
 export async function jobResult(jobId) {

@@ -13,7 +13,7 @@ import { join } from 'node:path';
 // temporary copies.
 const root = new URL('..', import.meta.url).pathname;
 const modules = [
-  'background.js', 'offscreen.js', 'offscreen-boot.js',
+  'background.js', 'offscreen.js', 'offscreen-boot.js', 'offscreen-leaves.js', 'leaves/worker.js',
   ...readdirSync(join(root, 'src')).filter((f) => f.endsWith('.js')).map((f) => 'src/' + f),
 ];
 
@@ -34,7 +34,7 @@ test('every extension module parses as an ES module', () => {
 // kills the service worker before it registers a listener, so the popup never
 // gets past "Loading…". Linking the graph from each entry point catches it.
 test('every import in the extension resolves to an export', () => {
-  const entries = ['background.js', 'offscreen.js', 'popup/popup.js', 'approval/approval.js'];
+  const entries = ['background.js', 'offscreen.js', 'popup/popup.js', 'approval/approval.js', 'leaves/worker.js'];
   try {
     execFileSync(process.execPath,
       ['--experimental-vm-modules', '--no-warnings', join(root, 'test/helpers/link-check.mjs'), root, ...entries],

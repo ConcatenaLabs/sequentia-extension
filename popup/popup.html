@@ -217,6 +217,36 @@
         <button id="btnSaveSettings" class="ghost tiny" style="margin-top:8px">Save</button>
       </div>
       <div class="card">
+        <h2>Mode</h2>
+        <p class="sub">User mode shows one balance per asset. Developer mode shows every rail (on-chain, leaves, Lightning) and lets each step be chosen by hand. Sites can read this setting and follow it.</p>
+        <select id="setMode">
+          <option value="user">User</option>
+          <option value="developer">Developer</option>
+        </select>
+      </div>
+      <div class="card hide" id="leafCard">
+        <h2>Leaves</h2>
+        <p class="sub">Coins held as leaves of an operator's tree: paid and received off the chain, and taken on-chain by this wallet alone when it must. The wallet pins the operator's key and the node's chain when it joins, and refuses any server that names another. The node must validate its anchors and keep a transaction index.</p>
+        <div id="leafJoin">
+          <label class="sub">Operator server URL</label><input id="leafServer" placeholder="https://…/operator">
+          <label class="sub">Node JSON-RPC URL</label><input id="leafNodeUrl" placeholder="https://…/node">
+          <label class="sub">Node user (if it asks for one)</label><input id="leafNodeUser">
+          <label class="sub">Node password (kept in this browser's extension storage)</label><input id="leafNodePassword" type="password">
+          <label class="sub">Exit delay, in 512-second units (blank: the library's)</label><input id="leafDelay" inputmode="numeric">
+          <label class="sub">Smallest exit delay accepted from a payer (blank: the library's)</label><input id="leafMinDelay" inputmode="numeric">
+          <button id="btnLeafJoin" class="tiny" style="margin-top:8px">Join</button>
+        </div>
+        <div id="leafJoined" class="hide">
+          <div class="sub">Operator key (compare it with the one the operator publishes)</div>
+          <div id="leafOperator" class="addr mono"></div>
+          <div id="leafServerShown" class="sub"></div>
+          <div id="leafBalances"></div>
+          <div id="leafSchedule" class="sub"></div>
+          <button id="btnLeafSync" class="ghost tiny" style="margin-top:8px">Sync now</button>
+        </div>
+        <div id="leafStatus" class="status"></div>
+      </div>
+      <div class="card">
         <h2>Recovery phrase</h2>
         <p class="sub">Requires your password. Never share it; anyone with it controls your funds.</p>
         <input id="revealPw" type="password" placeholder="Password">

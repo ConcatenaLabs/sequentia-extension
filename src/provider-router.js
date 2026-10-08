@@ -15,6 +15,8 @@ import { sessionMnemonic } from './vault.js';
 import { checkSigningRequest } from './tagpolicy.js';
 import { stGet } from './util.js';
 import * as contracts from './contracts.js';
+import * as leaves from './leaves.js';
+import { readRequest, planSend, leafBalancesAnswer } from './leaf-request.js';
 
 // ---- pending approvals ----
 const pending = new Map();
@@ -121,14 +123,16 @@ export async function handleDappRequest(origin, method, params = {}) {
           'broadcast', 'createInvoice', 'payInvoice',
           'getUtxos', 'lnChannels', 'lnRequestInbound', 'dexFillOnchain', 'dexSwapLn', 'dexJobResult', 'dexMarketOrder', 'dexPlaceLimit', 'getBtcPublicKey', 'getBtcAddress', 'signBtcTaproot', 'prepareBtcSend',
           'openampGetIdentity', 'openampSignTagged', 'openampSignSpend', 'openampSignSupervision',
-          'signContractSpend'],
+          'signContractSpend', 'getWalletMode', 'getLeafBalances', 'requestLeafReceive', 'sendLeaves'],
         // What this build can do beyond the method names, for sites that have
         // to know before they build something: 'pset-site-built' means
         // signPset fills in this wallet's key origins itself, so a PSET a site
         // composed (with only the outputs it spends) can be signed here.
         // 'contract-spend' means signContractSpend runs the kit's contract engine.
-        features: ['pset-site-built', 'contract-spend'],
-        events: ['accountsChanged', 'disconnect'],
+        // 'leaves' means the leaf methods (getLeafBalances, requestLeafReceive,
+        // sendLeaves) and their events are served, in developer mode.
+        features: ['pset-site-built', 'contract-spend', 'leaves'],
+        events: ['accountsChanged', 'disconnect', 'modeChanged', 'leafArrived', 'leafSyncDue'],
       };
 
     case 'getNetwork':
@@ -214,7 +218,7 @@ export async function handleDappRequest(origin, method, params = {}) {
     }
 
     case 'dexMarketOrder': {
-      requireConnected(origin);
+      await requireConnected(origin);
       const { room = 'ln', base, quote, side, baseAtoms } = params || {};
       if (room !== 'ln') throw new Error("only room 'ln' supports market orders so far");
       if (!/^[0-9a-f]{64}$/i.test(String(base || ''))) throw new Error('base must be a 32-byte hex asset id');
@@ -222,7 +226,7 @@ export async function handleDappRequest(origin, method, params = {}) {
       return requestApproval(origin, 'dexMarketOrder', { ...prep.display, text: origin + ' · ' + prep.display.text }, prep.exec);
     }
     case 'dexPlaceLimit': {
-      requireConnected(origin);
+      await requireConnected(origin);
       const { room = 'ln', base, quote, side, baseAtoms, limitQuoteAtoms } = params || {};
       if (room !== 'ln') throw new Error("only room 'ln' supports wallet-served limit orders so far");
       if (!/^[0-9a-f]{64}$/i.test(String(base || ''))) throw new Error('base must be a 32-byte hex asset id');
@@ -482,6 +486,81 @@ export async function handleDappRequest(origin, method, params = {}) {
         text: origin + ' asks you to pay a Lightning invoice from your ' + ticker + ' balance.',
         bolt11: bolt11.slice(0, 90) + (bolt11.length > 90 ? '…' : ''),
       }, async () => { await ensureOpenOrThrow(); return await ln.payInvoice({ kind, bolt11 }); });
+    }
+
+    // ---- the wallet's mode, and leaves (developer mode) ----
+    //
+    // The leaf wallet is the operator wallet library in the offscreen document
+    // (src/leaves.js, offscreen-leaves.js): every answer and refusal is the library's,
+    // passed on in its words.
+
+    case 'getWalletMode':
+      // Silent and needs no connection: a site chooses its layout before it connects.
+      return { mode: await leaves.mode() };
+
+    case 'getLeafBalances': {
+      await requireUnlockedAndConnected(origin);
+      await leaves.requireLeaves();
+      const balance = await leaves.run('balance');
+      const schedule = await leaves.run('schedule').catch(() => null);
+      return leafBalancesAnswer(balance, schedule);
+    }
+
+    case 'requestLeafReceive': {
+      await requireConnected(origin);
+      const asset = params.asset != null && params.asset !== '' ? String(params.asset).toLowerCase() : null;
+      if (asset && !/^[0-9a-f]{64}$/.test(asset)) throw new Error('asset must be a 64-hex asset id');
+      const amount = params.amount != null && params.amount !== '' ? String(params.amount) : null;
+      if (amount != null && (!/^\d+$/.test(amount) || BigInt(amount) <= 0n)) throw new Error('amount must be a positive number of atoms');
+      // Mode and operator are checked before the window opens: a request that will be
+      // refused should never reach the user as a decision to make.
+      if ((await leaves.mode()) !== 'developer') throw new Error(leaves.NOT_DEVELOPER);
+      if (!(await leaves.config())) throw new Error(leaves.NOT_JOINED);
+      const m = asset ? A.assetMeta(asset) : null;
+      return requestApproval(origin, 'requestLeafReceive', {
+        text: origin + ' asks your wallet for a receive request for leaves: a single-use request a payer pays out of round, with no transaction.',
+        rows: [
+          ['Asset', asset ? (m.ticker && m.ticker !== '?' ? m.ticker + ' (' + asset.slice(0, 12) + '…)' : asset) : 'any (the payer names it)'],
+          ['Amount', amount != null ? (asset ? engine.fmt(amount, asset) + ' ' + (m.ticker || '') : amount + ' atoms') : 'any (the payer names it)'],
+        ],
+        detail: 'The payment arrives in your wallet’s mailbox, which the wallet reads while it runs. The request lapses after a while; nobody can pay it after that.',
+      }, async () => {
+        await ensureOpenOrThrow();
+        await leaves.requireLeaves();
+        const args = {};
+        if (asset) args.asset = asset;
+        if (amount != null) args.amount = amount;
+        return await leaves.run('receive', args);
+      });
+    }
+
+    case 'sendLeaves': {
+      await requireConnected(origin);
+      const text = String(params.request ?? '');
+      if (!text) throw new Error('request is required');
+      if (!(await sessionMnemonic())) throw new Error('the wallet is locked; open the wallet popup and unlock first');
+      await leaves.requireLeaves();
+      // Read the request to SHOW it; the library pays it, handed the asset and the
+      // amount shown, and refuses whatever does not match the request.
+      const req = readRequest(text);
+      const info = await leaves.run('info');
+      const plan = planSend(req, { asset: params.asset, amount: params.amount }, info);
+      const m = A.assetMeta(plan.asset);
+      const ticker = m.ticker && m.ticker !== '?' ? m.ticker : plan.asset.slice(0, 12) + '…';
+      const rows = [
+        ['Asset', ticker + ' (' + plan.asset + ')'],
+        ['Receiver’s leaf key', plan.owner],
+        ['Receiver’s mailbox', plan.mailbox],
+      ];
+      if (plan.until != null) rows.push(['Request lapses', new Date(plan.until * 1000).toISOString().replace('T', ' ').replace(/\.\d+Z$/, ' UTC') + ' (median time)']);
+      return requestApproval(origin, 'sendLeaves', {
+        text: origin + ' asks you to pay a receive request from your leaves, out of round: no transaction, and nothing paid to the operator. The coins spent keep a margin of the same asset for the fees of taking them on-chain.',
+        deltas: [{ ticker, atoms: '-' + plan.amount, precision: m.precision || 0 }],
+        rows,
+      }, async () => {
+        await ensureOpenOrThrow();
+        return await leaves.run('send', { request: text, asset: plan.asset, amount: plan.amount });
+      });
     }
 
     case 'getBtcAddress': {

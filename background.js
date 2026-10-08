@@ -22,6 +22,7 @@ import { attributeStakingRewards, planRewardBatches, decideRewardConversion,
 import { btc as btcLib } from './vendor/btc.js';
 import * as perms from './src/permissions.js';
 import * as router from './src/provider-router.js';
+import * as leaves from './src/leaves.js';
 import {
   vaultExists, vaultCreate, vaultUnlock, vaultLock, sessionMnemonic,
   armAutoLock, touchAutoLock,
@@ -89,6 +90,24 @@ function emitToAll(event, data) {
   for (const origin of dappPorts.keys()) emitToOrigin(origin, event, data);
 }
 
+// Events that must reach a page whether or not this worker has been asleep since the
+// page subscribed: through every tab's content script, which passes an event on only
+// to a page of one of `origins` (null: any page). The ports above die with the worker;
+// tab messages do not depend on them, and need no "tabs" permission.
+async function emitToTabs(event, data, origins) {
+  let tabs = [];
+  try { tabs = await chrome.tabs.query({}); } catch { return; }
+  const msg = { scope: 'dapp-event', event, data, origins: origins || null };
+  for (const t of tabs) {
+    if (t.id == null) continue;
+    chrome.tabs.sendMessage(t.id, msg).catch(() => {});
+  }
+}
+async function emitToConnected(event, data) {
+  const origins = Object.keys((await perms.sites()) || {});
+  if (origins.length) await emitToTabs(event, data, origins);
+}
+
 // ---- LN + DEX progress relayed to whichever UI page is listening ----
 ln.setProgressSink((text) => {
   chrome.runtime.sendMessage({ scope: 'ui-event', event: 'ln-progress', text }).catch(() => {});
@@ -110,12 +129,16 @@ async function afterUnlock() {
     await Promise.allSettled([openamp.oampInit()]);
     await Promise.allSettled([openamp.refreshBalances(), engine.sync()]);
     ln.resumePendingMove().catch(() => {});
+    // The leaf wallet (developer mode, an operator joined): opened in the offscreen
+    // document, which syncs it on the library's schedule from here on.
+    leaves.ensureRunning().catch((e) => console.warn('[leaves] could not start:', (e && e.message) ?? e));
   })().catch(() => {});
 }
 
 async function doLock() {
   await vaultLock();
   engine.closeWallet();
+  await leaves.stop();
   emitToAll('accountsChanged', { accounts: [] });
   chrome.runtime.sendMessage({ scope: 'ui-event', event: 'locked' }).catch(() => {});
 }
@@ -135,8 +158,19 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   if (await sessionMnemonic()) {
     await engine.ensureOpen().catch(() => {});
     if (await ln.pendingMove()) ln.resumePendingMove().catch(() => {});
+    leaves.ensureRunning().catch(() => {});
   }
 })();
+
+// The leaf wallet lives in the offscreen document, which a browser can close (a
+// crash, a memory purge). Once a minute, while the wallet is unlocked in developer
+// mode with an operator joined, make sure it is open; the alarm outlives this worker.
+try {
+  chrome.alarms.create('leafHost', { periodInMinutes: 1 });
+  chrome.alarms.onAlarm.addListener((a) => {
+    if (a && a.name === 'leafHost') leaves.ensureRunning().catch(() => {});
+  });
+} catch { /* alarms unavailable in this context */ }
 
 // ---- overview composition for the popup ----
 async function overview({ withLn = false } = {}) {
@@ -398,6 +432,32 @@ const uiMethods = {
   'lnPay': async ({ kind, bolt11 }) => await ln.payInvoice({ kind, bolt11 }),
   'lnMove': async ({ kind, amount }) => await ln.moveToLightning({ kind, atoms: amount }),
   'lnClose': async ({ kind }) => await ln.closeToChain({ kind }),
+  // --- the wallet's mode, and leaves (developer mode) ---
+  'getMode': async () => ({ mode: await leaves.mode() }),
+  'setMode': async ({ mode }) => {
+    const m = await leaves.setMode(mode);
+    emitToTabs('modeChanged', { mode: m }, null).catch(() => {});
+    if (m === 'developer') leaves.ensureRunning().catch(() => {});
+    else await leaves.stop();
+    return { mode: m };
+  },
+  'leaves.state': async () => {
+    const cfg = await leaves.config();
+    const out = { mode: await leaves.mode(), joined: !!cfg, status: null, balance: null, schedule: null, error: null };
+    if (cfg) {
+      out.server = cfg.server; out.nodeUrl = cfg.node_url; out.operator = cfg.operator || null;
+    }
+    if (out.mode !== 'developer' || !cfg || !(await sessionMnemonic())) return out;
+    try {
+      await leaves.ensureRunning();
+      out.status = await leaves.status();
+      out.balance = await leaves.run('balance');
+      out.schedule = await leaves.run('schedule');
+    } catch (e) { out.error = String((e && e.message) ?? e); }
+    return out;
+  },
+  'leaves.join': async (cfg) => ({ info: await leaves.join(cfg || {}) }),
+  'leaves.sync': async () => ({ result: await leaves.syncNow() }),
   'getSettings': async () => ((await stGet('local', 'ext.settings')) || {}),
   'setSettings': async (p) => {
     const s = (await stGet('local', 'ext.settings')) || {};
@@ -426,6 +486,12 @@ const uiMethods = {
 
 // ---- message dispatch ----
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  // The leaf wallet's events, from its host in the offscreen document: relayed to
+  // connected sites (an open wallet page hears the same message itself).
+  if (msg && msg.scope === 'leaf-event' && sender.id === chrome.runtime.id) {
+    if (msg.event === 'leafArrived' || msg.event === 'leafSyncDue') emitToConnected(msg.event, msg.data).catch(() => {});
+    return false;
+  }
   // Offscreen-document job telemetry: relay progress to the dapp pages.
   if (msg && (msg.scope === 'oln-progress' || msg.scope === 'oln-done' || msg.scope === 'oln-ping' || msg.scope === 'oln-store')) {
     if (msg.scope === 'oln-progress') emitToAll('dexProgress', { text: msg.text, job: msg.job });
