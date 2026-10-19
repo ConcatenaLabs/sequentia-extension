@@ -11,8 +11,13 @@
 //   * an ASSET node (holds the GOLD channel on Sequentia), and
 //   * a BTC node    (holds the BTC channel on testnet4).
 // The two legs settle atomically on one preimage. Both hosted nodes are KEYLESS
-// (no hsm_secret): the browser device is the sole signer for BOTH, so the LSP can
-// command routing but can never move the user's channel funds. The wallet's job
+// (no hsm_secret): the browser device is the sole signer for BOTH. It signs only
+// commitments it has validated and approves each payment only within its payment
+// limit for the asset (SEQ_LN_PAYMENT_LIMITS). That does not protect the user
+// from an operator who runs both the hosted node and its channel peer: the node
+// still collects the device's signature on each commitment before the device
+// revokes it (the preempt slot), so the two together could broadcast a revoked
+// commitment. The wallet's job
 // on the swap path is simply to keep BOTH device signers serving so the two
 // hosted nodes can co-sign their legs; the LSP (`POST /swap`) drives both legs.
 //
@@ -27,6 +32,8 @@
 // (seqln-keys.js), wires status into the UI, and swap.js reaches it through the
 // `ln` bridge (beside xswap/xrswap/xmaker).
 // ---------------------------------------------------------------------------
+
+import { makeNoteStore, channelFate } from './lnupgrade.js';
 
 const W = (typeof window !== 'undefined') ? window : {};
 
@@ -51,6 +58,12 @@ const DEFAULTS = {
   // The wasm signer SDK (vendored under /lightning). Dynamic-imported so a wallet
   // with LN unconfigured never loads the 1.5MB wasm.
   sdkPath: W.SEQ_LSP_SDK || './lightning/seqln-signer-sdk.js',
+  // The device's payment limits: { default: atoms|null, period: seconds,
+  // assets: { <asset id>|'btc': atoms|null } }, each in the asset's own atoms,
+  // null for no limit. The device approves a payment only within what its
+  // limit leaves for the period. Unset, the device's own default applies
+  // (10,000,000 atoms of each asset per day).
+  paymentLimits: W.SEQ_LN_PAYMENT_LIMITS || null,
 };
 
 const NODES = ['asset', 'btc'];
@@ -78,6 +91,7 @@ const nodeState = { asset: freshNode(), btc: freshNode() };
 function cloneCfg(src) {
   return {
     lspUrl: src.lspUrl, token: src.token, sdkPath: src.sdkPath, sdk: src.sdk || null, wsBase: src.wsBase || null,
+    paymentLimits: src.paymentLimits || null,
     nodes: {
       asset: { ...src.nodes.asset },
       btc: { ...src.nodes.btc },
@@ -108,6 +122,7 @@ export function initSeqln(opts = {}) {
   if (opts.sdkPath != null) CFG.sdkPath = opts.sdkPath;
   if (opts.sdk != null) CFG.sdk = opts.sdk;
   if (opts.wsBase != null) CFG.wsBase = opts.wsBase;
+  if (opts.paymentLimits !== undefined) CFG.paymentLimits = opts.paymentLimits;
   if (opts.nodes) {
     for (const n of NODES) {
       if (opts.nodes[n]) CFG.nodes[n] = { ...CFG.nodes[n], ...opts.nodes[n] };
@@ -194,8 +209,54 @@ function chStoreFor(storageKey) {
 // A policy refusal kills the channel it was for (channeld exits, every later HTLC
 // on it fails with "unowned"), so the REASON must reach the log — otherwise the
 // wallet reports a generic Lightning failure for a decision the device made.
+// The last refusal per node, so the WALLET can say what happened rather than reporting the
+// node as unreachable. A refusal is not a transient failure: lightningd drops the signer
+// session when a signer says no, and if the request comes from the node's startup the node
+// never finishes starting — it looks exactly like a node that is down, and stays that way.
+const _lastRefusal = new Map();
+export function signerRefusals() { return new Map(_lastRefusal); }
+export function clearSignerRefusal(label) { _lastRefusal.delete(label); }
+// The options every device signer is built with: its persisted channel store, the
+// refusal hooks, and the configured payment limits.
+function signerOpts(key) {
+  const o = { channelStore: chStoreFor(key), onUntracked: onUntrackedFor(key), onReject: onRejectFor(key),
+    onPredating: onPredatingFor(key) };
+  if (CFG.paymentLimits) o.paymentLimits = CFG.paymentLimits;
+  return o;
+}
+
+// Channels the device found in a store its predecessor wrote, which validated nothing: the
+// device signs no step of them. Kept per node (by its label), minus what the user dismissed, for
+// the note the wallet builds from what the node reports (lnupgrade.js). Each { peerId, dbid,
+// fundingTxid, fundingOutnum, fundingSats }.
+const noteStore = makeNoteStore({
+  getItem: (k) => localStorage.getItem(k),
+  setItem: (k, v) => localStorage.setItem(k, v),
+});
+function onPredatingFor(label) {
+  return (channels) => {
+    // The SDK reports them again after every store restore: a dismissed channel stays dismissed.
+    if (!noteStore.record(label, channels)) return;
+    console.warn(`seqln[${label}]: channel(s) from the device's old store are not carried over`);
+    if (onChange) { try { onChange(seqlnState()); } catch {} }
+  };
+}
+// { [label]: [channel, ...] }: what each node's device found in an old store, not dismissed.
+export function predatingChannels() { return noteStore.channels(); }
+// Dismiss the note for node `label`: all of its old channels, or with `closedOnly` those the
+// node (`node`, its /node/onchain answer) reports closed; and the line about its coins outside
+// a channel while they stay at `onchainMsat` (or the node's reported amount).
+export function dismissPredating(label, { closedOnly = false, node = null, onchainMsat = null } = {}) {
+  const list = noteStore.channels()[label] || [];
+  const channels = closedOnly ? list.filter((c) => channelFate(c, node) === 'closed') : list;
+  const msat = onchainMsat != null ? onchainMsat : (node && node.node_up ? node.onchain_msat : null);
+  noteStore.dismiss(label, { channels, onchainMsat: msat });
+}
+export function idleDismissed(label, onchainMsat) { return noteStore.idleDismissed(label, onchainMsat); }
+
 function onRejectFor(label) {
   return ({ name, reason }) => {
+    _lastRefusal.set(label, { name, reason, at: Date.now() });
     console.warn(`seqln[${label}]: the signer REFUSED ${name} — ${reason}`);
   };
 }
@@ -235,7 +296,7 @@ export async function connectDevice({
   const mod = await loadSdk();
   const SeqlnSigner = mod.SeqlnSigner || mod.default;
   const signer = await SeqlnSigner.fromMnemonic(deviceSigningSeed,
-    { channelStore: chStoreFor(node), onUntracked: onUntrackedFor(node), onReject: onRejectFor(node) });
+    signerOpts(node));
   signer.setPolicy(policy);
   s.signer = signer;
   signer.onStatus = (st) => {
@@ -271,6 +332,28 @@ export function disconnectDevice(node) {
 // node; the device attaches a signer to it exactly like the fixed nodes, but there can
 // be arbitrarily many, so they live in a dynamic map (keyed by asset id) rather than the
 // fixed asset/btc slots.
+// The scripts of this wallet's own on-chain addresses a node's device may close a channel to
+// (SeqlnSigner.approveCloseDestination). The device keeps none across a start, so they are kept
+// here per node and named again whenever its signer is built.
+const CLOSE_TO_KEY = 'swk.ln.closeTo.v1';   // { [nodeKey]: [scriptHex, ...] }
+function closeToScripts() {
+  try { return JSON.parse(localStorage.getItem(CLOSE_TO_KEY) || '{}') || {}; } catch { return {}; }
+}
+// Name `scriptHex`, a script of this wallet's own address, to the device of node `nodeKey`, so the
+// node's next cooperative close may pay this side's balance there. Throws when that node's signer
+// is not running.
+export function approveCloseDestination(nodeKey, scriptHex) {
+  const k = String(nodeKey || '').toLowerCase(), hex = String(scriptHex || '').toLowerCase();
+  if (!k || !/^([0-9a-f]{2})+$/.test(hex)) throw new Error('approveCloseDestination: a node key and a script in hex are required');
+  const s = provNodes[k];
+  if (!s || !s.signer) throw new Error('your device signer for that Lightning node is not running');
+  s.signer.approveCloseDestination(hex);
+  const all = closeToScripts(), list = all[k] || [];
+  if (!list.includes(hex)) {
+    all[k] = [...list, hex].slice(-20);
+    try { localStorage.setItem(CLOSE_TO_KEY, JSON.stringify(all)); } catch {}
+  }
+}
 const provNodes = {};   // assetId -> { signer, connected, nodeId, phase, detail }
 
 // Device transport pubkey (33-byte compressed hex) for a privkey — what the hosted node
@@ -310,8 +393,9 @@ export async function connectProvisioned({ assetId, key, deviceSigningSeed, devi
   const mod = await loadSdk();
   const SeqlnSigner = mod.SeqlnSigner || mod.default;
   const signer = await SeqlnSigner.fromMnemonic(deviceSigningSeed,
-    { channelStore: chStoreFor(mapKey), onUntracked: onUntrackedFor(mapKey), onReject: onRejectFor(mapKey) });
+    signerOpts(mapKey));
   signer.setPolicy(policy);
+  for (const hex of closeToScripts()[mapKey] || []) { try { signer.approveCloseDestination(hex); } catch {} }
   s.signer = signer;
   signer.onStatus = (st) => {
     if (st.state === 'node_id') { s.nodeId = st.nodeId; s.phase = 'node_id'; }
@@ -433,7 +517,9 @@ async function lspFetch(path, { allowNotOk = false, ...opts } = {}) {
     // summary error — dropping it left terminal failures as a bare "did not settle"
     // with the real reason discarded.
     const detail = j.detail ? String(j.detail).trim().split('\n').filter(Boolean).slice(-2).join(' · ') : '';
-    throw new Error((j.error || ('HTTP ' + r.status)) + (detail ? ` — ${detail.slice(0, 300)}` : ''));
+    const err = new Error((j.error || ('HTTP ' + r.status)) + (detail ? ` — ${detail.slice(0, 300)}` : ''));
+    err.status = r.status;
+    throw err;
   }
   return j;
 }
@@ -494,8 +580,19 @@ export function seqlnNodeOnchain(node_key) {
 // --- Sub-asset BUY (pay BTC on-chain, receive asset over Lightning) HODL primitives ------------
 // Ensure inbound asset liquidity to the user's OWN node so the maker can pay the asset over LN
 // (JIT 0-conf inbound channel). amount in ASSET SATS.
-export function seqlnChannelInbound({ node_key, asset, amount }) {
-  return lspFetch('/channel/inbound', { method: 'POST', body: JSON.stringify({ node_key, asset, amount }) });
+export function seqlnChannelInbound({ node_key, asset, amount, mode, fee_txid }) {
+  return lspFetch('/channel/inbound', { method: 'POST', timeoutMs: 180_000,
+    body: JSON.stringify({ node_key, asset, amount, mode, fee_txid }) });
+}
+// The price of room to receive `amount` atoms of `asset` over Lightning, and where a prepaid fee
+// goes. Returns the service's answer as it is, an out-of-range amount included ({ ok:false, reason,
+// min, max }), so the caller can say what range it sells; throws only when the service cannot be
+// reached.
+export async function seqlnInboundQuote({ asset, amount, node_key }) {
+  const q = `/channel/inbound/quote?asset=${encodeURIComponent(asset)}&amount=${encodeURIComponent(amount)}`
+    + (node_key ? `&node_key=${encodeURIComponent(node_key)}` : '');
+  const r = await fetch(CFG.lspUrl + q, { headers: CFG.token ? { authorization: `Bearer ${CFG.token}` } : {} });
+  try { return await r.json(); } catch { return { ok: false, reason: 'HTTP ' + r.status }; }
 }
 // Register a HODL invoice by hash H on the user's OWN node (the DEVICE keeps P; the node/LSP never
 // learn it). Returns { payment_hash, bolt11:null, node_id, hodl:true } — the maker pays H BY HASH
@@ -831,8 +928,8 @@ export async function waitNodeReady({ nodeKey, onProgress, timeoutMs = 180_000, 
 // the user's hosted node. NON-CUSTODIAL: the wallet signs the on-chain deposit itself
 // (via the `sendOnchain` hook the wallet supplies, so this module never depends on the
 // wallet's signer), and the channel funding tx is co-signed by the on-device signer
-// (the hosted node is keyless), so the LSP orchestrates fundchannel but can never move
-// the funds. The device signer for this chain's leg MUST be serving.
+// (the hosted node is keyless), so the LSP orchestrates fundchannel but cannot sign
+// the funding transaction itself. The device signer for this chain's leg MUST be serving.
 //
 //   chain        'btc' | 'seq'
 //   asset        (seq only) 'GOLD' or a 32-byte hex id — the asset to fund the channel with
@@ -903,16 +1000,93 @@ export async function fundChannel({ chain, asset, amount, node, sendOnchain, onP
   }
 }
 
+// A channel (Sequentia or BTC) funded by ONE transaction of the wallet's own: no deposit to the node, one
+// fee, one confirmation (tooling/lsp/external-funding.mjs has the protocol). The LSP starts the
+// channel and names its funding address; `fund` is the wallet's side, and is handed `complete`:
+//
+//   fund({ chain, address, script, amount, asset, complete, onBroadcast }) -> { txid }
+//     builds and blinds the transaction paying exactly `amount` of `asset` to `address`, in the
+//     clear, checks it, and hands it UNSIGNED to `complete(psbtBase64)`, which answers the funding
+//     txid once the peer has signed the first commitment, the way back. Only then does it sign,
+//     check the signed transaction has that txid, call `onBroadcast()` and broadcast.
+//
+// Anything failing before `onBroadcast` cancels the channel, and no coin has moved. After it, the
+// channel is never cancelled here: its coins may already be in the 2-of-2, which only this
+// channel's commitments spend. An LSP without the endpoints throws with `unsupported` set, for the
+// caller to fund through the deposit (fundChannel).
+export async function fundChannelDirect({ chain = 'seq', asset, amount, node, fund, onProgress, pollMs = 5000, timeoutMs = 3_600_000 } = {}) {
+  if (typeof fund !== 'function') throw new Error('fundChannelDirect: a fund hook is required (the wallet builds and signs the funding)');
+  const emit = (phase, extra) => { try { onProgress && onProgress({ phase, ...extra }); } catch {} };
+  emit('starting');
+  let started;
+  try {
+    started = await lspFetch('/channel/start', { method: 'POST', timeoutMs: 300_000,
+      body: JSON.stringify({ chain, asset, amount, node }) });
+  } catch (e) {
+    if (e && e.status === 404) {
+      const u = new Error('this Lightning service funds channels only through a deposit');
+      u.unsupported = true;
+      throw u;
+    }
+    throw e;
+  }
+  if (!started.funding_address || !started.script) throw new Error('the Lightning service named no funding address');
+  const jobId = started.job_id;
+  let broadcast = false;
+  let sent;
+  try {
+    sent = await fund({ chain, address: started.funding_address, script: started.script, amount, asset,
+      complete: async (psbt) => {
+        emit('completing');
+        const done = await lspFetch('/channel/complete', { method: 'POST', timeoutMs: 180_000,
+          body: JSON.stringify({ job_id: jobId, psbt }) });
+        if (!/^[0-9a-f]{64}$/i.test(done.funding_txid || '')) throw new Error('the Lightning service named no funding txid');
+        return String(done.funding_txid).toLowerCase();
+      },
+      onBroadcast: () => { broadcast = true; emit('broadcasting'); } });
+  } catch (e) {
+    if (!broadcast) {
+      await lspFetch('/channel/cancel', { method: 'POST', body: JSON.stringify({ job_id: jobId }) })
+        .catch((c) => console.warn('[ln] channel cancel:', c && c.message));
+    }
+    throw e;
+  }
+  emit('sent', { funding_txid: sent && sent.txid });
+  const jobUrl = started.poll || `/channel/open/${jobId}`;
+  const deadline = Date.now() + timeoutMs;
+  let job = { status: 'awaiting_lockin' }, pollErrors = 0;
+  const maxPollErrors = 24;
+  for (;;) {
+    emit(job.status, { job, funding_txid: sent && sent.txid });
+    if (job.status === 'active') return job;
+    if (job.status === 'failed') throw new Error(job.error || 'channel open failed');
+    if (Date.now() > deadline) throw new Error('channel open timed out');
+    await new Promise((r) => setTimeout(r, pollMs));
+    try { job = await lspFetch(jobUrl); pollErrors = 0; }
+    catch (e) {
+      if (++pollErrors > maxPollErrors) {
+        const err = new Error('Lost connection while the channel confirms. Its funding is on chain; reopen the wallet to see it open.');
+        err.resumable = true; err.jobUrl = jobUrl; err.cause = e;
+        throw err;
+      }
+      emit('reconnecting', { attempt: pollErrors, of: maxPollErrors });
+    }
+  }
+}
+
 // Resume a channel-open WITHOUT re-depositing: the deposit already landed on the node, so just
 // (re)start the LSP's fundchannel-from-existing-balance job and poll it to completion. Used to
 // recover a move that was interrupted after the deposit but before the channel opened (the
 // "stranded deposit" case) — the funds are on the user's own node, this finishes moving them.
-export async function resumeFundChannel({ chain, asset, amount, node, onProgress, pollMs = 5000, timeoutMs = 3_600_000 } = {}) {
+// `consolidate`: the node's coins move to its own address first (they may include what a
+// channel's close paid it, which its device sends only to its own scripts).
+export async function resumeFundChannel({ chain, asset, amount, node, consolidate = false, onProgress, pollMs = 5000, timeoutMs = 3_600_000 } = {}) {
   const emit = (phase, extra) => { try { onProgress && onProgress({ phase, ...extra }); } catch {} };
   emit('opening-request');
   const body = { chain, amount };
   if (asset) body.asset = asset;
   if (node) body.node = node;
+  if (consolidate) body.consolidate = true;
   const started = await lspFetch('/channel/open', { method: 'POST', body: JSON.stringify(body) });
   const jobUrl = started.poll || `/channel/open/${started.job_id}`;
   const deadline = Date.now() + timeoutMs;
@@ -932,7 +1106,7 @@ export async function resumeFundChannel({ chain, asset, amount, node, onProgress
 export default {
   initSeqln, seqlnConfigured, seqlnDeployed, seqlnState, onSeqlnStatus, seqlnAvailable,
   lnFinalityCopy, connectDevice, disconnectDevice, seqlnGetStatus, seqlnSwap,
-  seqlnChannels, seqlnFunding, seqlnNodes, provisionNode, fundChannel,
+  seqlnChannels, seqlnFunding, seqlnNodes, provisionNode, fundChannel, fundChannelDirect,
   deviceTransportPubkey, connectProvisioned, provisionAndConnect, provisionedState, disconnectProvisioned,
   nodeGetinfo, waitNodeReady,
 };
