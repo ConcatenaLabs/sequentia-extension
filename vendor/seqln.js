@@ -580,17 +580,20 @@ export function seqlnNodeOnchain(node_key) {
 // --- Sub-asset BUY (pay BTC on-chain, receive asset over Lightning) HODL primitives ------------
 // Ensure inbound asset liquidity to the user's OWN node so the maker can pay the asset over LN
 // (JIT 0-conf inbound channel). amount in ASSET SATS.
-export function seqlnChannelInbound({ node_key, asset, amount, mode, fee_txid }) {
+// `months` is how long the service keeps that channel open (the price grows with it); omitted, the
+// service's default.
+export function seqlnChannelInbound({ node_key, asset, amount, mode, fee_txid, months }) {
   return lspFetch('/channel/inbound', { method: 'POST', timeoutMs: 180_000,
-    body: JSON.stringify({ node_key, asset, amount, mode, fee_txid }) });
+    body: JSON.stringify({ node_key, asset, amount, mode, fee_txid, months }) });
 }
 // The price of room to receive `amount` atoms of `asset` over Lightning, and where a prepaid fee
 // goes. Returns the service's answer as it is, an out-of-range amount included ({ ok:false, reason,
 // min, max }), so the caller can say what range it sells; throws only when the service cannot be
 // reached.
-export async function seqlnInboundQuote({ asset, amount, node_key }) {
+export async function seqlnInboundQuote({ asset, amount, node_key, months }) {
   const q = `/channel/inbound/quote?asset=${encodeURIComponent(asset)}&amount=${encodeURIComponent(amount)}`
-    + (node_key ? `&node_key=${encodeURIComponent(node_key)}` : '');
+    + (node_key ? `&node_key=${encodeURIComponent(node_key)}` : '')
+    + (months ? `&months=${encodeURIComponent(months)}` : '');
   const r = await fetch(CFG.lspUrl + q, { headers: CFG.token ? { authorization: `Bearer ${CFG.token}` } : {} });
   try { return await r.json(); } catch { return { ok: false, reason: 'HTTP ' + r.status }; }
 }
