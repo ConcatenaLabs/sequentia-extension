@@ -381,9 +381,17 @@ export class Crypter {
 let SEQOB = '/seqob';
 export function setSeqobBase(base){ SEQOB = base || '/seqob'; }
 export function seqobBase(){ return SEQOB; }
+// The CONFIDENTIAL (blinded) book lives on its OWN relay behind /seqob-conf
+// (Caddy -> :9975), where the confidential maker fleet rests and co-signs.
+// Reading the blinded namespace of the public relay instead returns an empty
+// book — the conf makers do not post there. Confidential reads and lifts route
+// here; everything else (covenant tracking, transparent book, in-wallet maker
+// posting) stays on SEQOB.
+let SEQOB_CONF = '/seqob-conf';
+export function setSeqobConfBase(base){ SEQOB_CONF = base || '/seqob-conf'; }
 
-async function getJSON(path){
-  const r = await fetch(SEQOB + path, { cache:'no-store' });
+async function getJSON(path, base){
+  const r = await fetch((base || SEQOB) + path, { cache:'no-store' });
   const txt = await r.text();
   let j; try { j = txt ? JSON.parse(txt) : {}; } catch { j = { _raw: txt }; }
   if (!r.ok) throw new Error((j && (j.message||j.error)) || j._raw || ('HTTP '+r.status));
@@ -432,8 +440,9 @@ export function normRelayOffer(o){
   return o;
 }
 export async function fetchBook(baseAsset, quoteAsset, opts){
-  const q = (opts && opts.confidential) ? '?confidential=1' : '';
-  const j = await getJSON(`/v1/market/${baseAsset}/${quoteAsset}/orderbook${q}`);
+  const conf = !!(opts && opts.confidential);
+  const q = conf ? '?confidential=1' : '';
+  const j = await getJSON(`/v1/market/${baseAsset}/${quoteAsset}/orderbook${q}`, conf ? SEQOB_CONF : undefined);
   const offers = (j.offers || j.Offers || []).map(o => { normRelayOffer(o); return { ...o, _verified: verifyOffer(o) }; });
   return { pair: j.pair || { base_asset: baseAsset, quote_asset: quoteAsset }, offers };
 }
@@ -479,12 +488,13 @@ export async function signAndCancel(offerId, priv, nonce){
 
 // --- WS lift (taker) -------------------------------------------------------
 
-function wsURL(){
-  // SEQOB is a same-origin path ('/seqob') or absolute http(s) URL.
-  if (/^https?:\/\//.test(SEQOB)) return SEQOB.replace(/^http/, 'ws') + '/v1/ws';
+function wsURL(base){
+  const b = base || SEQOB;
+  // The base is a same-origin path ('/seqob') or absolute http(s) URL.
+  if (/^https?:\/\//.test(b)) return b.replace(/^http/, 'ws') + '/v1/ws';
   const proto = (typeof location !== 'undefined' && location.protocol === 'https:') ? 'wss' : 'ws';
   const host = (typeof location !== 'undefined') ? location.host : '';
-  return `${proto}://${host}${SEQOB}/v1/ws`;
+  return `${proto}://${host}${b}/v1/ws`;
 }
 
 // Lift a resting offer to settlement.
@@ -505,7 +515,9 @@ export async function lift(offer, takeAtoms, feeAsset, hooks){
   const sessPriv = secp256k1.utils.randomSecretKey ? secp256k1.utils.randomSecretKey() : crypto.getRandomValues(new Uint8Array(32));
   const sessPub = secp256k1.getPublicKey(sessPriv, true);
 
-  const ws = new WebSocket(wsURL());
+  // A confidential offer rests on the confidential relay; its maker co-signs
+  // there, so the lift session must open there too.
+  const ws = new WebSocket(wsURL(O(offer,'confidential') ? SEQOB_CONF : undefined));
   ws.binaryType = 'arraybuffer';
   const inbox = [];
   let waiter = null;
