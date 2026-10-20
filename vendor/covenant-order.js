@@ -29,7 +29,7 @@
 // module builds and byte-verifies everything that helper consumes.
 // ---------------------------------------------------------------------------
 
-import { deriveTaptree, verifyAgainstSPK, planFill, ceilPrice, bytesToHex, hexToBytes, NUMS } from './covenant.js';
+import { deriveTaptree, verifyAgainstSPK, planFill, ceilPrice, bytesToHex, hexToBytes, NUMS, LOCKTIME_THRESHOLD } from './covenant.js';
 
 // --- CovenantTerms (seqob.v1.Offer field 23) <-> Order ----------------------
 
@@ -86,9 +86,13 @@ function hexOf(v){ return typeof v === 'string' ? v.toLowerCase() : bytesToHex(v
 //   sellAtoms      atoms of A to lock in the covenant (>= minLot)
 //   rateNum/rateDen  price: a taker owes ceil(filled*num/den) of B
 //   minLot         dust-griefing floor on filled and on any remainder
-//   expiryLocktime absolute height the maker may REFUND-reclaim after
+//   expiryLocktime absolute lock the maker may REFUND-reclaim after: a median
+//                  time (unix seconds, >= 500,000,000) or a block height (below)
 //   makerProg      32-byte v1-taproot program that receives the asset-B credit
-//                  (a taproot output THIS wallet controls, so it can spend it)
+//                  (a taproot output THIS wallet controls, so it can spend it).
+//                  It must be a plain key, never an Arca leaf or board script:
+//                  one maker-and-operator signature pair over such a script
+//                  spends two equal credits paid to it at once.
 //   makerX         32-byte x-only key authorizing the REFUND leaf (wallet key)
 //   internalKey    optional non-NUMS x-only key for a maker key-path cancel
 // Returns { order, tap, spkHex, sellAtoms, requiredBForFull } — the maker then
@@ -244,29 +248,33 @@ export function planRefund(order, utxo){
 }
 
 // cancel stops advertising the order on the relay immediately (OfferCancel), and,
-// once the covenant has expired (tip >= expiry), reclaims the locked asset A via
-// the REFUND leaf. Pre-expiry the on-chain funds are untouchable by anyone but a
+// once the covenant's lock has passed (a height lock: tip >= expiry; a median-time
+// lock: the tip's median time > expiry), reclaims the locked asset A via the
+// REFUND leaf. Pre-expiry the on-chain funds are untouchable by anyone but a
 // taker paying the price — that is the point — so the relay cancel just delists it
 // and reports the funds as reclaimable-after-expiry (never a failure).
 //   hooks.relayCancel(offerId) -> Promise<any>              (seqob.signAndCancel)
 //   hooks.buildCovenantRefundTx(recipe) -> Promise<{rawHex, txid?}>  (wasm seam; maker sig)
 //   hooks.broadcast(rawHex) -> Promise<txid>
-//   refundParams: { recipe, tipHeight, expiryLocktime }  (recipe from planRefund
-//                  merged with fee/addresses; tipHeight decides mature vs immature)
+//   refundParams: { recipe, tipHeight, tipTime, expiryLocktime }  (recipe from
+//                  planRefund merged with fee/addresses; tipHeight, or for a
+//                  median-time lock tipTime, the tip's median time, decides
+//                  mature vs immature)
 export async function cancel(offerId, refundParams, hooks){
   const out = { delisted: false, refundTxid: null, reclaimable: null, matured: false };
   if (hooks.relayCancel){ try { await hooks.relayCancel(offerId); out.delisted = true; } catch (e){ out.delistError = e.message; } }
   if (refundParams){
     const expiry = Number(refundParams.expiryLocktime != null ? refundParams.expiryLocktime : (refundParams.recipe && refundParams.recipe.expiryLocktime));
-    const tip = Number(refundParams.tipHeight);
-    out.matured = Number.isFinite(tip) && Number.isFinite(expiry) && tip >= expiry;
+    const timeLock = expiry >= LOCKTIME_THRESHOLD;
+    const tip = Number(timeLock ? refundParams.tipTime : refundParams.tipHeight);
+    out.matured = Number.isFinite(tip) && Number.isFinite(expiry) && (timeLock ? tip > expiry : tip >= expiry);
     if (out.matured && hooks.buildCovenantRefundTx){
       const built = await hooks.buildCovenantRefundTx(refundParams.recipe || refundParams);
       out.refundTxid = await hooks.broadcast(built.rawHex);
     } else {
       // Not yet matured (or no on-chain funds): surface WHEN the maker may reclaim,
       // rather than failing — the delist already stopped new fills.
-      out.reclaimable = { afterHeight: expiry };
+      out.reclaimable = timeLock ? { afterTime: expiry } : { afterHeight: expiry };
     }
   }
   return out;
