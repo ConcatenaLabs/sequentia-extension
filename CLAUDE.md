@@ -100,7 +100,8 @@ token (already public in sequentia-web-wallet) — not a secret.
   approval page showed.
 - A site's contract spend with the wallet's own coins: `SEQUENTIAD=… PIGNUS_WEB=…
   CHROME=… node test/regtest/pignus-v2.mjs` (the Pignus page, bridged to the
-  router, on an anchored regtest chain).
+  router, on an anchored regtest chain); a 2-of-3 loan's take and liquidation:
+  `test/regtest/pignus-threshold.mjs`, the same way.
 - A capped sale bought from Levo's page: `SEQUENTIAD=… LEVO=… CHROME=… node
   test/regtest/levo-capped.mjs` (the real levod and page). A SeqPal escrow
   opened and released from SeqPal's page: `test/regtest/seqpal-issuer.mjs`,

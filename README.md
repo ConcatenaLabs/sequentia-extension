@@ -123,6 +123,13 @@ committed, so no build step is needed to load the extension.
   up and repays from the page, renders and clicks each approval page, confirms
   each spend, and checks the refusals. Its chain is anchored to a regtest
   parent run by the same binary, since the kit reads anchored headers.
+- A Pignus loan of three oracles with a threshold of two, the same way:
+  `SEQUENTIAD=… PIGNUS_WEB=… CHROME=… node test/regtest/pignus-threshold.mjs`
+  takes a 2-of-3 offer from the page, then asks through the page's provider
+  for the liquidation under a record two oracles signed, both signers' beacon
+  coins spent and recreated; it checks that one signature is refused before
+  any approval opens. It needs `python3` for the oracles' keys and signatures
+  (Pignus's vendored `sequentia_oracle` module).
 - A capped sale bought from Levo's sale page: `SEQUENTIAD=/path/to/sequentiad
   LEVO=/path/to/levo CHROME=/path/to/chrome node test/regtest/levo-capped.mjs`
   runs the real levod and its built page (`web/dist`) on such a chain, lists a
