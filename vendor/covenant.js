@@ -123,6 +123,23 @@ function le8(n){ const out = new Uint8Array(8); let v = BigInt(n); for (let i=0;
 
 // --- leaves -----------------------------------------------------------------
 
+// The FILL leaf's OP_MUL64, OP_DIV64 and OP_GREATERTHANOREQUAL64 read their
+// 8-byte operands as SIGNED: a rate_num, rate_den or min_lot of 2^63 or more is
+// negative there, and anyone fills the order for any credit (rate_num 2^64-1
+// reads as -1). checkLeafTerms refuses such a term, named, as seqdex's Go
+// CheckTerms does (covenant-terms-vectors.json holds both to the same cases);
+// buildFillLeaf never builds one.
+const MAX_LEAF_TERM = (1n << 63n) - 1n;
+export function checkLeafTerms(rateNum, rateDen, minLot){
+  for (const [name, v] of [['rate_num', BigInt(rateNum)], ['rate_den', BigInt(rateDen)], ['min_lot', BigInt(minLot)]]){
+    if (v > MAX_LEAF_TERM){
+      throw new Error(`${name} ${v} is 2^63 or more: the tapscript FILL leaf's signed 64-bit arithmetic reads it as negative, ` +
+        'so anyone could fill the order for any credit; an order whose price or size needs 64 bits is a Simplicity ' +
+        'order (seqdex/order, covenant-sim.js), whose fill compares the price on 128-bit products');
+    }
+  }
+}
+
 // buildFillLeaf: the permissionless FILL tapscript for one resting order.
 // assetA/assetB are 32-byte INTERNAL-order asset ids; makerProg is the 32-byte
 // v1-taproot maker credit witness program.
@@ -131,6 +148,7 @@ export function buildFillLeaf(assetA, assetB, rateNum, rateDen, minLot, makerPro
   rateNum = BigInt(rateNum); rateDen = BigInt(rateDen); minLot = BigInt(minLot);
   if (assetA.length !== 32 || assetB.length !== 32) throw new Error('assetA/assetB must be 32 bytes');
   if (rateNum < 1n || rateDen < 1n || minLot < 1n) throw new Error('rateNum, rateDen, minLot must be >= 1');
+  checkLeafTerms(rateNum, rateDen, minLot);
   if (makerVer !== 1) throw new Error('this builder pins a v1 taproot maker payout');
   if (makerProg.length !== 32) throw new Error('makerProg must be 32 bytes for a v1 taproot payout');
 
