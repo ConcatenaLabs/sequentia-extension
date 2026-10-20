@@ -35,7 +35,10 @@ confidential `tsqb1…` addresses are an explicit opt-in).
   restricted assets in rather than a second identity generated in a browser tab.
   A site can ask for a spend of a contract (`signContractSpend`), with the
   wallet's own coins and a foreign coin beside the contract's (a Pignus take,
-  repayment or top-up, which the wallet funds): the kit's contract engine
+  repayment or top-up, which the wallet funds), a capped sale's purchase signed
+  with the wallet's contract key as the buyer's, or an escrow's release of many
+  coins signed with it as the issuer's (`getContractKey` names the key, and
+  `signContractStatement` proves it to a platform): the kit's contract engine
   builds and checks it, the approval window shows the template, the path, the
   parameters, every input and the wallet's balance change, and the wallet
   signs only what it showed.
@@ -120,6 +123,17 @@ committed, so no build step is needed to load the extension.
   up and repays from the page, renders and clicks each approval page, confirms
   each spend, and checks the refusals. Its chain is anchored to a regtest
   parent run by the same binary, since the kit reads anchored headers.
+- A capped sale bought from Levo's sale page: `SEQUENTIAD=/path/to/sequentiad
+  LEVO=/path/to/levo CHROME=/path/to/chrome node test/regtest/levo-capped.mjs`
+  runs the real levod and its built page (`web/dist`) on such a chain, lists a
+  capped sale with `bin/levo` with this wallet's contract key on its list, buys
+  from the page through the router and the approval page, confirms each
+  purchase, and checks that a purchase past the cap is refused before any
+  approval opens.
+- A SeqPal issuer's escrow opened and released from SeqPal's issuance page:
+  `test/regtest/seqpal-issuer.mjs open|release`, run by SeqPal's own regtest
+  drive (`scripts/regtest-escrow.sh` with `ISSUER_PAGE` set to it), which holds
+  the chain, seqpald and the subscribers.
 - Service-worker console: `CHROME=/path/to/chrome node scripts/sw-console-check.mjs`
   loads the unpacked extension in a headless Chromium twice and fails on any
   exception or console error the worker raises. Run it after any change to a

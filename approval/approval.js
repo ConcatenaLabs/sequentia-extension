@@ -26,6 +26,7 @@ const TITLES = {
   openampSignSpend: 'Co-sign a restricted-asset spend?',
   openampSignSupervision: 'Authorize this as the asset\u2019s issuer?',
   signContractSpend: 'Sign this contract spend?',
+  signContractStatement: 'Sign a statement with your contract key?',
   requestLeafReceive: 'Hand out a receive request for leaves?',
   sendLeaves: 'Pay from your leaves?',
   boardLeaves: 'Board a coin into your leaves?',

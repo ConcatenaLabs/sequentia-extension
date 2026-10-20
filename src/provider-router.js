@@ -135,7 +135,7 @@ export async function handleDappRequest(origin, method, params = {}) {
           'broadcast', 'createInvoice', 'payInvoice',
           'getUtxos', 'lnChannels', 'lnRequestInbound', 'dexFillOnchain', 'dexSwapLn', 'dexJobResult', 'dexMarketOrder', 'dexPlaceLimit', 'getBtcPublicKey', 'getBtcAddress', 'signBtcTaproot', 'prepareBtcSend',
           'openampGetIdentity', 'openampSignTagged', 'openampSignSpend', 'openampSignSupervision',
-          'signContractSpend', 'getWalletMode', 'getLeafBalances', 'getLeafAddress', 'requestLeafReceive', 'sendLeaves',
+          'signContractSpend', 'getContractKey', 'signContractStatement', 'getWalletMode', 'getLeafBalances', 'getLeafAddress', 'requestLeafReceive', 'sendLeaves',
           'boardLeaves', 'exitLeaf'],
         // What this build can do beyond the method names, for sites that have
         // to know before they build something: 'pset-site-built' means
@@ -459,6 +459,36 @@ export async function handleDappRequest(origin, method, params = {}) {
         display.warning = 'The wallet could not fully decode this PSET; only sign it if you trust this site.';
       }
       return requestApproval(origin, 'signPset', display, async () => { await ensureOpenOrThrow(); return { pset: await engine.signPset(psetB64) }; });
+    }
+
+    case 'getContractKey': {
+      // The wallet's contract key: the x-only key a capped sale lists as a buyer's,
+      // or an escrow names as its issuer's. Public; signContractSpend signs with it
+      // only through the five-point approval.
+      await requireUnlockedAndConnected(origin);
+      return contracts.contractKey();
+    }
+
+    case 'signContractStatement': {
+      // A statement signed with the contract key, to prove it to a platform that
+      // names it in a contract (an escrow's release key). Tagged, under the same
+      // policy as the OpenAMP signer: no consensus tag, nothing that cannot be shown.
+      await requireConnected(origin);
+      const req = checkSigningRequest(params);
+      const display = {
+        text: origin + ' asks you to sign a statement with your contract key, the key your contracts name.',
+        rows: [['Domain tag', req.tag]],
+        warning: 'This proves you hold your contract key. It moves no coin: a spend is signed only on the approval of that spend.',
+      };
+      if (req.kind === 'statement') display.message = String(params.statement);
+      else {
+        display.rows.push(['Document hash', req.messageHex]);
+        if (params.label) display.rows.push(['Named by the site', String(params.label).slice(0, 120)]);
+      }
+      return requestApproval(origin, 'signContractStatement', display, async () => {
+        await ensureOpenOrThrow();
+        return contracts.signStatement(req.tag, req.messageHex);
+      });
     }
 
     case 'signContractSpend': {
