@@ -576,10 +576,18 @@ export async function lift(offer, takeAtoms, feeAsset, hooks){
     status('Sent to the maker; awaiting co-sign…');
     send({ swap_msg: { session_id: sessionId, ciphertext: b64encode(sealedReq) } });
 
-    // Await the maker's sealed SwapAccept.
+    // Await the maker's sealed SwapAccept. Until it arrives this wallet has signed nothing, so a
+    // maker that goes quiet leaves nothing that could still complete: say so, rather than the
+    // generic timeout ("may still complete in the background"), which is true only after signing.
     let acc = null;
     for (let n=0; n<3 && !acc; n++){
-      const m = await nextMsg(90000);
+      let m;
+      try { m = await nextMsg(90000); }
+      catch (e){
+        if (/timed out|connection closed/i.test(String((e && e.message) || e)))
+          throw new Error('maker did not answer: the other side did not co-sign in time, and this wallet signed nothing, so nothing was traded');
+        throw e;
+      }
       if (m.error) throw new Error('maker: ' + (m.error.message || JSON.stringify(m.error)));
       const sm = m.swap_msg || m.swapMsg;
       if (sm && sm.ciphertext){
