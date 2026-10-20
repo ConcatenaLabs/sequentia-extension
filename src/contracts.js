@@ -3,6 +3,11 @@
 // A site names a template (one the kit carries, by hash; a template the site supplies
 // is read, but it is never on this wallet's list, so the engine refuses to sign for
 // it), an instance, and either a drip of the faucet drip covenant or a spend request.
+// A request may name this wallet's own coins and foreign coins beside the contract
+// coin; with `fund: true` the wallet adds its own coins for what the request's inputs
+// do not cover, and the change. The site never chooses which of the wallet's coins
+// are spent unless it names them, and a coin it names is checked against the
+// wallet's own record.
 // The kit's contract engine builds the spend, checks the chain's locks, runs the
 // program against the final transaction, and checks the five-point rule; a spend it
 // refuses, an output it cannot account for among them, is refused to the site with the
@@ -40,6 +45,9 @@ export function context() {
       return out;
     },
     receiveAddress: () => engine.currentAddress(false).address,
+    // The wallet's own record of its coins, from its own sync: every wallet input of a
+    // spend is checked against it, never taken on the site's word.
+    walletCoins: () => JSON.parse(lwk.ContractSpend.walletCoins(engine.getWollet())),
     assetMeta: (h) => A.assetMeta(h),
     store: noStore,
   };
@@ -68,7 +76,7 @@ export async function prepareForSite(params) {
       return { ctx, ...(await prepareDrip(ctx, { template: t, instanceJson, coin: d.coin, to: d.to || ctx.receiveAddress(), amount: String(d.amount), ratePerKvb: String(d.ratePerKvb ?? 1000) })) };
     }
     if (!params.request) throw new Error('request (or drip) is required');
-    return { ctx, ...(await prepare(ctx, { template: t, instanceJson, request: params.request })) };
+    return { ctx, ...(await prepare(ctx, { template: t, instanceJson, request: params.request, fund: params.fund === true })) };
   } catch (e) {
     throw new Error(errText(e));
   }

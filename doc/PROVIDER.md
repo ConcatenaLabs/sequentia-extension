@@ -55,7 +55,8 @@ Returns provider metadata; safe to call before connecting.
 ```
 
 ### `getNetwork()` — silent
-`{ network: 'sequentia-testnet' }`
+`{ network: 'sequentia-testnet', genesis: 'ddd11d54…a92e' }`: the network's name
+and its genesis block hash, which a contract instance names as its chain.
 
 ### `connect()` — prompts once per origin
 ```js
@@ -102,41 +103,65 @@ from its bytes, since the wallet's own decoder handles blinded transactions
 only. The approval window shows the same "You send / You receive" lines either
 way.
 
-### `signContractSpend({ templateHash | descriptor+sources, instance, drip | request, broadcast? })` — approval per request
+### `signContractSpend({ templateHash | descriptor+sources, instance, drip | request, fund?, broadcast? })` — approval per request
 A spend of a contract written with
 [`sequentia-contracts`](https://github.com/ConcatenaLabs/sequentia-contracts),
-signed by this wallet's contract key (`m/8383h/1h/0h/0/0`) under the five-point
-rule. The kit's contract engine (SWK `lwk_contracts`) does every step; the
-wallet signs only when all five hold:
+under the five-point rule. The kit's contract engine (SWK `lwk_contracts`)
+does every step; the wallet signs only when all five hold:
 
 1. the template is on the wallet's list, which is the templates the kit carries
-   (`sequentia/one-key`, `sequentia/one-key-exit`, `sequentia/faucet-drip`); a
+   (`sequentia/one-key`, `sequentia/one-key-exit`, `sequentia/faucet-drip`,
+   `pignus/vault`, `pignus/offer`), and so is every template an output opens; a
    site can pass a template it wrote (`descriptor` and `sources`, each source
    with its includes resolved), which is read and checked but never signed for;
 2. the engine recomputed the output from the template and the instance, and the
-   coin pays it;
-3. the engine ran the program against the final transaction;
+   coin pays it, and recomputed every contract an output opens or returns to;
+3. the engine ran the program of every Simplicity input against the final
+   transaction;
 4. the approval window showed the template (by the registry's name, which the
    wallet looks up itself, else its commitment root), the path, every
-   parameter by role, the wallet's balance change in every asset, where the
-   coins go, and the checks;
-5. the key is a contract key, the one the path names.
+   parameter by role, every input by what it is, the wallet's balance change in
+   every asset (what its own inputs pay included), the contracts an output
+   opens, where the coins go, and the checks;
+5. the key is a contract key, the one the path names (`m/8383h/1h/0h/0/0`),
+   or none on a path that takes no signature; the wallet's funding keys sign
+   only its own inputs.
+
+The approval window signs the digest of what it showed; a request changed
+after it was shown is another digest, and nothing is signed.
 
 Parameters:
 
 - `templateHash`: a template the kit carries; or `descriptor` (the
   descriptor JSON) and `sources` (`{"<name>.simf": "<text>"}`).
 - `instance`: the instance record, `{instance, template_hash, params, slots,
-  genesis}`.
+  genesis}`; `genesis` is the chain's (`getNetwork`).
 - `drip`: for the faucet drip covenant, `{coin, amount, to?, ratePerKvb?}`:
   the reserve coin (`{txid, vout, script_pubkey, asset, amount}`, asset in
   display hex), the atoms to drip, the address paid (this wallet's by
   default), and the fee rate in atoms of the dripped asset per 1,000 vB
   (1,000 by default). The wallet plans the drip at its real size.
 - `request`: for any other spend, the engine's request: `{path, coin,
-  sequence?, lock_time?, outputs: [{to, address | script, asset, amount}],
-  spender?, next_slots?}`. Each output says what it does: `contract` (back to
-  the contract, or to its next state), `wallet`, `pay`, or `fee`.
+  inputs?, sequence?, lock_time?, outputs: [{to, address | script, asset,
+  amount, open?, input?}], spender?, next_slots?}`.
+  - `inputs` lists every input in order: `{is: 'contract'}` (the `coin`,
+    exactly once); `{is: 'wallet', txid, vout, asset, amount}`, one of this
+    wallet's coins, spent only when the wallet's own record of that coin says
+    the same; `{is: 'foreign', txid, vout, script_pubkey, asset, amount,
+    witness, sequence?, label?}`, a coin spent through a script leaf with the
+    witness given (hex items, the leaf and its control block last), spent only
+    when the chain's record of the coin, which the wallet reads itself, agrees
+    and the leaf is committed in the coin's output key. Without `inputs` the
+    contract coin is the only input.
+  - Each output says what it does: `contract` (back to the contract, or to its
+    next state), `wallet`, `pay`, `fee`, `open` (a new contract, `open` its
+    instance record, of a template the kit carries) or `foreign` (foreign
+    input `input` recreated).
+  - `spender` holds the values the spender chooses: hex of their width, or a
+    SimplicityHL literal for a composite type (`Left(Left(()))`).
+- `fund`: `true` lets the wallet add its own explicit coins for what the
+  request's inputs do not cover, and the change to its own address. Pignus
+  uses it for a take, a repayment and a top-up.
 - `broadcast`: `false` returns the signed transaction without broadcasting it.
 
 Returns `{ txid, hex }` (or `{ hex }`). A spend the engine refuses is refused

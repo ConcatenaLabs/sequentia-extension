@@ -11,11 +11,18 @@
 // compiler, recomputes the output, builds the transaction, checks the chain's locks,
 // runs the program against the final transaction, and signs only under the five-point
 // rule: the template is on this wallet's list, the output was recomputed, the program
-// ran, the approval showed the template, the path, the parameters by role and this
-// wallet's balance change in every asset, and the key is a contract key
-// (m/8383h/1h/0h/0/0). This module asks it, renders the approval it returns, and
-// signs the digest of exactly what it rendered. Refusals are shown in the engine's
-// own words.
+// ran, the approval showed the template, the path, the parameters by role, every
+// input by what it is and this wallet's balance change in every asset, and the key is
+// a contract key (m/8383h/1h/0h/0/0) or, on a path that takes no signature, none. A
+// spend may add this wallet's own coins (a top-up, a repayment, a fee in another
+// asset): the wallet picks them itself when asked to fund the spend, and the engine
+// checks every wallet input against the wallet's own record of its coins. A spend may
+// add a foreign coin spent through a script leaf with a given witness (an oracle's
+// beacon coin, spent and recreated): this module reads the chain's record of it, and
+// of the contract coin, from Esplora, and the engine refuses a coin the record does
+// not back. This module asks the engine, renders the approval it returns, and signs
+// the digest of exactly what it rendered. Refusals are shown in the engine's own
+// words.
 //
 // The rendering (approvalSections) is shared with the browser extension, which copies
 // this file into vendor/.
@@ -32,6 +39,9 @@
 //   registryFetch(path) -> fetch Response, against the registry ('/contracts/...');
 //                       optional
 //   walletScripts()     -> hex scripts of the wallet's own addresses
+//   walletCoins()       -> the wallet's own record of its coins, as the engine takes
+//                       them (lwk.ContractSpend.walletCoins(wollet)); optional, and a
+//                       spend with wallet inputs needs it
 //   receiveAddress()    -> the wallet's current receive address
 //   assetMeta(hex)      -> { ticker, precision }
 //   store               localStorage-alike
@@ -95,8 +105,9 @@ async function getText (fetchFn, path) {
 
 // What the engine needs to check a spend's locks: the tip, and when the coin's
 // relative lock started (BIP68 counts from the median time past of the block before
-// the coin's).
-export async function chainFacts (esploraFetch, txid) {
+// the coin's). `records` are the outpoints ([txid, vout]) whose chain record the
+// engine checks a request against: the contract coin's and every foreign input's.
+export async function chainFacts (esploraFetch, txid, records = []) {
   const tipHash = await getText(esploraFetch, '/blocks/tip/hash')
   const tip = await getJson(esploraFetch, `/block/${tipHash}`)
   const status = await getJson(esploraFetch, `/tx/${txid}/status`)
@@ -106,7 +117,51 @@ export async function chainFacts (esploraFetch, txid) {
     const before = await getText(esploraFetch, `/block-height/${status.block_height - 1}`)
     facts.coin_start_median_time = (await getJson(esploraFetch, `/block/${before}`)).mediantime
   }
+  if (records.length) {
+    facts.prevouts = {}
+    for (const [t, v] of records) facts.prevouts[t + ':' + v] = await prevoutOf(esploraFetch, t, v)
+  }
   return facts
+}
+
+// The chain's record of an output: its script, asset and amount, explicit.
+export async function prevoutOf (esploraFetch, txid, vout) {
+  const t = await getJson(esploraFetch, `/tx/${txid}`)
+  const o = (t.vout || [])[vout]
+  if (!o || o.value == null || !o.asset) throw new Error(`${txid}:${vout} is not an explicit output on the chain`)
+  return { script_pubkey: o.scriptpubkey, asset: o.asset, amount: Number(o.value) }
+}
+
+// A request with this wallet's own coins added where the outputs pay more of an asset
+// than the request's inputs hold, and the change of each back to `changeAddress`.
+// Explicit coins only, largest first; a coin the request already names is not picked
+// twice. The engine checks each one against the wallet's record again.
+export function fundFromWallet (request, coins, changeAddress) {
+  const r = JSON.parse(JSON.stringify(request))
+  const inputs = r.inputs || [{ is: 'contract' }]
+  const key = (c) => c.txid + ':' + c.vout
+  const used = new Set(inputs.filter(i => i.is !== 'contract').map(key))
+  const have = {}
+  const add = (a, n) => { have[a] = (have[a] || 0n) + BigInt(n) }
+  add(r.coin.asset, r.coin.amount)
+  for (const i of inputs) if (i.is !== 'contract') add(i.asset, i.amount)
+  const need = {}
+  for (const o of r.outputs) need[o.asset] = (need[o.asset] || 0n) + BigInt(o.amount)
+  for (const [asset, n] of Object.entries(need)) {
+    const short = n - (have[asset] || 0n)
+    if (short <= 0n) continue
+    const pick = coins.filter(c => c.asset === asset && !c.confidential && !used.has(key(c))).sort((a, b) => (b.amount > a.amount ? 1 : b.amount < a.amount ? -1 : 0))
+    let got = 0n
+    for (const c of pick) {
+      if (got >= short) break
+      inputs.push({ is: 'wallet', txid: c.txid, vout: c.vout, asset, amount: c.amount })
+      used.add(key(c)); got += BigInt(c.amount)
+    }
+    if (got < short) throw new Error(`this wallet holds too little of ${asset} in explicit coins: the spend needs ${short} more atoms and finds ${got}`)
+    if (got > short) r.outputs.push({ to: 'wallet', address: changeAddress, asset, amount: Number(got - short) })
+  }
+  r.inputs = inputs
+  return r
 }
 
 // The explicit coins an address holds: each as the engine takes it, and whether it
@@ -137,14 +192,19 @@ export async function registryName (registryFetch, hash) {
 // ---------------------------------------------------------------------------
 
 // The engine's approval of a spend: build it, check the five points and the locks,
-// run the program. Throws the engine's refusal.
-export async function prepare (ctx, { template, instanceJson, request }) {
+// run every program. With `fund`, this wallet adds its own coins for what the request's
+// inputs do not cover. Throws the engine's refusal.
+export async function prepare (ctx, { template, instanceJson, request, fund = false }) {
   const { lwk } = ctx
   const instance = new lwk.ContractInstance(template, instanceJson)
-  const facts = await chainFacts(ctx.esploraFetch, request.coin.txid)
-  const spend = lwk.ContractSpend.build(instance, ctx.network(), JSON.stringify(request), JSON.stringify(ctx.walletScripts()), JSON.stringify(facts))
+  const coins = ctx.walletCoins ? ctx.walletCoins() : []
+  if (fund) request = fundFromWallet(request, coins, ctx.receiveAddress())
+  const foreign = (request.inputs || []).filter(i => i.is === 'foreign')
+  const records = request.inputs ? [[request.coin.txid, request.coin.vout], ...foreign.map(f => [f.txid, f.vout])] : []
+  const facts = await chainFacts(ctx.esploraFetch, request.coin.txid, records)
+  const spend = lwk.ContractSpend.build(instance, ctx.network(), JSON.stringify(request), JSON.stringify(ctx.walletScripts()), JSON.stringify(facts), JSON.stringify(coins))
   const assets = {}
-  for (const o of [request.coin, ...request.outputs]) {
+  for (const o of [request.coin, ...(request.inputs || []).filter(i => i.asset), ...request.outputs]) {
     const m = ctx.assetMeta(o.asset)
     if (m && m.ticker) assets[o.asset] = { ticker: m.ticker, precision: m.precision || 0 }
   }
@@ -155,7 +215,7 @@ export async function prepare (ctx, { template, instanceJson, request }) {
     key_path: CONTRACT_KEY_PATH
   }
   const approval = lwk.ContractApproval.prepare(spend, ctx.signer(), JSON.stringify(view))
-  return { approval, summary: JSON.parse(approval.summary()) }
+  return { approval, summary: JSON.parse(approval.summary()), request }
 }
 
 // A faucet drip, planned at its real size: the fee is `ratePerKvb` atoms of the
@@ -213,7 +273,26 @@ export function approvalSections (s) {
   })
   sections.push({ title: 'Parameters', rows: s.params.map(p => [p.label + ' [' + p.role + ']', p.shown]) })
   if (s.slots && s.slots.length) sections.push({ title: 'State', rows: s.slots.map(p => [p.label + ' [' + p.role + ']', p.shown]) })
+  if (s.spender && s.spender.length) sections.push({ title: 'Values the spender chose', rows: s.spender.map(v => [v.name, v.value]) })
+  if (s.inputs && s.inputs.length) {
+    sections.push({
+      title: 'What it spends',
+      rows: s.inputs.flatMap(i => [
+        ['Input ' + i.index, i.shown],
+        ...(i.request_says ? [['Input ' + i.index + ', as the request calls it', i.request_says + ' (the request\'s word, not checked)']] : []),
+        ...(i.is === 'foreign' ? [['Input ' + i.index + ', checked against the chain', i.checked_against_chain ? 'yes: the chain\'s record of the coin is what the request says' : 'no']] : [])
+      ])
+    })
+  }
   sections.push({ title: 'Your balance change', rows: s.wallet_change.map(c => ['This wallet', c.shown]) })
+  for (const o of (s.opens || [])) {
+    sections.push({
+      title: 'Output ' + o.index + ' opens a contract',
+      rows: [['Opens', o.shown], ['What it is', o.summary], ['Template hash', o.template_hash],
+        ...o.params.map(p => [p.label + ' [' + p.role + ']', p.shown]),
+        ...(o.slots || []).map(p => [p.label + ' [' + p.role + ']', p.shown])]
+    })
+  }
   sections.push({
     title: 'Where the coins go',
     rows: [
@@ -230,6 +309,7 @@ export function approvalSections (s) {
       ['3. Program run', s.checks['3_program_run']],
       ['4. Shown', 'this screen; it signs digest ' + s.digest],
       ['5. Contract key', s.checks['5_contract_key']],
+      ...(s.path.selected_by ? [['Path chosen by', s.path.selected_by]] : []),
       ...(s.locks ? [['Locks', s.locks]] : []),
       ['Input sequence', s.sequence],
       ['Coin', s.contract.coin]
@@ -346,7 +426,10 @@ export function mountContracts (ctx, root) {
   field(dripForm, 'Fee rate (atoms of the dripped asset per 1,000 vB)', dripRate)
   const reqForm = el('div'); reqForm.id = 'contractRequestForm'
   const reqText = area('contractRequest', 8)
-  field(reqForm, 'The request: {"path", "coin", "outputs": [{"to": "contract|wallet|pay|fee", "address"|"script", "asset", "amount"}], ...}', reqText)
+  field(reqForm, 'The request: {"path", "coin", "inputs"?: [{"is": "contract"}, {"is": "wallet", ...}, {"is": "foreign", ..., "witness"}], "outputs": [{"to": "contract|wallet|pay|fee|open|foreign", "address"|"script", "asset", "amount"}], "spender", "next_slots", ...}', reqText)
+  const fundBox = el('input'); fundBox.type = 'checkbox'; fundBox.id = 'contractFund'
+  const fundLabel = el('label', 'field', ' Fund it from this wallet: add this wallet\'s coins for what the inputs do not cover, and the change'); fundLabel.prepend(fundBox)
+  reqForm.appendChild(fundLabel)
   const byHand = el('input'); byHand.type = 'checkbox'; byHand.id = 'contractByHand'
   byHand.onchange = () => showSpendForm()
   const byHandLabel = el('label', 'field', ' Write the request by hand'); byHandLabel.prepend(byHand)
@@ -369,7 +452,7 @@ export function mountContracts (ctx, root) {
       const request = JSON.parse(reqText.value)
       if (coin && !request.coin) request.coin = coin
       if (!request.path) request.path = pathPick.value
-      p = await prepare(ctx, { template: state.template, instanceJson: state.instanceJson, request })
+      p = await prepare(ctx, { template: state.template, instanceJson: state.instanceJson, request, fund: fundBox.checked })
     }
     renderApproval(p)
   }))

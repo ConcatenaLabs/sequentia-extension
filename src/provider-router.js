@@ -150,7 +150,8 @@ export async function handleDappRequest(origin, method, params = {}) {
       };
 
     case 'getNetwork':
-      return { network: engine.getNetworkName() };
+      // The genesis hash names the chain a contract instance must be for.
+      return { network: engine.getNetworkName(), genesis: engine.getNetwork().genesisBlockHash() };
 
     case 'debugState': {
       // Diagnostic read (no secrets): last crash breadcrumb + heartbeat.
