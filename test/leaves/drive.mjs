@@ -75,7 +75,7 @@ const cli = (...args) => {
 
 const profile = join(work, 'chrome-profile');
 const b = new Browser({
-  chrome: CHROME, profile, ext: EXT, consoleLog,
+  chrome: CHROME, profile, ext: EXT, consoleLog, headless: process.env.HEADLESS === '1',
   extraArgs: ['--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1'],
 });
 async function shot(p, name) {
@@ -155,7 +155,7 @@ async function main() {
     check('joined in Settings: the operator key shown equals the command-line wallet\'s pin', op.trim() === cliInfo.operator, { shown: op.trim(), status: await pop.text('#leafStatus') });
     await shot(pop, 'popup-joined');
     // The drive's only shortcut: the host's tick, 60 s in use, is 4 s here.
-    await pop.eval("chrome.storage.local.get('ext.leaves').then((o)=>chrome.storage.local.set({'ext.leaves': {...o['ext.leaves'], tick_ms: 4000}}))");
+    await pop.eval("chrome.storage.local.get(['ext.walletTag','ext.leaves.byWallet']).then((o)=>{const t=o['ext.walletTag'], all=o['ext.leaves.byWallet']; all[t]={...all[t], tick_ms: 4000}; return chrome.storage.local.set({'ext.leaves.byWallet': all})})");
     await b.close();
 
     // --- Second start (the extension reloaded): unlock; the leaf wallet opens again ---
@@ -176,6 +176,9 @@ async function main() {
     const answer = async () => ({ ok: await site.eval("document.querySelector('#out').dataset.ok === '1'"), text: await site.eval("document.querySelector('#out').textContent") });
     const press = async (btn, method) => { await site.eval(`document.querySelector('#out').dataset.method=''`); await site.click(btn); };
 
+    const featuresShown = () => site.eval("!document.querySelector('#leafFeatures').hidden && document.querySelector('#leafFeatures').offsetParent !== null");
+    await site.waitFor("document.body.dataset.mode === 'developer'", 30000);
+    check('the site read the mode on load and shows its leaf features in developer mode', await featuresShown());
     await press('#btnMode'); await done('getWalletMode');
     let a = await answer();
     check('getWalletMode before connecting: developer', a.ok && JSON.parse(a.text).mode === 'developer', a.text);
@@ -258,11 +261,70 @@ async function main() {
     await done('sendLeaves'); a = await answer();
     check('a second payment of one request is refused in the library\'s words', !a.ok && a.text.length > 0, a.text);
 
+    // --- The leaf address, a board and an exit, each fee shown before signing ---
+    await press('#btnAddress'); await done('getLeafAddress'); a = await answer();
+    const addr = a.ok ? JSON.parse(a.text) : null;
+    check('getLeafAddress: an unblinded address of the leaf wallet, no approval asked', !!addr && /^[a-z]+1q[02-9ac-hj-np-z]+$/.test(addr.address) && /^0014/.test(addr.script_pubkey) && (await approvals()) === 0, a.text);
+    await press('#btnAddress'); await done('getLeafAddress'); a = await answer();
+    check('getLeafAddress answers the same address again', a.ok && JSON.parse(a.text).address === addr.address, a.text);
+    await ctl('/fund', { script: addr.script_pubkey, asset: X, amount: 2000000 });
+    await ctl('/produce');
+    await site.set('asset', X); await site.set('amount', '500'); await site.set('feeAsset', '');
+    await press('#btnBoard'); await done('boardLeaves'); a = await answer();
+    check('a board below the operator\'s smallest leaf is refused before any window, in the library\'s words', !a.ok && /below the server's smallest leaf/.test(a.text) && (await approvals()) === 0, a.text);
+    await site.set('amount', '1000000');
+    await press('#btnBoard');
+    const boardScreen = await approve('approval-board', [/Board a coin into your leaves/, /Amount boarded/, /1000000 atoms/, /Fee/, /vB/]);
+    const shownFee = (boardScreen.match(/Fee\s*[\d.]+ \S+ \((\d+) atoms\)/) || [])[1];
+    await done('boardLeaves'); a = await answer();
+    const board = a.ok ? JSON.parse(a.text) : null;
+    check('boardLeaves pays exactly the fee the window showed', !!board && board.fee.asset === X && board.fee.amount === shownFee && board.value === '1000000',
+      board ? { leaf: board.leaf_id, txid: board.txid, fee: board.fee, vsize: board.vsize, shown: shownFee } : a.text);
+    await shot(site, 'site-boarded');
+    const inPool = board ? (await rpc('getrawmempool', [])).includes(board.txid) : false;
+    check('node: the board transaction is in the mempool', inPool, board && board.txid);
+    await ctl('/produce'); await ctl('/bury');
+    let live = false;
+    for (let i = 0; i < 60 && !live; i++) {
+      await press('#btnBalances'); await done('getLeafBalances'); a = await answer();
+      live = a.ok && BigInt((JSON.parse(a.text).leaves[X] || { states: {} }).states.live || 0) >= 1000000n;
+      if (!live) { await sleep(2000); await ctl('/produce'); }
+    }
+    check('the boarded coin is live once its transaction is final', live, a.text);
+
+    await site.set('leafId', 'ff'.repeat(32)); await site.set('feeAsset', '');
+    await press('#btnExit'); await done('exitLeaf'); a = await answer();
+    check('an exit of a coin the wallet does not hold is refused before any window', !a.ok && /no coin/.test(a.text) && (await approvals()) === 0, a.text);
+    await site.set('leafId', board.leaf_id);
+    await press('#btnExit');
+    const exitScreen = await approve('approval-exit', [/Take a leaf home on-chain/, /Transaction 1/, /vB, fee/, /Claim, later/, /Exit delay/]);
+    const shownExitFee = (exitScreen.match(/Transaction 1\s*\d+ vB, fee [\d.]+ \S+ \((\d+) atoms\)/) || [])[1];
+    await done('exitLeaf'); a = await answer();
+    const ex = a.ok ? JSON.parse(a.text) : null;
+    const step1 = ex && ex.broadcast && ex.broadcast[0];
+    check('exitLeaf broadcasts the path on exactly the fee the window showed', !!step1 && step1.fee[0].amount === shownExitFee,
+      ex ? { state: ex.state, broadcast: ex.broadcast, next: ex.next, shown: shownExitFee } : a.text);
+    await shot(site, 'site-exit');
+    await ctl('/produce');
+    const etx = step1 ? await rpc('getrawtransaction', [step1.txid, true]) : null;
+    check('node: the exit\'s first transaction is in a block', !!etx && etx.confirmations >= 1, { txid: step1 && step1.txid, confirmations: etx && etx.confirmations });
+
     // The mode: changed in the popup, followed by the site.
     await pop2.front();
     await pop2.eval("(()=>{const s=document.querySelector('#setMode'); s.value='user'; s.dispatchEvent(new Event('change')); return true})()");
     await site.waitFor("window.siteEvents.some((e) => e.event === 'modeChanged' && e.data.mode === 'user')", 30000);
     check('the site received modeChanged {mode: user}', true);
+    await site.waitFor("document.body.dataset.mode === 'user'", 10000);
+    check('in user mode the site hides its leaf features', !(await featuresShown()));
+    await shot(site, 'site-user-mode');
+    // The popup in user mode: no rail named, and the leaves still in the figures and the headline.
+    const ov = await pop2.eval("chrome.runtime.sendMessage({scope:'ui', method:'overview', params:{withLn:false}})");
+    const xr = ov.result.rows.find((r) => r.key === X);
+    check('in user mode the popup\'s X figure counts its leaves, with no rail split shown', !!xr && BigInt(xr.total) === BigInt(xr.onchain) + BigInt(xr.ln) + BigInt(xr.leaves) && BigInt(xr.leaves) > 0n
+      && (await pop2.eval("document.querySelectorAll('.rail-split').length")) === 0, xr);
+    await pop2.click('[data-tab=balance]').catch(() => {});
+    await shot(pop2, 'popup-user-mode');
+    await pop2.click('[data-tab=settings]').catch(() => {});
     await press('#btnBalances'); await done('getLeafBalances'); a = await answer();
     check('in user mode the leaf methods refuse', !a.ok && /developer-mode rail/.test(a.text), a.text);
     await press('#btnReceive'); await done('requestLeafReceive'); a = await answer();
@@ -270,6 +332,13 @@ async function main() {
     await pop2.eval("(()=>{const s=document.querySelector('#setMode'); s.value='developer'; s.dispatchEvent(new Event('change')); return true})()");
     await site.waitFor("window.siteEvents.some((e) => e.event === 'modeChanged' && e.data.mode === 'developer')", 30000);
     check('the site received modeChanged {mode: developer}', true);
+    await site.waitFor("document.body.dataset.mode === 'developer'", 10000);
+    check('in developer mode the site shows its leaf features again', await featuresShown());
+    await shot(site, 'site-developer-mode');
+    await pop2.click('[data-tab=balance]').catch(() => {});
+    await pop2.waitFor("document.querySelectorAll('.rail-split').length > 0", 30000).catch(() => {});
+    check('in developer mode the popup splits each Sequentia asset by rail', (await pop2.text('#assetList')).includes(' leaves · '), await pop2.text('#assetList'));
+    await shot(pop2, 'popup-developer-mode');
 
     // The schedule falls due: move the chain's median time into the change leaf's
     // refresh window, and the site hears leafSyncDue.

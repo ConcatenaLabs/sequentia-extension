@@ -70,3 +70,15 @@ test('a request just handed out has the mailbox read every tick, for an hour', (
   assert.equal(freshRequestWaits(s(9000, 'waiting', 'restored')), false);
   assert.equal(freshRequestWaits({ now: 1 }), false);
 });
+
+test('the host syncs when the time the schedule first gave arrives, though the schedule moves it on and is not due', async () => {
+  const { syncDecision } = await import('../src/leaf-schedule.js');
+  let d = syncDecision({ now: 1000, next_sync_at: 4600, due: false }, null, false);
+  assert.deepEqual(d, { sync: false, why: null, held: 4600 });
+  d = syncDecision({ now: 2000, next_sync_at: 5600, due: false }, d.held, false);
+  assert.deepEqual(d, { sync: false, why: null, held: 4600 }, 'the time first given is held, not the one read now');
+  d = syncDecision({ now: 4600, next_sync_at: 8200, due: false }, d.held, false);
+  assert.deepEqual(d, { sync: true, why: 'time', held: null });
+  assert.deepEqual(syncDecision({ now: 1, next_sync_at: 9, due: true }, 5, false), { sync: true, why: 'schedule', held: null });
+  assert.deepEqual(syncDecision({ now: 1, next_sync_at: 9, due: false }, null, true), { sync: true, why: 'moving', held: null });
+});

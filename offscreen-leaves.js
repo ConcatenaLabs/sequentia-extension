@@ -7,11 +7,16 @@
 // it asks, and the answer comes back as a message.
 //
 // While a wallet is open it syncs on the library's own schedule (`schedule`: when a
-// coin's refresh window opens, while a receive request waits), and every 30 s while
+// coin's refresh window opens, while a receive request waits; when it falls due, and
+// when the time it first gave after the last sync arrives, whatever `due` says), and
+// every 30 s while
 // something is moving (a coin pending, being sent, given or on its way out, or a
 // participation not done). Each sync's mailbox answer becomes `leafArrived` events,
 // and a schedule that falls due becomes `leafSyncDue`, sent to the service worker,
 // which relays them to connected sites.
+//
+// After every sync and every command that can change a balance, it reports the library's
+// `balance` as `leafBalance`, which the service worker keeps for the popup.
 //
 // Messages (scope 'leaf'), answered { ok, value } or { ok: false, error: { kind, message } }:
 //   'status'                                -> { open, lastSync, lastError, schedule }
@@ -22,14 +27,14 @@
 //   'stop'                                  -> closes the wallet and stops the schedule
 // The mnemonic is handed to the worker and not kept here.
 
-import { inFlight, nextAskMs, freshRequestWaits } from './src/leaf-schedule.js';
+import { inFlight, nextAskMs, freshRequestWaits, syncDecision } from './src/leaf-schedule.js';
 
 const TICK_MS = 60_000;
 let worker = null;
 let next = 1;
 const pending = new Map();
 let failed = null;
-const S = { open: false, fp: null, timer: null, schedule: null, coins: [], participations: [], lastSync: null, lastError: null, tickMs: TICK_MS };
+const S = { open: false, fp: null, timer: null, heldFor: null, schedule: null, coins: [], participations: [], lastSync: null, lastError: null, tickMs: TICK_MS };
 
 function errorOf(e) {
   if (e && typeof e === 'object' && e.message) return { kind: e.kind || 'error', message: e.message, code: e.code, status: e.status };
@@ -73,6 +78,16 @@ function emit(event, data) {
   chrome.runtime.sendMessage({ scope: 'leaf-event', event, data }).catch(() => {});
 }
 
+// The leaf wallet's balance, reported to the service worker after anything that can
+// change it, which keeps it for the popup's figures and headline (`leafBalance`).
+async function reportBalance() {
+  try {
+    const b = (await call('run', { command: 'balance' })).result;
+    emit('leafBalance', { balance: b });
+  } catch { /* the next change reports it again */ }
+}
+const READS = new Set(['info', 'address', 'balance', 'coins', 'record', 'boards', 'participations', 'schedule', 'refusals', 'quote', 'board_quote', 'exit_quote']);
+
 function arrivals(mailbox) {
   for (const c of ((mailbox && mailbox.accepted) || [])) {
     emit('leafArrived', { leaf_id: c.leaf_id, asset: c.asset, value: String(c.value ?? ''), kind: c.kind });
@@ -82,6 +97,7 @@ function arrivals(mailbox) {
 async function sync(by) {
   const v = await call('run', { command: 'sync', args: {} });
   const r = (v && v.result) || {};
+  S.heldFor = null;
   S.lastSync = { at: Date.now(), by };
   console.info(`[leaves] sync (${by}): mailbox accepted ${((r.mailbox && r.mailbox.accepted) || []).length}`);
   arrivals(r.mailbox);
@@ -90,6 +106,7 @@ async function sync(by) {
     S.coins = (await call('run', { command: 'coins' })).result || [];
     S.participations = (await call('run', { command: 'participations' })).result || [];
   } catch { /* the next tick reads them again */ }
+  await reportBalance();
   return v;
 }
 
@@ -109,14 +126,17 @@ async function tick() {
     S.schedule = s;
     const moving = inFlight(S.coins, S.participations);
     if (s && s.due) emit('leafSyncDue', { now: s.now, next_sync_at: s.next_sync_at, why: s.why ?? null });
-    if ((s && s.due) || moving) {
-      await sync(s && s.due ? 'schedule' : 'moving');
+    const d = syncDecision(s, S.heldFor, moving);
+    S.heldFor = d.held;
+    if (d.sync) {
+      await sync(d.why);
       S.schedule = (await call('run', { command: 'schedule' })).result;
     } else if (freshRequestWaits(s)) {
       // A request just handed out: read the mailbox, not the whole sync.
       const mb = (await call('run', { command: 'mailbox' })).result;
       if (mb && mb.accepted && mb.accepted.length) console.info(`[leaves] mailbox read (a request waits): accepted ${mb.accepted.length}`);
       arrivals(mb);
+      if (mb && mb.accepted && mb.accepted.length) await reportBalance();
       S.schedule = (await call('run', { command: 'schedule' })).result;
     }
     S.lastError = null;
@@ -151,6 +171,7 @@ async function start(args) {
   S.open = true;
   S.fp = fp;
   console.info(`[leaves] the leaf wallet is open (${has ? 'from its store' : 'created'}); it syncs on its schedule`);
+  await reportBalance();
   plan(0);
   return { created: !has, info };
 }
@@ -164,9 +185,15 @@ async function handle(op, args) {
   switch (op) {
     case 'status':
       return { open: S.open, lastSync: S.lastSync, lastError: S.lastError, schedule: S.schedule };
-    case 'run':
+    case 'run': {
       if (!S.open) throw { kind: 'refused', message: 'the leaf wallet is not open' };
-      return await call('run', { command: String(args.command), args: args.args || {} });
+      const command = String(args.command);
+      try {
+        return await call('run', { command, args: args.args || {} });
+      } finally {
+        if (!READS.has(command)) await reportBalance();
+      }
+    }
     case 'sync':
       if (!S.open) throw { kind: 'refused', message: 'the leaf wallet is not open' };
       return await sync('asked');

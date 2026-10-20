@@ -1,13 +1,15 @@
 // Reading a receive request for the approval window, and shaping the library's balance
-// for the provider. Pure; tested in test/leaves.test.mjs.
+// for the provider. Pure; tested in test/leaves.test.mjs. Copied from the web wallet's
+// leaf-request.js: change it there first, then copy it here.
 //
 // A request is the library's text: a prefix word, a colon, and the hex of its JSON,
-// which names its kind (`arca_request`). The wallet reads it here only to SHOW the
+// which names its kind (`kind: "request"`, or, in texts made before the kind was a
+// field, the key `arca_request`). The wallet reads it here only to SHOW the
 // payment before the user approves it. The payment itself is the library's `send`,
 // handed the request together with the asset and amount shown, so the library pays
 // exactly what was shown or refuses (it refuses an asset other than the request's).
 
-const KIND = 'arca_request';
+const LEGACY_KIND = 'arca_request';
 
 export function readRequest(text) {
   const s = String(text || '').trim();
@@ -23,7 +25,7 @@ export function readRequest(text) {
     for (let k = 0; k < bytes.length; k++) bytes[k] = parseInt(hex.substr(k * 2, 2), 16);
     v = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
   } catch (e) { throw new Error('the receive request: ' + e.message); }
-  if (!v || typeof v !== 'object' || !(KIND in v)) throw new Error('the receive request: the text is not one');
+  if (!v || typeof v !== 'object' || !(v.kind === 'request' || LEGACY_KIND in v)) throw new Error('the receive request: the text is not one');
   return v;
 }
 

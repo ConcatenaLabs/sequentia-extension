@@ -16,7 +16,17 @@
     try { const v = await window.sequentia.request({ method, params }); show(method, true, v); return v; }
     catch (e) { show(method, false, e); return null; }
   }
+  // The site follows the wallet's mode: its leaf features show in developer mode only.
+  function follow(mode) {
+    $('siteMode').textContent = mode || 'unknown';
+    $('leafFeatures').hidden = mode !== 'developer';
+    document.body.dataset.mode = mode || '';
+  }
+  async function readMode() {
+    try { const v = await window.sequentia.request({ method: 'getWalletMode' }); follow(v && v.mode); } catch { follow(null); }
+  }
   function listen() {
+    window.sequentia.on('modeChanged', (data) => follow(data && data.mode));
     for (const ev of ['leafArrived', 'leafSyncDue', 'modeChanged', 'accountsChanged', 'disconnect']) {
       window.sequentia.on(ev, (data) => {
         events.push({ event: ev, data, at: Date.now() });
@@ -29,11 +39,15 @@
   function wire() {
     listen();
     $('btnConnect').onclick = () => call('connect');
-    $('btnMode').onclick = () => call('getWalletMode');
+    $('btnMode').onclick = async () => { const v = await call('getWalletMode'); if (v) follow(v.mode); };
     $('btnBalances').onclick = () => call('getLeafBalances');
+    $('btnAddress').onclick = () => call('getLeafAddress');
+    $('btnBoard').onclick = () => call('boardLeaves', opt({ asset: val('asset'), amount: val('amount'), fee_asset: val('feeAsset') }));
+    $('btnExit').onclick = () => call('exitLeaf', opt({ leaf_id: val('leafId'), fee_asset: val('feeAsset') }));
     $('btnReceive').onclick = () => call('requestLeafReceive', opt({ asset: val('asset'), amount: val('amount') }));
     $('btnSend').onclick = () => call('sendLeaves', opt({ request: val('request'), asset: val('asset'), amount: val('amount') }));
     window.siteEvents = events;
+    readMode();
   }
   if (window.sequentia) wire(); else window.addEventListener('sequentia#initialized', wire, { once: true });
 })();

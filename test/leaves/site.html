@@ -15,17 +15,30 @@
 <div>
   <button id="btnConnect">Connect</button>
   <button id="btnMode">Read the wallet's mode</button>
-  <button id="btnBalances">Read leaf balances</button>
 </div>
-<div>
-  <label>Asset id <input id="asset"></label>
-  <label>Amount (atoms) <input id="amount"></label>
-  <button id="btnReceive">Ask for a receive request</button>
-</div>
-<div>
-  <label>A receive request to pay <input id="request"></label>
-  <button id="btnSend">Pay it from leaves</button>
-</div>
+<p id="modeShown">The wallet's mode: <b id="siteMode">unknown</b>. This site shows its leaf features only in developer mode.</p>
+<section id="leafFeatures" hidden>
+  <h2>Leaves</h2>
+  <div>
+    <button id="btnBalances">Read leaf balances</button>
+    <button id="btnAddress">Read the leaf wallet's address</button>
+  </div>
+  <div>
+    <label>Asset id <input id="asset"></label>
+    <label>Amount (atoms) <input id="amount"></label>
+    <label>Fee asset id (optional) <input id="feeAsset"></label>
+    <button id="btnReceive">Ask for a receive request</button>
+    <button id="btnBoard">Board this amount</button>
+  </div>
+  <div>
+    <label>A receive request to pay <input id="request"></label>
+    <button id="btnSend">Pay it from leaves</button>
+  </div>
+  <div>
+    <label>A leaf id to take home <input id="leafId"></label>
+    <button id="btnExit">Exit this leaf</button>
+  </div>
+</section>
 <h2>Last answer</h2>
 <pre id="out"></pre>
 <h2>Events</h2>

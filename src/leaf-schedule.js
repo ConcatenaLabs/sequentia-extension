@@ -12,6 +12,21 @@ export function inFlight(coins, participations) {
   return (participations || []).some((p) => !DONE_PARTICIPATION.has(p.state) && !p.released);
 }
 
+// Whether to sync now. The time to hold to is the schedule's next_sync_at as it was
+// first given after the last sync (`held`): a schedule that moves that time on at every
+// read (a coin given to a refresh reads now + 1 h each time, and is not `due` until its
+// home date) is still synced once the time first given arrives. Also when the schedule
+// is due, and while something moves. Answers { sync, why, held } (the time to hold to
+// next: null once a sync runs). The web wallet's leaves.js holds the same rule.
+export function syncDecision(schedule, held, moving) {
+  const s = schedule || {};
+  const at = typeof held === 'number' ? held : (typeof s.next_sync_at === 'number' ? s.next_sync_at : null);
+  if (s.due) return { sync: true, why: 'schedule', held: null };
+  if (at != null && typeof s.now === 'number' && s.now >= at) return { sync: true, why: 'time', held: null };
+  if (moving) return { sync: true, why: 'moving', held: null };
+  return { sync: false, why: null, held: at };
+}
+
 // How long until the host asks again: the schedule's own time when it is nearer than
 // the tick, otherwise the tick. A schedule that is due is due now.
 export function nextAskMs(schedule, tickMs) {

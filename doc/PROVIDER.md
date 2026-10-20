@@ -340,11 +340,20 @@ display it may produce one.
 
 ### `getWalletMode()` — silent, no connection needed
 `{ mode: 'developer' | 'user' }`. The wallet has one mode setting (Settings →
-Mode), `'user'` until the user changes it. Developer mode shows every rail and
-lets each step be chosen by hand; user mode is one balance and one action per
-asset, with no rail named. A site reads the mode and follows it, with an
-override of its own if it wants one. The read needs no connection, so a site
-can choose its layout before it asks to connect.
+Mode), kept for each wallet and `'user'` until the user changes it. The words
+are the same in every Sequentia wallet:
+
+- **User mode**: One figure per asset, and the wallet chooses how value moves.
+- **Developer mode**: Every rail by name, side by side (on-chain, leaves and
+  Lightning), each with its balance and its manual controls, and the developer
+  tools.
+
+A site reads the mode and follows it, with an override of its own if it wants
+one: a site's developer features (leaves, a rail picker, contract tools) are
+shown in developer mode, and in user mode the site shows one figure per asset
+and one action. The read needs no connection, so a site can choose its layout
+before it asks to connect. While the wallet is locked it answers the mode of the
+wallet last opened.
 
 The `modeChanged` event (`{ mode }`) fires on every page that listens when the
 user changes the setting.
@@ -355,7 +364,11 @@ A leaf is a coin of a Sequentia asset held in an operator's tree off the chain:
 paid and received without a transaction, and taken on-chain by the wallet alone
 whenever it must be. Leaves are one rail among the wallet's rails (on-chain,
 leaves, Lightning), and a developer-mode one: in user mode every method in this
-section refuses.
+section refuses, and no leaf event reaches a site. A wallet that joined an
+operator keeps its leaf wallet open and syncing in either mode all the same,
+since its coins have dates to keep, and their value counts in each asset's
+figure and in the headline (`getBalances` is unchanged: it answers the
+on-chain and Lightning rails).
 
 The wallet runs the operator's wallet library, compiled to wasm, in a worker of
 its offscreen document (`leaves/`). Every script, record, check, fee and
@@ -403,6 +416,71 @@ sums them. `value` is the library's headline: every asset held, leaves and the
 leaf wallet's on-chain coins together, valued at the rates of the wallet's own
 node, with any asset the node has no rate for listed in `unvalued` and left out.
 No asset comes first.
+
+### `getLeafAddress()` — silent, requires connection and developer mode
+`{ address, script_pubkey }`: an on-chain address of the leaf wallet on
+Sequentia (an unblinded `tb1…`, the same key type as the wallet's own
+addresses). Pay it to give the leaf wallet a coin to board, or a coin to pay an
+exit's fees with. It is the same address each time it is asked, so a site
+cannot grow the wallet's address scan by asking again.
+
+### `boardLeaves({ asset, amount, fee_asset? })` — approval per request
+Boards `amount` atoms of `asset` from the leaf wallet's on-chain coins into the
+operator's tree: one transaction, which the operator registers before it is
+broadcast, so a refused board spends nothing. The coin is a leaf, spendable,
+once the transaction is final. The fee is paid in `fee_asset`, or in the asset
+boarded when none is named; no other asset is ever chosen for it.
+
+Before the window opens the library quotes the board (`board_quote`): its fee,
+its size and the coins it spends, signing and asking nothing. The window shows
+the asset, the amount, the fee in the fee asset's own atoms and the size. On
+approval the library boards only on the fee shown; if the fee has changed (the
+coins or the node's rate moved), nothing is registered or signed and the
+request fails with
+`refused: the board's fee changed since it was shown; it is now {…}`.
+Returns the library's answer:
+```js
+{ leaf_id, txid, vsize, asset, value: '<atoms>', fee: { asset, amount: '<atoms>' },
+  state: 'pending',
+  exit_fee?: { fee_coin: 'missing', note } }  // the wallet holds no coin to pay this coin's exit with
+```
+Refusals before the window, besides the common ones: `asset` or `fee_asset` not
+a 64-hex id, `amount` not a positive integer, and the library's quote refusals,
+for example `refused: a board of 500 is below the server's smallest leaf in
+asset <id>, 1000`, `refused: asset <id> is not accepted for fees by the node
+now; …`, `refused: the wallet holds <n> of asset <id> on-chain that it can
+spend, and needs <m>`.
+
+### `exitLeaf({ leaf_id, fee_asset? })` — approval per request
+Takes one leaf home on-chain by the wallet alone, without the operator: the
+transactions of its path still missing, then, once the leaf's transaction is in
+a block and its exit delay has run, the claim to one of the wallet's addresses.
+After the first run the wallet carries the exit on by itself (each sync takes
+it as far as the chain allows) until the claim is final. Fees come from what
+each transaction carries for them (a node's reserve, a margin) where that pays
+the node's floor, and otherwise from an on-chain coin of the leaf wallet's in
+`fee_asset`, or, when none is named, the asset the library chooses among those
+the node accepts (the asset moved first).
+
+Before the window opens the library quotes the exit (`exit_quote`), broadcasting
+and writing nothing. The window shows the coin, each transaction to broadcast
+now with its size, its fee and what pays it, the claim's fee at the node's floor
+now, and the exit delay. On approval the library broadcasts the path only on the
+fees shown; if they have changed, nothing is broadcast and the request fails
+with `refused: the exit's fees changed since they were shown; they are now {…}`.
+The claim's fee is the floor when the claim is made. Returns the library's
+answer:
+```js
+{ leaf_id, state: 'unrolling' | 'waiting' | 'claimed',
+  broadcast: [{ txid, vsize, fee: [{ asset, amount }] }, …],
+  leaf?: '<txid:vout>', next?: '<what happens next>', error?: '<a broadcast refused, in the node's words>',
+  claim?: { txid, vsize, pays, to } }
+```
+Refusals before the window, besides the common ones: `leaf_id` missing,
+`fee_asset` not a 64-hex id, and the library's, for example `refused: no coin
+<id>`, `refused: coin <id> is spent: there is nothing of the wallet's to exit`,
+`refused: the wallet holds no on-chain coin of asset <id> to pay the exit's
+fees with`.
 
 ### `requestLeafReceive({ asset?, amount? })` — approval per request
 A single-use receive request: a fresh key, this wallet's mailbox, and the exit
@@ -464,7 +542,7 @@ round. Refusals of the library after approval, in its words, for example:
 
 ### Leaf events
 
-Delivered to connected sites only:
+Delivered to connected sites only, and only in developer mode:
 
 - `leafArrived` — `{ leaf_id, asset, value, kind }` for each coin a sync
   accepted from the mailbox (`value` in atoms). It fires once per coin, from
@@ -474,7 +552,8 @@ Delivered to connected sites only:
   library's reason when something holds the time (a waiting receive request).
 
 `getCapabilities().features` carries `leaves` on builds that serve this
-section, and `events` lists `modeChanged`, `leafArrived` and `leafSyncDue`.
+section (`getLeafBalances`, `getLeafAddress`, `requestLeafReceive`,
+`sendLeaves`, `boardLeaves`, `exitLeaf`), and `events` lists `modeChanged`, `leafArrived` and `leafSyncDue`.
 
 ## Events
 

@@ -35,8 +35,14 @@ wasm. Read this before changing anything.
   its worker `leaves/worker.js`), never in the service worker: the library
   blocks on synchronous requests, which only a dedicated worker may make. Its
   store (SQLite on the extension's private file system) admits one worker at a
-  time. The worker opens it only while the wallet is unlocked, in developer
-  mode, with an operator joined; locking closes it. Mode and leaf events reach
+  time. The worker opens it only while the wallet is unlocked and has joined
+  an operator, in either mode (its coins have dates to keep); locking closes it.
+  User mode shows nothing of leaves and no provider method or leaf event reaches
+  them; the host reports the balance (`leafBalance`) so each asset's figure and
+  the headline count leaves in both modes. The mode and the operator joined are
+  kept for each wallet, by the descriptor's tag (`src/mode.js`, the web wallet's
+  tag). The mode's words are the same in the web wallet and Ambra: change them in
+  all three together. Mode and leaf events reach
   pages through `chrome.tabs.sendMessage` to the content script, not the
   service worker's ports, which die when it sleeps.
 - **BigInt never crosses the message boundary** — all RPC amounts are strings.

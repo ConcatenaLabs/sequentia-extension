@@ -144,6 +144,11 @@ function renderOverview() {
     if (r.restricted && r.legend) {
       const meta = el('div', 'ln-meta'); meta.appendChild(el('div', null, r.legend)); row.appendChild(meta);
     }
+    // Developer mode: every rail of the asset on one line. BTC is never a leaf.
+    if (OV.mode === 'developer' && r.key !== 'BTC' && !r.restricted) {
+      row.appendChild(el('div', 'sub rail-split', fmtAtoms(r.onchain, r.precision) + ' on-chain · '
+        + fmtAtoms(r.leaves || '0', r.precision) + ' leaves · ' + fmtAtoms(r.ln || '0', r.precision) + ' Lightning'));
+    }
     const lnAtoms = BigInt(r.ln || 0);
     const canMove = (r.key === 'BTC' || r.feePriced) && !r.restricted;
     if (OV.lnDeployed && canMove && (lnAtoms > 0n || BigInt(r.onchain) > 0n)) {
@@ -256,6 +261,8 @@ chrome.runtime.onMessage.addListener((msg) => {
       lnProgressTarget.className = 'status'; lnProgressTarget.textContent = msg.text;
     }
     if (msg.event === 'locked') view('vUnlock');
+    // The leaf wallet's balance changed: the figures and the headline count it.
+    if (msg.event === 'leaves-changed' && OV) rpc('overview', { withLn: false }).then((v) => { OV = v; renderOverview(); }).catch(() => {});
   }
   // A leaf sync finished (on the schedule, or asked): show what it changed.
   if (msg && msg.scope === 'leaf-event' && msg.event === 'leafSynced' && !$('leafCard').classList.contains('hide')) {
@@ -563,7 +570,7 @@ async function renderLeaves() {
     + (last ? ' · Last sync ' + new Date(last.at).toISOString() + ' (' + last.by + ')' : '');
 }
 $('setMode').onchange = async () => {
-  try { await rpc('setMode', { mode: $('setMode').value }); await renderLeaves(); }
+  try { await rpc('setMode', { mode: $('setMode').value }); await renderLeaves(); if (OV) { OV = await rpc('overview', { withLn: false }); renderOverview(); } }
   catch (e) { $('settingsStatus').className = 'status err'; $('settingsStatus').textContent = e.message; }
 };
 $('btnLeafJoin').onclick = async () => {
