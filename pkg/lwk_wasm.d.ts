@@ -4145,8 +4145,8 @@ export interface InitOutput {
   readonly __wbindgen_free: (a: number, b: number, c: number) => void;
   readonly __externref_drop_slice: (a: number, b: number) => void;
   readonly closure2028_externref_shim: (a: number, b: number, c: any) => void;
-  readonly wasm_bindgen__convert__closures_____invoke__he4358746220713bc: (a: number, b: number) => void;
   readonly wasm_bindgen__convert__closures_____invoke__h3c25c7484968f562: (a: number, b: number) => void;
+  readonly wasm_bindgen__convert__closures_____invoke__he4358746220713bc: (a: number, b: number) => void;
   readonly closure2907_externref_shim: (a: number, b: number, c: any) => void;
   readonly closure3754_externref_shim: (a: number, b: number, c: any, d: any) => void;
   readonly __wbindgen_start: () => void;
