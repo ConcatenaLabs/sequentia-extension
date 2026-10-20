@@ -505,6 +505,8 @@ function wsURL(base){
 //   hooks.finalizeAccept({id,transaction}) -> { transaction: <stripped signed PSET b64>, txid }
 //   hooks.onStatus(msg)  (optional) progress callback
 // Resolves to the settled txid.
+// How long a taker waits for the maker's co-signed swap, from sending its request.
+export const COSIGN_WAIT_MS = 60_000;
 export async function lift(offer, takeAtoms, feeAsset, hooks){
   const status = (m) => { try { hooks.onStatus && hooks.onStatus(m); } catch {} };
   const makerPubHex = O(offer,'maker_pubkey','makerPubkey');
@@ -579,10 +581,13 @@ export async function lift(offer, takeAtoms, feeAsset, hooks){
     // Await the maker's sealed SwapAccept. Until it arrives this wallet has signed nothing, so a
     // maker that goes quiet leaves nothing that could still complete: say so, rather than the
     // generic timeout ("may still complete in the background"), which is true only after signing.
+    // One deadline for the whole wait, not 90 s per message: a maker that is up co-signs in seconds,
+    // and three 90 s waits held the taker for four and a half minutes on one that was not.
     let acc = null;
+    const cosignBy = Date.now() + COSIGN_WAIT_MS;
     for (let n=0; n<3 && !acc; n++){
       let m;
-      try { m = await nextMsg(90000); }
+      try { m = await nextMsg(Math.max(1000, cosignBy - Date.now())); }
       catch (e){
         if (/timed out|connection closed/i.test(String((e && e.message) || e)))
           throw new Error('maker did not answer: the other side did not co-sign in time, and this wallet signed nothing, so nothing was traded');
