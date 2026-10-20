@@ -178,8 +178,13 @@ export function buildFillLeaf(assetA, assetB, rateNum, rateDen, minLot, makerPro
   return s.bytes();
 }
 
-// buildRefundLeaf: absolute-CLTV reclaim by the maker after expiry. makerX is the
-// maker's 32-byte x-only pubkey.
+// An order's REFUND lock (expiry_locktime) is an absolute lock as CLTV reads it:
+// below LOCKTIME_THRESHOLD a block height, from it a median time past in unix
+// seconds. The same REFUND leaf takes either.
+export const LOCKTIME_THRESHOLD = 500000000;
+
+// buildRefundLeaf: absolute-CLTV reclaim by the maker after expiry (a height or
+// a median time). makerX is the maker's 32-byte x-only pubkey.
 export function buildRefundLeaf(expiryLocktime, makerX){
   makerX = hexToBytes(makerX);
   if (makerX.length !== 32) throw new Error('makerX must be 32 bytes');
@@ -318,6 +323,160 @@ export function planFill(order, locked, filled, k){
     witness: tap.fillWitness,      // [leaf, control_block]
     tap,
   };
+}
+
+// --- several orders in one transaction --------------------------------------
+//
+// Each order's FILL leaf reads only the outputs bound to its own input index k:
+// the maker's credit at 2k and, at 2k+1, the order resting again under its
+// identical script (a partial fill) or an explicit output in any asset but the
+// one it sells (a full fill's gap). So one transaction fills several orders at
+// inputs 0..n-1, outputs 0..2n-1 theirs, everything else after them. This is the
+// mirror of seqdex daemon/pkg/covenant fills.go: checkFill is CheckFill and
+// buildFillTx is BuildFillTx, and both build the bytes of
+// seqdex pkg/covenant/testdata/fill_vectors.json (covenant-fill-vectors.json
+// here) from the same specs.
+
+const MAX_LEAF_PRODUCT = (1n << 63n) - 1n;
+
+// orderFromTerms: an order from CovenantTerms field names (snake or camel),
+// bytes as hex, asset ids internal order.
+export function orderFromTerms(t){
+  const g = (...n) => { for (const k of n) if (t[k] !== undefined && t[k] !== null) return t[k]; return undefined; };
+  const ik = g('internal_key','internalKey');
+  return {
+    assetA: g('asset_a','assetA'), assetB: g('asset_b','assetB'),
+    rateNum: BigInt(g('rate_num','rateNum') ?? 0), rateDen: BigInt(g('rate_den','rateDen') ?? 0),
+    makerProg: g('maker_prog','makerProg'), makerVer: Number(g('maker_prog_ver','makerProgVer') ?? 1) || 1,
+    minLot: BigInt(g('min_lot','minLot') ?? 0),
+    expiryLocktime: g('expiry_locktime','expiryLocktime'),
+    makerX: g('maker_x','makerX'),
+    ...(ik ? { internalKey: ik } : {}),
+  };
+}
+
+// An output as a FILL leaf reads it: { asset (32B internal) | null when
+// confidential, value (bigint) | null when confidential, script (bytes) }.
+export function explicitOutput(asset, value, script){
+  return { asset: hexToBytes(asset), value: BigInt(value), script: hexToBytes(script) };
+}
+
+// checkFill judges `outs` as the FILL leaf of `order` spent at input k, the
+// order's output holding `locked` atoms of asset A. It returns what the leaf
+// read when its script succeeds, and throws naming the failing step otherwise,
+// in the leaf's own order (see CheckFill in seqdex pkg/covenant/fills.go).
+export function checkFill(order, outs, k, locked){
+  locked = BigInt(locked); k = BigInt(k);
+  const tap = deriveTaptree(order);
+  const assetA = hexToBytes(order.assetA), assetB = hexToBytes(order.assetB);
+  const minLot = BigInt(order.minLot), num = BigInt(order.rateNum), den = BigInt(order.rateDen);
+  const ci = 2n*k, ri = 2n*k + 1n;
+  const n = BigInt(outs.length);
+  let remainder = 0n, partial = false;
+  if (ri < n){
+    const r = outs[Number(ri)];
+    if (r.asset == null) throw new Error(`output ${ri} (2k+1 for input ${k}) hides its asset; the FILL leaf reads it explicit`);
+    if (eq(r.asset, assetA)){
+      if (!eq(r.script, tap.scriptPubKey)) throw new Error(`output ${ri} holds the asset the order sells but does not pay the order's own script, so the leaf reads it as a remainder that does not rest again`);
+      if (r.value == null) throw new Error(`output ${ri} rests the order again but hides its value`);
+      if (r.value < minLot) throw new Error(`output ${ri} rests ${r.value} atoms again, below min_lot ${minLot}`);
+      remainder = r.value; partial = true;
+    }
+  }
+  if (remainder > locked || locked - remainder < minLot)
+    throw new Error(`the fill takes ${locked - remainder} of ${locked} atoms (remainder ${remainder}), below min_lot ${minLot}`);
+  const filled = locked - remainder;
+  if (filled * num + den - 1n > MAX_LEAF_PRODUCT)
+    throw new Error(`filled ${filled} * rate_num ${num} overflows the leaf's signed 64-bit arithmetic`);
+  const required = ceilPrice(filled, num, den);
+  if (ci >= n) throw new Error(`no output ${ci} (2k for input ${k}) to credit the maker`);
+  const c = outs[Number(ci)];
+  if (c.asset == null || !eq(c.asset, assetB)) throw new Error(`output ${ci} does not hold the asset the order is paid in explicitly`);
+  const want = concat(Uint8Array.of(OP_1, 0x20), hexToBytes(order.makerProg));
+  if ((order.makerVer ?? 1) !== 1 || !eq(c.script, want)) throw new Error(`output ${ci} does not pay the maker's program`);
+  if (c.value == null) throw new Error(`output ${ci} hides the maker's credit`);
+  if (c.value < required) throw new Error(`output ${ci} credits the maker ${c.value} atoms, below the ceiling price ${required}`);
+  return { inputIndex: Number(k), creditIndex: Number(ci), remainderIndex: Number(ri), filled, remainder, partial, required, credited: c.value };
+}
+
+// buildFillTx lays out the fill transaction of a spec in seqdex's format
+// ({takes:[{terms, txid, vout, locked, filled}], credits?, gaps, inputs, tail}):
+// version 2, lock time 0, the orders at inputs 0..n-1 each with its FILL
+// witness, the other inputs unsigned; credit k at 2k, rest or gap k at 2k+1,
+// then the tail. Every order's leaf is run over the result (checkFill) before
+// it is returned. Returns { hex, txid, plans, outputs }.
+export function buildFillTx(spec){
+  const takes = spec.takes || [];
+  if (!takes.length) throw new Error('no order to fill');
+  const seen = new Set();
+  const plans = [], outs = [], ins = [];
+  const credits = spec.credits || [];
+  const gaps = spec.gaps || [];
+  takes.forEach((t, k) => {
+    const op = `${t.txid}:${t.vout}`;
+    if (seen.has(op)) throw new Error(`take ${k}: order ${op} is taken twice`);
+    seen.add(op);
+    const order = orderFromTerms(t.terms);
+    const p = planFill(order, t.locked, t.filled, k);
+    plans.push(p);
+    ins.push({ txid: t.txid, vout: t.vout >>> 0, witness: p.witness });
+    const credit = credits[k] ? BigInt(credits[k]) : p.requiredB;
+    if (credit < p.requiredB) throw new Error(`take ${k}: credit ${credit} below the ceiling price ${p.requiredB}`);
+    outs.push({ asset: hexToBytes(order.assetB), value: credit, script: concat(Uint8Array.of(OP_1, 0x20), hexToBytes(order.makerProg)) });
+    if (p.partial){
+      outs.push({ asset: hexToBytes(order.assetA), value: p.remainder, script: p.orderSpk });
+      return;
+    }
+    const g = gaps[k];
+    if (!g) throw new Error(`take ${k} fills its order whole and has no gap output for 2k+1 (${p.remainderIndex})`);
+    const gap = explicitOutput(g.asset, g.value, g.script);
+    if (eq(gap.asset, hexToBytes(order.assetA))) throw new Error(`take ${k}: the gap at ${p.remainderIndex} holds the asset the order sells, which the leaf reads as a remainder`);
+    outs.push(gap);
+  });
+  for (const i of (spec.inputs || [])) ins.push({ txid: i.txid, vout: i.vout >>> 0, witness: [] });
+  for (const o of (spec.tail || [])) outs.push(explicitOutput(o.asset, o.value, o.script));
+  takes.forEach((t, k) => {
+    try { checkFill(orderFromTerms(t.terms), outs, k, t.locked); }
+    catch (e){ throw new Error(`take ${k}: the order's FILL leaf would refuse this transaction: ${e.message}`); }
+  });
+  const { full, base } = serializeExplicitTx(2, ins, outs, 0);
+  return { hex: bytesToHex(full), txid: bytesToHex(sha256(sha256(base)).reverse()), plans, outputs: outs };
+}
+
+// serializeExplicitTx: an Elements transaction whose outputs are all explicit
+// and whose inputs carry no issuance or peg-in. Returns the full serialization
+// (witness flag set when any input has a witness) and the base one the txid
+// hashes.
+export function serializeExplicitTx(version, ins, outs, lockTime){
+  const u32 = (n) => { const b = new Uint8Array(4); new DataView(b.buffer).setUint32(0, n >>> 0, true); return b; };
+  const varBytes = (b) => concat(compactSize(b.length), b);
+  const parts = (withWitness) => {
+    const p = [u32(version)];
+    const hasWit = withWitness && ins.some(i => i.witness && i.witness.length);
+    p.push(Uint8Array.of(hasWit ? 1 : 0));
+    p.push(compactSize(ins.length));
+    for (const i of ins){
+      p.push(hexToBytes(i.txid).reverse(), u32(i.vout), varBytes(new Uint8Array(0)), u32(i.sequence ?? 0xffffffff));
+    }
+    p.push(compactSize(outs.length));
+    for (const o of outs){
+      const v = new Uint8Array(9); v[0] = 1; let x = BigInt(o.value);
+      for (let j = 8; j >= 1; j--){ v[j] = Number(x & 0xffn); x >>= 8n; }
+      p.push(Uint8Array.of(1), o.asset, v, Uint8Array.of(0), varBytes(o.script));
+    }
+    p.push(u32(lockTime));
+    if (hasWit){
+      for (const i of ins){
+        const stack = i.witness || [];
+        p.push(Uint8Array.of(0), Uint8Array.of(0), compactSize(stack.length));
+        for (const item of stack) p.push(varBytes(item));
+        p.push(Uint8Array.of(0));
+      }
+      for (let j = 0; j < outs.length; j++) p.push(Uint8Array.of(0), Uint8Array.of(0));
+    }
+    return concat(...p);
+  };
+  return { full: parts(true), base: parts(false) };
 }
 
 export const __test__ = { bn2vch, le8, taggedHash, leafHash, tweakOutputKey, bytesToBigBE, bigToBytesBE };
