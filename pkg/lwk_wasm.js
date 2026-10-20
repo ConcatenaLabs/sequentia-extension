@@ -234,712 +234,6 @@ function _assertClass(instance, klass) {
         throw new Error(`expected instance of ${klass.name}`);
     }
 }
-
-function getArrayJsValueFromWasm0(ptr, len) {
-    ptr = ptr >>> 0;
-    const mem = getDataViewMemory0();
-    const result = [];
-    for (let i = ptr; i < ptr + 4 * len; i += 4) {
-        result.push(wasm.__wbindgen_export_4.get(mem.getUint32(i, true)));
-    }
-    wasm.__externref_drop_slice(ptr, len);
-    return result;
-}
-/**
- * `adaptorSign(privkey_hex, msg_hex, tPointHex) -> â` (spec §8).
- *
- * - `privkey_hex`: the signer secret `d`, 64-hex (BIP340-normalized internally).
- * - `msg_hex`: the 32-byte sighash the pre-signature commits to, 64-hex.
- * - `t_point_hex`: the adaptor point `T = t·G`, 66-hex COMPRESSED sec1.
- *
- * Returns the 65-byte pre-signature `â` (130-hex) `= compressed(R+T) || ŝ`.
- * Deterministic for fixed inputs (spec 0.4(4)).
- * @param {string} privkey_hex
- * @param {string} msg_hex
- * @param {string} t_point_hex
- * @returns {string}
- */
-export function adaptorSign(privkey_hex, msg_hex, t_point_hex) {
-    let deferred5_0;
-    let deferred5_1;
-    try {
-        const ptr0 = passStringToWasm0(privkey_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len0 = WASM_VECTOR_LEN;
-        const ptr1 = passStringToWasm0(msg_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len1 = WASM_VECTOR_LEN;
-        const ptr2 = passStringToWasm0(t_point_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len2 = WASM_VECTOR_LEN;
-        const ret = wasm.adaptorSign(ptr0, len0, ptr1, len1, ptr2, len2);
-        var ptr4 = ret[0];
-        var len4 = ret[1];
-        if (ret[3]) {
-            ptr4 = 0; len4 = 0;
-            throw takeFromExternrefTable0(ret[2]);
-        }
-        deferred5_0 = ptr4;
-        deferred5_1 = len4;
-        return getStringFromWasm0(ptr4, len4);
-    } finally {
-        wasm.__wbindgen_free(deferred5_0, deferred5_1, 1);
-    }
-}
-
-/**
- * `adaptorComplete(presig_hex, t_hex) -> σ` (spec §8).
- *
- * Completes the pre-signature with the coupling secret `t` (64-hex) into a standard
- * 64-byte BIP340 signature (128-hex) that verifies byte-identically under stock
- * `secp256k1` schnorr verification.
- * @param {string} presig_hex
- * @param {string} t_hex
- * @returns {string}
- */
-export function adaptorComplete(presig_hex, t_hex) {
-    let deferred4_0;
-    let deferred4_1;
-    try {
-        const ptr0 = passStringToWasm0(presig_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len0 = WASM_VECTOR_LEN;
-        const ptr1 = passStringToWasm0(t_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len1 = WASM_VECTOR_LEN;
-        const ret = wasm.adaptorComplete(ptr0, len0, ptr1, len1);
-        var ptr3 = ret[0];
-        var len3 = ret[1];
-        if (ret[3]) {
-            ptr3 = 0; len3 = 0;
-            throw takeFromExternrefTable0(ret[2]);
-        }
-        deferred4_0 = ptr3;
-        deferred4_1 = len3;
-        return getStringFromWasm0(ptr3, len3);
-    } finally {
-        wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
-    }
-}
-
-/**
- * `adaptorExtract(sig_hex, presig_hex) -> t` (spec §8).
- *
- * Recovers the coupling secret `t` (64-hex) from the completed signature `σ`
- * (128-hex) and the pre-signature `â` (130-hex) it was completed from.
- * @param {string} sig_hex
- * @param {string} presig_hex
- * @returns {string}
- */
-export function adaptorExtract(sig_hex, presig_hex) {
-    let deferred4_0;
-    let deferred4_1;
-    try {
-        const ptr0 = passStringToWasm0(sig_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len0 = WASM_VECTOR_LEN;
-        const ptr1 = passStringToWasm0(presig_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len1 = WASM_VECTOR_LEN;
-        const ret = wasm.adaptorExtract(ptr0, len0, ptr1, len1);
-        var ptr3 = ret[0];
-        var len3 = ret[1];
-        if (ret[3]) {
-            ptr3 = 0; len3 = 0;
-            throw takeFromExternrefTable0(ret[2]);
-        }
-        deferred4_0 = ptr3;
-        deferred4_1 = len3;
-        return getStringFromWasm0(ptr3, len3);
-    } finally {
-        wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
-    }
-}
-
-/**
- * `adaptorVerify(pubkey_xonly_hex, msg_hex, tPointHex, presig_hex) -> bool` (spec §8).
- *
- * The seller's normative release gate: returns `true` only for a well-formed
- * pre-signature `â` that is valid under the buyer key `P` (64-hex x-only), message
- * `m` (64-hex), and adaptor point `T` (66-hex compressed). Returns `false` for any
- * tampered or malformed input; never throws for a bad `â`.
- * @param {string} pubkey_xonly_hex
- * @param {string} msg_hex
- * @param {string} t_point_hex
- * @param {string} presig_hex
- * @returns {boolean}
- */
-export function adaptorVerify(pubkey_xonly_hex, msg_hex, t_point_hex, presig_hex) {
-    const ptr0 = passStringToWasm0(pubkey_xonly_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ptr1 = passStringToWasm0(msg_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-    const len1 = WASM_VECTOR_LEN;
-    const ptr2 = passStringToWasm0(t_point_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-    const len2 = WASM_VECTOR_LEN;
-    const ptr3 = passStringToWasm0(presig_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-    const len3 = WASM_VECTOR_LEN;
-    const ret = wasm.adaptorVerify(ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3);
-    if (ret[2]) {
-        throw takeFromExternrefTable0(ret[1]);
-    }
-    return ret[0] !== 0;
-}
-
-/**
- * The 32-byte digest (hex) an Arca script verifies for `message`, rebuilt
- * from its fields. Refuses fields a script cannot produce.
- * @param {any} message
- * @returns {string}
- */
-export function csfsDigest(message) {
-    let deferred2_0;
-    let deferred2_1;
-    try {
-        const ret = wasm.csfsDigest(message);
-        var ptr1 = ret[0];
-        var len1 = ret[1];
-        if (ret[3]) {
-            ptr1 = 0; len1 = 0;
-            throw takeFromExternrefTable0(ret[2]);
-        }
-        deferred2_0 = ptr1;
-        deferred2_1 = len1;
-        return getStringFromWasm0(ptr1, len1);
-    } finally {
-        wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
-    }
-}
-
-/**
- * What signing `message` authorises, for the wallet to show before it asks
- * for approval: `{ kind, digest, lines }`, one plain sentence per line.
- * @param {any} message
- * @returns {any}
- */
-export function csfsDescribe(message) {
-    const ret = wasm.csfsDescribe(message);
-    if (ret[2]) {
-        throw takeFromExternrefTable0(ret[1]);
-    }
-    return takeFromExternrefTable0(ret[0]);
-}
-
-/**
- * Assemble, sign, and serialize the covenant FILL transaction in-browser.
- *
- * Takes the JS FILL recipe (see [`CovenantFillRecipeJson`]) merged with the
- * wallet's funding selection and recovery phrase. The covenant input at index 0
- * carries the introspection-only `[leaf, control_block]` witness (NO signature);
- * each taker funding UTXO is re-derived at `m/84'/coin'/0'/chain/index` and signed
- * key-path (p2wpkh, segwit-v0 SIGHASH_ALL). Outputs are explicit and placed in the
- * covenant's fixed order (credit at 0, remainder/gap at 1). Returns
- * `{ rawHex, txid }`.
- * @param {any} recipe
- * @param {Network} network
- * @returns {any}
- */
-export function buildCovenantFillTx(recipe, network) {
-    _assertClass(network, Network);
-    const ret = wasm.buildCovenantFillTx(recipe, network.__wbg_ptr);
-    if (ret[2]) {
-        throw takeFromExternrefTable0(ret[1]);
-    }
-    return takeFromExternrefTable0(ret[0]);
-}
-
-/**
- * Assemble, sign, and serialize the covenant REFUND transaction in-browser.
- *
- * Takes the JS REFUND recipe (see [`CovenantRefundRecipeJson`]) plus the wallet's
- * recovery phrase. Input 0 is the covenant UTXO spent **script-path** via the
- * CLTV REFUND leaf: the tx `nLockTime` is set to `expiryLocktime`, the input's
- * `nSequence` enables locktime, the maker key derived at `makerKeyPath` signs the
- * BIP-341 tapscript sighash, and the witness is
- * `[maker_sig, refund_leaf, control_block]`. When the fee asset differs from the
- * covenant asset, `extraFeeUtxos` (the maker's own p2wpkh coins) fund the fee and
- * are signed key-path. Returns `{ rawHex, txid }`.
- * @param {any} recipe
- * @param {Network} network
- * @returns {any}
- */
-export function buildCovenantRefundTx(recipe, network) {
-    _assertClass(network, Network);
-    const ret = wasm.buildCovenantRefundTx(recipe, network.__wbg_ptr);
-    if (ret[2]) {
-        throw takeFromExternrefTable0(ret[1]);
-    }
-    return takeFromExternrefTable0(ret[0]);
-}
-
-/**
- * Convert a scriptPubKey (hex) to an Elements address for the given network.
- *
- * The maker order flow funds the covenant by paying an address; the covenant spk
- * is derived in JS (`covenant.js`), and this turns it into the address the wallet
- * sends to (`hooks.spkToAddress`). Returns the unblinded (transparent) address.
- * @param {string} spk_hex
- * @param {Network} network
- * @returns {string}
- */
-export function scriptToAddress(spk_hex, network) {
-    let deferred3_0;
-    let deferred3_1;
-    try {
-        const ptr0 = passStringToWasm0(spk_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len0 = WASM_VECTOR_LEN;
-        _assertClass(network, Network);
-        const ret = wasm.scriptToAddress(ptr0, len0, network.__wbg_ptr);
-        var ptr2 = ret[0];
-        var len2 = ret[1];
-        if (ret[3]) {
-            ptr2 = 0; len2 = 0;
-            throw takeFromExternrefTable0(ret[2]);
-        }
-        deferred3_0 = ptr2;
-        deferred3_1 = len2;
-        return getStringFromWasm0(ptr2, len2);
-    } finally {
-        wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
-    }
-}
-
-/**
- * The canonical unbonding output script for a 33-byte hex staker key, as hex.
- * Cross-checked byte-for-byte against the node's `BuildUnbondScript`.
- * @param {string} staker_pubkey
- * @returns {string}
- */
-export function sequentiaUnbondScript(staker_pubkey) {
-    let deferred3_0;
-    let deferred3_1;
-    try {
-        const ptr0 = passStringToWasm0(staker_pubkey, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.sequentiaUnbondScript(ptr0, len0);
-        var ptr2 = ret[0];
-        var len2 = ret[1];
-        if (ret[3]) {
-            ptr2 = 0; len2 = 0;
-            throw takeFromExternrefTable0(ret[2]);
-        }
-        deferred3_0 = ptr2;
-        deferred3_1 = len2;
-        return getStringFromWasm0(ptr2, len2);
-    } finally {
-        wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
-    }
-}
-
-/**
- * The most unbonding may pay in fees out of a stake of `staked_atoms` (a
- * decimal string): 1%, rounded as the node rounds it. Returns a string.
- * @param {string} staked_atoms
- * @returns {string}
- */
-export function unbondFeeCap(staked_atoms) {
-    let deferred3_0;
-    let deferred3_1;
-    try {
-        const ptr0 = passStringToWasm0(staked_atoms, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.unbondFeeCap(ptr0, len0);
-        var ptr2 = ret[0];
-        var len2 = ret[1];
-        if (ret[3]) {
-            ptr2 = 0; len2 = 0;
-            throw takeFromExternrefTable0(ret[2]);
-        }
-        deferred3_0 = ptr2;
-        deferred3_1 = len2;
-        return getStringFromWasm0(ptr2, len2);
-    } finally {
-        wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
-    }
-}
-
-/**
- * Unbonding, step 1: spend the staking outputs into an unbonding output of
- * the same key (vout 0). Returns `{ rawHex, txid, unbondingValue, signing }`.
- * @param {any} recipe
- * @param {Network} network
- * @returns {any}
- */
-export function buildUnbondTx(recipe, network) {
-    _assertClass(network, Network);
-    const ret = wasm.buildUnbondTx(recipe, network.__wbg_ptr);
-    if (ret[2]) {
-        throw takeFromExternrefTable0(ret[1]);
-    }
-    return takeFromExternrefTable0(ret[0]);
-}
-
-/**
- * Unbonding, step 2: send the unbonding outputs to `address`. Returns
- * `{ rawHex, txid, outValue, signing }`.
- * @param {any} recipe
- * @param {Network} network
- * @returns {any}
- */
-export function buildUnbondClaimTx(recipe, network) {
-    _assertClass(network, Network);
-    const ret = wasm.buildUnbondClaimTx(recipe, network.__wbg_ptr);
-    if (ret[2]) {
-        throw takeFromExternrefTable0(ret[1]);
-    }
-    return takeFromExternrefTable0(ret[0]);
-}
-
-function passArrayJsValueToWasm0(array, malloc) {
-    const ptr = malloc(array.length * 4, 4) >>> 0;
-    for (let i = 0; i < array.length; i++) {
-        const add = addToExternrefTable0(array[i]);
-        getDataViewMemory0().setUint32(ptr + 4 * i, add, true);
-    }
-    WASM_VECTOR_LEN = array.length;
-    return ptr;
-}
-/**
- * Generate a fresh 32-byte swap secret `s` and its `H = sha256(s)`.
- *
- * Returns `{ secret_hex, hash_hex }`. The taker hands `hash_hex` (H) to the daemon
- * (BTC-leg lock + `ProposeXchainSwap`) and keeps `secret_hex` (s) to claim the Sequentia
- * leg. Mirrors the Go taker's `rand.Read(secret)` + `sha256.Sum256`.
- * @returns {any}
- */
-export function generateSwapSecret() {
-    const ret = wasm.generateSwapSecret();
-    if (ret[2]) {
-        throw takeFromExternrefTable0(ret[1]);
-    }
-    return takeFromExternrefTable0(ret[0]);
-}
-
-/**
- * Build the Design-A HTLC redeemScript for the Sequentia leg.
- *
- * `hash` is `H` (hex), `claim_pub` / `refund_pub` are 33-byte compressed pubkeys
- * (hex), `locktime` the CLTV value. Returns the redeemScript as hex. Byte-identical
- * to the daemon's `LockScript`, so the browser can independently verify the Sequentia leg
- * the daemon locked.
- * @param {string} hash
- * @param {string} claim_pub
- * @param {string} refund_pub
- * @param {number} locktime
- * @returns {string}
- */
-export function buildSeqHtlcRedeemScript(hash, claim_pub, refund_pub, locktime) {
-    let deferred5_0;
-    let deferred5_1;
-    try {
-        const ptr0 = passStringToWasm0(hash, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len0 = WASM_VECTOR_LEN;
-        const ptr1 = passStringToWasm0(claim_pub, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len1 = WASM_VECTOR_LEN;
-        const ptr2 = passStringToWasm0(refund_pub, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len2 = WASM_VECTOR_LEN;
-        const ret = wasm.buildSeqHtlcRedeemScript(ptr0, len0, ptr1, len1, ptr2, len2, locktime);
-        var ptr4 = ret[0];
-        var len4 = ret[1];
-        if (ret[3]) {
-            ptr4 = 0; len4 = 0;
-            throw takeFromExternrefTable0(ret[2]);
-        }
-        deferred5_0 = ptr4;
-        deferred5_1 = len4;
-        return getStringFromWasm0(ptr4, len4);
-    } finally {
-        wasm.__wbindgen_free(deferred5_0, deferred5_1, 1);
-    }
-}
-
-/**
- * Build the signed Sequentia-leg **claim** (IF/redeem branch) tx, revealing the preimage.
- *
- * - `spend`: `{ txid, vout, amount, asset_id, dest_spk, fee }` of the Sequentia HTLC the
- *   daemon locked (from the `ProposeXchainSwap` accept's `seq_leg`).
- * - `redeem_script`: the HTLC redeemScript hex (from [`buildSeqHtlcRedeemScript`]).
- * - `claim_secret`: the taker's Sequentia-claim private scalar hex (from
- *   [`Signer::htlcKeypair`]).
- * - `preimage`: the 32-byte swap secret `s` hex (from [`generateSwapSecret`]).
- *
- * Returns the signed Elements tx hex for `sendrawtransaction`. Broadcasting it
- * reveals `s` on-chain; the daemon's watcher then extracts `s` and claims the BTC
- * leg (the swap reaches BTC_CLAIMED).
- * @param {any} spend
- * @param {string} redeem_script
- * @param {string} claim_secret
- * @param {string} preimage
- * @returns {string}
- */
-export function buildSeqHtlcClaimTx(spend, redeem_script, claim_secret, preimage) {
-    let deferred5_0;
-    let deferred5_1;
-    try {
-        const ptr0 = passStringToWasm0(redeem_script, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len0 = WASM_VECTOR_LEN;
-        const ptr1 = passStringToWasm0(claim_secret, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len1 = WASM_VECTOR_LEN;
-        const ptr2 = passStringToWasm0(preimage, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len2 = WASM_VECTOR_LEN;
-        const ret = wasm.buildSeqHtlcClaimTx(spend, ptr0, len0, ptr1, len1, ptr2, len2);
-        var ptr4 = ret[0];
-        var len4 = ret[1];
-        if (ret[3]) {
-            ptr4 = 0; len4 = 0;
-            throw takeFromExternrefTable0(ret[2]);
-        }
-        deferred5_0 = ptr4;
-        deferred5_1 = len4;
-        return getStringFromWasm0(ptr4, len4);
-    } finally {
-        wasm.__wbindgen_free(deferred5_0, deferred5_1, 1);
-    }
-}
-
-/**
- * Build the signed Sequentia-leg **refund** (ELSE/CLTV branch) tx, valid once nLockTime
- * reaches `locktime`.
- *
- * `refund_secret` is the scalar (hex) of the refund key embedded in the script.
- * Built for symmetry/completeness; in the MVP the Sequentia refund is the maker's.
- * @param {any} spend
- * @param {string} redeem_script
- * @param {string} refund_secret
- * @param {number} locktime
- * @returns {string}
- */
-export function buildSeqHtlcRefundTx(spend, redeem_script, refund_secret, locktime) {
-    let deferred4_0;
-    let deferred4_1;
-    try {
-        const ptr0 = passStringToWasm0(redeem_script, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len0 = WASM_VECTOR_LEN;
-        const ptr1 = passStringToWasm0(refund_secret, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len1 = WASM_VECTOR_LEN;
-        const ret = wasm.buildSeqHtlcRefundTx(spend, ptr0, len0, ptr1, len1, locktime);
-        var ptr3 = ret[0];
-        var len3 = ret[1];
-        if (ret[3]) {
-            ptr3 = 0; len3 = 0;
-            throw takeFromExternrefTable0(ret[2]);
-        }
-        deferred4_0 = ptr3;
-        deferred4_1 = len3;
-        return getStringFromWasm0(ptr3, len3);
-    } finally {
-        wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
-    }
-}
-
-/**
- * Unblind the outputs of a CoinJoin round transaction that belong to this wallet.
- *
- * This is the participant's ONLY way to answer the question that decides whether to sign: does this
- * transaction actually pay me what the round owed me? The coordinator built and blinded it, so its
- * word for the amounts is worth nothing; the wallet's own SLIP-77 blinding key is what settles it.
- *
- * An output is "mine" exactly when it unblinds under the blinding key this descriptor derives for
- * that scriptPubKey — which is true precisely for the addresses this wallet handed out. Outputs
- * belonging to other participants stay opaque here, as they must.
- * @param {string} tx_hex
- * @param {WolletDescriptor} descriptor
- * @returns {any}
- */
-export function coinjoinUnblindOutputs(tx_hex, descriptor) {
-    const ptr0 = passStringToWasm0(tx_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-    const len0 = WASM_VECTOR_LEN;
-    _assertClass(descriptor, WolletDescriptor);
-    const ret = wasm.coinjoinUnblindOutputs(ptr0, len0, descriptor.__wbg_ptr);
-    if (ret[2]) {
-        throw takeFromExternrefTable0(ret[1]);
-    }
-    return takeFromExternrefTable0(ret[0]);
-}
-
-/**
- * Sign the participant's own inputs of a CoinJoin round transaction.
- *
- * `request`:
- * ```js
- * { txHex, mnemonic, inputs: [{ txid, vout, value: "1000000000", spkHex, chain, index }] }
- * ```
- * Returns the transaction hex with witnesses attached for those inputs only. Inputs are matched by
- * outpoint, so the coordinator's shuffling of the round cannot make the wallet sign a coin it did
- * not mean to.
- * @param {any} request
- * @param {Network} network
- * @returns {string}
- */
-export function coinjoinSignInputs(request, network) {
-    let deferred2_0;
-    let deferred2_1;
-    try {
-        _assertClass(network, Network);
-        const ret = wasm.coinjoinSignInputs(request, network.__wbg_ptr);
-        var ptr1 = ret[0];
-        var len1 = ret[1];
-        if (ret[3]) {
-            ptr1 = 0; len1 = 0;
-            throw takeFromExternrefTable0(ret[2]);
-        }
-        deferred2_0 = ptr1;
-        deferred2_1 = len1;
-        return getStringFromWasm0(ptr1, len1);
-    } finally {
-        wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
-    }
-}
-
-/**
- * Build the canonical Sequentia delegation-record script for a 33-byte hex
- * controller and signer; returns the scriptPubKey as hex. Cross-checked
- * byte-for-byte against the node's `getdelegationscript`, and pinned by a
- * shared test vector on both sides.
- * @param {string} controller
- * @param {string} signer
- * @returns {string}
- */
-export function sequentiaDelegationScript(controller, signer) {
-    let deferred4_0;
-    let deferred4_1;
-    try {
-        const ptr0 = passStringToWasm0(controller, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len0 = WASM_VECTOR_LEN;
-        const ptr1 = passStringToWasm0(signer, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len1 = WASM_VECTOR_LEN;
-        const ret = wasm.sequentiaDelegationScript(ptr0, len0, ptr1, len1);
-        var ptr3 = ret[0];
-        var len3 = ret[1];
-        if (ret[3]) {
-            ptr3 = 0; len3 = 0;
-            throw takeFromExternrefTable0(ret[2]);
-        }
-        deferred4_0 = ptr3;
-        deferred4_1 = len3;
-        return getStringFromWasm0(ptr3, len3);
-    } finally {
-        wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
-    }
-}
-
-/**
- * Read a delegation record back out of a scriptPubKey hex, returning
- * `{ controller, signer }`, or `null` if the script is not one.
- *
- * This is how a wallet finds a delegation it has no local note of, which is the
- * case that matters: restore a seed on a new device and the record is still
- * out there lending your weight to a pool. Scanning the wallet's own history
- * for a script this recognises needs no index, no extra service and no pool
- * list, because the transaction that funded the record spent this wallet's
- * coins and is therefore in its history.
- * @param {string} script_hex
- * @returns {any}
- */
-export function parseDelegationScript(script_hex) {
-    const ptr0 = passStringToWasm0(script_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.parseDelegationScript(ptr0, len0);
-    if (ret[2]) {
-        throw takeFromExternrefTable0(ret[1]);
-    }
-    return takeFromExternrefTable0(ret[0]);
-}
-
-/**
- * Every delegation record in `tx_hex` naming `controller` as its controller,
- * as `[{ vout, signer, value }]`.
- *
- * This is how a wallet finds a delegation it has no local note of, which is
- * the case that matters: restore a seed on another device and the record is
- * still out there lending your weight to a pool. The wallet does not hold the
- * record as one of its own coins (a bare script matches no descriptor), but
- * the transaction that FUNDED it spent this wallet's coins and is therefore in
- * its history, so scanning that history finds it with no index, no pool list
- * and no stored state. Whether it is still unspent is a separate question only
- * the explorer can answer, because a transaction spending a bare script need
- * not touch this wallet at all.
- * @param {string} tx_hex
- * @param {string} controller
- * @returns {any}
- */
-export function findDelegationRecords(tx_hex, controller) {
-    const ptr0 = passStringToWasm0(tx_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ptr1 = passStringToWasm0(controller, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-    const len1 = WASM_VECTOR_LEN;
-    const ret = wasm.findDelegationRecords(ptr0, len0, ptr1, len1);
-    if (ret[2]) {
-        throw takeFromExternrefTable0(ret[1]);
-    }
-    return takeFromExternrefTable0(ret[0]);
-}
-
-/**
- * Build and sign the spend of a delegation record. Returns
- * `{ rawHex, txid, outValue, repointed, signing }`.
- * @param {any} recipe
- * @param {Network} network
- * @returns {any}
- */
-export function buildDelegationSpendTx(recipe, network) {
-    _assertClass(network, Network);
-    const ret = wasm.buildDelegationSpendTx(recipe, network.__wbg_ptr);
-    if (ret[2]) {
-        throw takeFromExternrefTable0(ret[1]);
-    }
-    return takeFromExternrefTable0(ret[0]);
-}
-
-/**
- * Build and sign the transaction that creates a delegation record, funded by
- * a coin of the wallet's staking key and nothing else. Returns
- * `{ rawHex, txid, recordValue, changeValue }`.
- *
- * Broadcast it right after the transaction holding the coin; it may spend
- * that coin unconfirmed, and the two are mined together.
- * @param {any} recipe
- * @param {Network} network
- * @returns {any}
- */
-export function buildDelegationCreateTx(recipe, network) {
-    _assertClass(network, Network);
-    const ret = wasm.buildDelegationCreateTx(recipe, network.__wbg_ptr);
-    if (ret[2]) {
-        throw takeFromExternrefTable0(ret[1]);
-    }
-    return takeFromExternrefTable0(ret[0]);
-}
-
-/**
- * The signature a stake record spend built against `tipHeight` needs in the
- * next block: `"legacy"` or `"segwitV0"`. `recordsV2Height` overrides the
- * network's fork height (163,000 on the testnet, 1 elsewhere) for a custom
- * chain started with `-posrecordsv2height`.
- * @param {Network} network
- * @param {number} tip_height
- * @param {number | null} [records_v2_height]
- * @returns {string}
- */
-export function stakeRecordSigning(network, tip_height, records_v2_height) {
-    let deferred1_0;
-    let deferred1_1;
-    try {
-        _assertClass(network, Network);
-        const ret = wasm.stakeRecordSigning(network.__wbg_ptr, tip_height, isLikeNone(records_v2_height) ? 0x100000001 : (records_v2_height) >>> 0);
-        deferred1_0 = ret[0];
-        deferred1_1 = ret[1];
-        return getStringFromWasm0(ret[0], ret[1]);
-    } finally {
-        wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
-    }
-}
-
-let cachedUint32ArrayMemory0 = null;
-
-function getUint32ArrayMemory0() {
-    if (cachedUint32ArrayMemory0 === null || cachedUint32ArrayMemory0.byteLength === 0) {
-        cachedUint32ArrayMemory0 = new Uint32Array(wasm.memory.buffer);
-    }
-    return cachedUint32ArrayMemory0;
-}
-
-function getArrayU32FromWasm0(ptr, len) {
-    ptr = ptr >>> 0;
-    return getUint32ArrayMemory0().subarray(ptr / 4, ptr / 4 + len);
-}
 /**
  * `{ secretHex, hashHex }` — a fresh preimage + its hashlock. Persist (sealed)
  * before any money moves; the secret is non-HD and gates the BTC claim.
@@ -1434,24 +728,385 @@ export function sequentiaStakeScript(staker_pubkey, csv) {
     }
 }
 
+function passArrayJsValueToWasm0(array, malloc) {
+    const ptr = malloc(array.length * 4, 4) >>> 0;
+    for (let i = 0; i < array.length; i++) {
+        const add = addToExternrefTable0(array[i]);
+        getDataViewMemory0().setUint32(ptr + 4 * i, add, true);
+    }
+    WASM_VECTOR_LEN = array.length;
+    return ptr;
+}
 /**
- * Convert the given string to a QR code image uri
+ * `adaptorSign(privkey_hex, msg_hex, tPointHex) -> â` (spec §8).
  *
- * The image format is monocromatic bitmap, returned as an encoded in base64 uri.
+ * - `privkey_hex`: the signer secret `d`, 64-hex (BIP340-normalized internally).
+ * - `msg_hex`: the 32-byte sighash the pre-signature commits to, 64-hex.
+ * - `t_point_hex`: the adaptor point `T = t·G`, 66-hex COMPRESSED sec1.
  *
- * Without `pixel_per_module` the default is no border, and 1 pixel per module, to be used
- * for example in html: `style="image-rendering: pixelated; border: 20px solid white;"`
- * @param {string} str
- * @param {number | null} [pixel_per_module]
+ * Returns the 65-byte pre-signature `â` (130-hex) `= compressed(R+T) || ŝ`.
+ * Deterministic for fixed inputs (spec 0.4(4)).
+ * @param {string} privkey_hex
+ * @param {string} msg_hex
+ * @param {string} t_point_hex
  * @returns {string}
  */
-export function stringToQr(str, pixel_per_module) {
+export function adaptorSign(privkey_hex, msg_hex, t_point_hex) {
+    let deferred5_0;
+    let deferred5_1;
+    try {
+        const ptr0 = passStringToWasm0(privkey_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(msg_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passStringToWasm0(t_point_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len2 = WASM_VECTOR_LEN;
+        const ret = wasm.adaptorSign(ptr0, len0, ptr1, len1, ptr2, len2);
+        var ptr4 = ret[0];
+        var len4 = ret[1];
+        if (ret[3]) {
+            ptr4 = 0; len4 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred5_0 = ptr4;
+        deferred5_1 = len4;
+        return getStringFromWasm0(ptr4, len4);
+    } finally {
+        wasm.__wbindgen_free(deferred5_0, deferred5_1, 1);
+    }
+}
+
+/**
+ * `adaptorComplete(presig_hex, t_hex) -> σ` (spec §8).
+ *
+ * Completes the pre-signature with the coupling secret `t` (64-hex) into a standard
+ * 64-byte BIP340 signature (128-hex) that verifies byte-identically under stock
+ * `secp256k1` schnorr verification.
+ * @param {string} presig_hex
+ * @param {string} t_hex
+ * @returns {string}
+ */
+export function adaptorComplete(presig_hex, t_hex) {
+    let deferred4_0;
+    let deferred4_1;
+    try {
+        const ptr0 = passStringToWasm0(presig_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(t_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.adaptorComplete(ptr0, len0, ptr1, len1);
+        var ptr3 = ret[0];
+        var len3 = ret[1];
+        if (ret[3]) {
+            ptr3 = 0; len3 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred4_0 = ptr3;
+        deferred4_1 = len3;
+        return getStringFromWasm0(ptr3, len3);
+    } finally {
+        wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
+    }
+}
+
+/**
+ * `adaptorExtract(sig_hex, presig_hex) -> t` (spec §8).
+ *
+ * Recovers the coupling secret `t` (64-hex) from the completed signature `σ`
+ * (128-hex) and the pre-signature `â` (130-hex) it was completed from.
+ * @param {string} sig_hex
+ * @param {string} presig_hex
+ * @returns {string}
+ */
+export function adaptorExtract(sig_hex, presig_hex) {
+    let deferred4_0;
+    let deferred4_1;
+    try {
+        const ptr0 = passStringToWasm0(sig_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(presig_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.adaptorExtract(ptr0, len0, ptr1, len1);
+        var ptr3 = ret[0];
+        var len3 = ret[1];
+        if (ret[3]) {
+            ptr3 = 0; len3 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred4_0 = ptr3;
+        deferred4_1 = len3;
+        return getStringFromWasm0(ptr3, len3);
+    } finally {
+        wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
+    }
+}
+
+/**
+ * `adaptorVerify(pubkey_xonly_hex, msg_hex, tPointHex, presig_hex) -> bool` (spec §8).
+ *
+ * The seller's normative release gate: returns `true` only for a well-formed
+ * pre-signature `â` that is valid under the buyer key `P` (64-hex x-only), message
+ * `m` (64-hex), and adaptor point `T` (66-hex compressed). Returns `false` for any
+ * tampered or malformed input; never throws for a bad `â`.
+ * @param {string} pubkey_xonly_hex
+ * @param {string} msg_hex
+ * @param {string} t_point_hex
+ * @param {string} presig_hex
+ * @returns {boolean}
+ */
+export function adaptorVerify(pubkey_xonly_hex, msg_hex, t_point_hex, presig_hex) {
+    const ptr0 = passStringToWasm0(pubkey_xonly_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passStringToWasm0(msg_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ptr2 = passStringToWasm0(t_point_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len2 = WASM_VECTOR_LEN;
+    const ptr3 = passStringToWasm0(presig_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len3 = WASM_VECTOR_LEN;
+    const ret = wasm.adaptorVerify(ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return ret[0] !== 0;
+}
+
+/**
+ * The 32-byte digest (hex) an Arca script verifies for `message`, rebuilt
+ * from its fields. Refuses fields a script cannot produce.
+ * @param {any} message
+ * @returns {string}
+ */
+export function csfsDigest(message) {
+    let deferred2_0;
+    let deferred2_1;
+    try {
+        const ret = wasm.csfsDigest(message);
+        var ptr1 = ret[0];
+        var len1 = ret[1];
+        if (ret[3]) {
+            ptr1 = 0; len1 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred2_0 = ptr1;
+        deferred2_1 = len1;
+        return getStringFromWasm0(ptr1, len1);
+    } finally {
+        wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+    }
+}
+
+/**
+ * What signing `message` authorises, for the wallet to show before it asks
+ * for approval: `{ kind, digest, lines }`, one plain sentence per line.
+ * @param {any} message
+ * @returns {any}
+ */
+export function csfsDescribe(message) {
+    const ret = wasm.csfsDescribe(message);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+
+/**
+ * Generate a fresh 32-byte swap secret `s` and its `H = sha256(s)`.
+ *
+ * Returns `{ secret_hex, hash_hex }`. The taker hands `hash_hex` (H) to the daemon
+ * (BTC-leg lock + `ProposeXchainSwap`) and keeps `secret_hex` (s) to claim the Sequentia
+ * leg. Mirrors the Go taker's `rand.Read(secret)` + `sha256.Sum256`.
+ * @returns {any}
+ */
+export function generateSwapSecret() {
+    const ret = wasm.generateSwapSecret();
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+
+/**
+ * Build the Design-A HTLC redeemScript for the Sequentia leg.
+ *
+ * `hash` is `H` (hex), `claim_pub` / `refund_pub` are 33-byte compressed pubkeys
+ * (hex), `locktime` the CLTV value. Returns the redeemScript as hex. Byte-identical
+ * to the daemon's `LockScript`, so the browser can independently verify the Sequentia leg
+ * the daemon locked.
+ * @param {string} hash
+ * @param {string} claim_pub
+ * @param {string} refund_pub
+ * @param {number} locktime
+ * @returns {string}
+ */
+export function buildSeqHtlcRedeemScript(hash, claim_pub, refund_pub, locktime) {
+    let deferred5_0;
+    let deferred5_1;
+    try {
+        const ptr0 = passStringToWasm0(hash, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(claim_pub, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passStringToWasm0(refund_pub, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len2 = WASM_VECTOR_LEN;
+        const ret = wasm.buildSeqHtlcRedeemScript(ptr0, len0, ptr1, len1, ptr2, len2, locktime);
+        var ptr4 = ret[0];
+        var len4 = ret[1];
+        if (ret[3]) {
+            ptr4 = 0; len4 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred5_0 = ptr4;
+        deferred5_1 = len4;
+        return getStringFromWasm0(ptr4, len4);
+    } finally {
+        wasm.__wbindgen_free(deferred5_0, deferred5_1, 1);
+    }
+}
+
+/**
+ * Build the signed Sequentia-leg **claim** (IF/redeem branch) tx, revealing the preimage.
+ *
+ * - `spend`: `{ txid, vout, amount, asset_id, dest_spk, fee }` of the Sequentia HTLC the
+ *   daemon locked (from the `ProposeXchainSwap` accept's `seq_leg`).
+ * - `redeem_script`: the HTLC redeemScript hex (from [`buildSeqHtlcRedeemScript`]).
+ * - `claim_secret`: the taker's Sequentia-claim private scalar hex (from
+ *   [`Signer::htlcKeypair`]).
+ * - `preimage`: the 32-byte swap secret `s` hex (from [`generateSwapSecret`]).
+ *
+ * Returns the signed Elements tx hex for `sendrawtransaction`. Broadcasting it
+ * reveals `s` on-chain; the daemon's watcher then extracts `s` and claims the BTC
+ * leg (the swap reaches BTC_CLAIMED).
+ * @param {any} spend
+ * @param {string} redeem_script
+ * @param {string} claim_secret
+ * @param {string} preimage
+ * @returns {string}
+ */
+export function buildSeqHtlcClaimTx(spend, redeem_script, claim_secret, preimage) {
+    let deferred5_0;
+    let deferred5_1;
+    try {
+        const ptr0 = passStringToWasm0(redeem_script, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(claim_secret, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passStringToWasm0(preimage, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len2 = WASM_VECTOR_LEN;
+        const ret = wasm.buildSeqHtlcClaimTx(spend, ptr0, len0, ptr1, len1, ptr2, len2);
+        var ptr4 = ret[0];
+        var len4 = ret[1];
+        if (ret[3]) {
+            ptr4 = 0; len4 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred5_0 = ptr4;
+        deferred5_1 = len4;
+        return getStringFromWasm0(ptr4, len4);
+    } finally {
+        wasm.__wbindgen_free(deferred5_0, deferred5_1, 1);
+    }
+}
+
+/**
+ * Build the signed Sequentia-leg **refund** (ELSE/CLTV branch) tx, valid once nLockTime
+ * reaches `locktime`.
+ *
+ * `refund_secret` is the scalar (hex) of the refund key embedded in the script.
+ * Built for symmetry/completeness; in the MVP the Sequentia refund is the maker's.
+ * @param {any} spend
+ * @param {string} redeem_script
+ * @param {string} refund_secret
+ * @param {number} locktime
+ * @returns {string}
+ */
+export function buildSeqHtlcRefundTx(spend, redeem_script, refund_secret, locktime) {
+    let deferred4_0;
+    let deferred4_1;
+    try {
+        const ptr0 = passStringToWasm0(redeem_script, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(refund_secret, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.buildSeqHtlcRefundTx(spend, ptr0, len0, ptr1, len1, locktime);
+        var ptr3 = ret[0];
+        var len3 = ret[1];
+        if (ret[3]) {
+            ptr3 = 0; len3 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred4_0 = ptr3;
+        deferred4_1 = len3;
+        return getStringFromWasm0(ptr3, len3);
+    } finally {
+        wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
+    }
+}
+
+/**
+ * Assemble, sign, and serialize the covenant FILL transaction in-browser.
+ *
+ * Takes the JS FILL recipe (see [`CovenantFillRecipeJson`]) merged with the
+ * wallet's funding selection and recovery phrase. The covenant input at index 0
+ * carries the introspection-only `[leaf, control_block]` witness (NO signature);
+ * each taker funding UTXO is re-derived at `m/84'/coin'/0'/chain/index` and signed
+ * key-path (p2wpkh, segwit-v0 SIGHASH_ALL). Outputs are explicit and placed in the
+ * covenant's fixed order (credit at 0, remainder/gap at 1). Returns
+ * `{ rawHex, txid }`.
+ * @param {any} recipe
+ * @param {Network} network
+ * @returns {any}
+ */
+export function buildCovenantFillTx(recipe, network) {
+    _assertClass(network, Network);
+    const ret = wasm.buildCovenantFillTx(recipe, network.__wbg_ptr);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+
+/**
+ * Assemble, sign, and serialize the covenant REFUND transaction in-browser.
+ *
+ * Takes the JS REFUND recipe (see [`CovenantRefundRecipeJson`]) plus the wallet's
+ * recovery phrase. Input 0 is the covenant UTXO spent **script-path** via the
+ * CLTV REFUND leaf: the tx `nLockTime` is set to `expiryLocktime`, the input's
+ * `nSequence` enables locktime, the maker key derived at `makerKeyPath` signs the
+ * BIP-341 tapscript sighash, and the witness is
+ * `[maker_sig, refund_leaf, control_block]`. When the fee asset differs from the
+ * covenant asset, `extraFeeUtxos` (the maker's own p2wpkh coins) fund the fee and
+ * are signed key-path. Returns `{ rawHex, txid }`.
+ * @param {any} recipe
+ * @param {Network} network
+ * @returns {any}
+ */
+export function buildCovenantRefundTx(recipe, network) {
+    _assertClass(network, Network);
+    const ret = wasm.buildCovenantRefundTx(recipe, network.__wbg_ptr);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+
+/**
+ * Convert a scriptPubKey (hex) to an Elements address for the given network.
+ *
+ * The maker order flow funds the covenant by paying an address; the covenant spk
+ * is derived in JS (`covenant.js`), and this turns it into the address the wallet
+ * sends to (`hooks.spkToAddress`). Returns the unblinded (transparent) address.
+ * @param {string} spk_hex
+ * @param {Network} network
+ * @returns {string}
+ */
+export function scriptToAddress(spk_hex, network) {
     let deferred3_0;
     let deferred3_1;
     try {
-        const ptr0 = passStringToWasm0(str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const ptr0 = passStringToWasm0(spk_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.stringToQr(ptr0, len0, isLikeNone(pixel_per_module) ? 0xFFFFFF : pixel_per_module);
+        _assertClass(network, Network);
+        const ret = wasm.scriptToAddress(ptr0, len0, network.__wbg_ptr);
         var ptr2 = ret[0];
         var len2 = ret[1];
         if (ret[3]) {
@@ -1464,6 +1119,92 @@ export function stringToQr(str, pixel_per_module) {
     } finally {
         wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
     }
+}
+
+/**
+ * The canonical unbonding output script for a 33-byte hex staker key, as hex.
+ * Cross-checked byte-for-byte against the node's `BuildUnbondScript`.
+ * @param {string} staker_pubkey
+ * @returns {string}
+ */
+export function sequentiaUnbondScript(staker_pubkey) {
+    let deferred3_0;
+    let deferred3_1;
+    try {
+        const ptr0 = passStringToWasm0(staker_pubkey, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.sequentiaUnbondScript(ptr0, len0);
+        var ptr2 = ret[0];
+        var len2 = ret[1];
+        if (ret[3]) {
+            ptr2 = 0; len2 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred3_0 = ptr2;
+        deferred3_1 = len2;
+        return getStringFromWasm0(ptr2, len2);
+    } finally {
+        wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+    }
+}
+
+/**
+ * The most unbonding may pay in fees out of a stake of `staked_atoms` (a
+ * decimal string): 1%, rounded as the node rounds it. Returns a string.
+ * @param {string} staked_atoms
+ * @returns {string}
+ */
+export function unbondFeeCap(staked_atoms) {
+    let deferred3_0;
+    let deferred3_1;
+    try {
+        const ptr0 = passStringToWasm0(staked_atoms, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.unbondFeeCap(ptr0, len0);
+        var ptr2 = ret[0];
+        var len2 = ret[1];
+        if (ret[3]) {
+            ptr2 = 0; len2 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred3_0 = ptr2;
+        deferred3_1 = len2;
+        return getStringFromWasm0(ptr2, len2);
+    } finally {
+        wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+    }
+}
+
+/**
+ * Unbonding, step 1: spend the staking outputs into an unbonding output of
+ * the same key (vout 0). Returns `{ rawHex, txid, unbondingValue, signing }`.
+ * @param {any} recipe
+ * @param {Network} network
+ * @returns {any}
+ */
+export function buildUnbondTx(recipe, network) {
+    _assertClass(network, Network);
+    const ret = wasm.buildUnbondTx(recipe, network.__wbg_ptr);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+
+/**
+ * Unbonding, step 2: send the unbonding outputs to `address`. Returns
+ * `{ rawHex, txid, outValue, signing }`.
+ * @param {any} recipe
+ * @param {Network} network
+ * @returns {any}
+ */
+export function buildUnbondClaimTx(recipe, network) {
+    _assertClass(network, Network);
+    const ret = wasm.buildUnbondClaimTx(recipe, network.__wbg_ptr);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
 }
 
 /**
@@ -1534,6 +1275,16 @@ export function arkParseRecord(record) {
     return takeFromExternrefTable0(ret[0]);
 }
 
+function getArrayJsValueFromWasm0(ptr, len) {
+    ptr = ptr >>> 0;
+    const mem = getDataViewMemory0();
+    const result = [];
+    for (let i = ptr; i < ptr + 4 * len; i += 4) {
+        result.push(wasm.__wbindgen_export_4.get(mem.getUint32(i, true)));
+    }
+    wasm.__externref_drop_slice(ptr, len);
+    return result;
+}
 /**
  * Compute the OpenAMP AID locally from a set of 64-hex x-only pubkeys (spec 0.2),
  * identical to Go `store.AID`. Wallets MUST call this and assert equality with the
@@ -1749,24 +1500,272 @@ export function tapscriptDescribe(tx_hex, input_index, prevouts_hex, leaf_script
     return v6;
 }
 
-function __wbg_adapter_10(arg0, arg1, arg2) {
-    wasm.closure2127_externref_shim(arg0, arg1, arg2);
+/**
+ * Unblind the outputs of a CoinJoin round transaction that belong to this wallet.
+ *
+ * This is the participant's ONLY way to answer the question that decides whether to sign: does this
+ * transaction actually pay me what the round owed me? The coordinator built and blinded it, so its
+ * word for the amounts is worth nothing; the wallet's own SLIP-77 blinding key is what settles it.
+ *
+ * An output is "mine" exactly when it unblinds under the blinding key this descriptor derives for
+ * that scriptPubKey — which is true precisely for the addresses this wallet handed out. Outputs
+ * belonging to other participants stay opaque here, as they must.
+ * @param {string} tx_hex
+ * @param {WolletDescriptor} descriptor
+ * @returns {any}
+ */
+export function coinjoinUnblindOutputs(tx_hex, descriptor) {
+    const ptr0 = passStringToWasm0(tx_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    _assertClass(descriptor, WolletDescriptor);
+    const ret = wasm.coinjoinUnblindOutputs(ptr0, len0, descriptor.__wbg_ptr);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
 }
 
-function __wbg_adapter_13(arg0, arg1, arg2) {
-    wasm.closure2872_externref_shim(arg0, arg1, arg2);
+/**
+ * Sign the participant's own inputs of a CoinJoin round transaction.
+ *
+ * `request`:
+ * ```js
+ * { txHex, mnemonic, inputs: [{ txid, vout, value: "1000000000", spkHex, chain, index }] }
+ * ```
+ * Returns the transaction hex with witnesses attached for those inputs only. Inputs are matched by
+ * outpoint, so the coordinator's shuffling of the round cannot make the wallet sign a coin it did
+ * not mean to.
+ * @param {any} request
+ * @param {Network} network
+ * @returns {string}
+ */
+export function coinjoinSignInputs(request, network) {
+    let deferred2_0;
+    let deferred2_1;
+    try {
+        _assertClass(network, Network);
+        const ret = wasm.coinjoinSignInputs(request, network.__wbg_ptr);
+        var ptr1 = ret[0];
+        var len1 = ret[1];
+        if (ret[3]) {
+            ptr1 = 0; len1 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred2_0 = ptr1;
+        deferred2_1 = len1;
+        return getStringFromWasm0(ptr1, len1);
+    } finally {
+        wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+    }
 }
 
-function __wbg_adapter_16(arg0, arg1) {
+/**
+ * Build the canonical Sequentia delegation-record script for a 33-byte hex
+ * controller and signer; returns the scriptPubKey as hex. Cross-checked
+ * byte-for-byte against the node's `getdelegationscript`, and pinned by a
+ * shared test vector on both sides.
+ * @param {string} controller
+ * @param {string} signer
+ * @returns {string}
+ */
+export function sequentiaDelegationScript(controller, signer) {
+    let deferred4_0;
+    let deferred4_1;
+    try {
+        const ptr0 = passStringToWasm0(controller, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(signer, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.sequentiaDelegationScript(ptr0, len0, ptr1, len1);
+        var ptr3 = ret[0];
+        var len3 = ret[1];
+        if (ret[3]) {
+            ptr3 = 0; len3 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred4_0 = ptr3;
+        deferred4_1 = len3;
+        return getStringFromWasm0(ptr3, len3);
+    } finally {
+        wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
+    }
+}
+
+/**
+ * Read a delegation record back out of a scriptPubKey hex, returning
+ * `{ controller, signer }`, or `null` if the script is not one.
+ *
+ * This is how a wallet finds a delegation it has no local note of, which is the
+ * case that matters: restore a seed on a new device and the record is still
+ * out there lending your weight to a pool. Scanning the wallet's own history
+ * for a script this recognises needs no index, no extra service and no pool
+ * list, because the transaction that funded the record spent this wallet's
+ * coins and is therefore in its history.
+ * @param {string} script_hex
+ * @returns {any}
+ */
+export function parseDelegationScript(script_hex) {
+    const ptr0 = passStringToWasm0(script_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.parseDelegationScript(ptr0, len0);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+
+/**
+ * Every delegation record in `tx_hex` naming `controller` as its controller,
+ * as `[{ vout, signer, value }]`.
+ *
+ * This is how a wallet finds a delegation it has no local note of, which is
+ * the case that matters: restore a seed on another device and the record is
+ * still out there lending your weight to a pool. The wallet does not hold the
+ * record as one of its own coins (a bare script matches no descriptor), but
+ * the transaction that FUNDED it spent this wallet's coins and is therefore in
+ * its history, so scanning that history finds it with no index, no pool list
+ * and no stored state. Whether it is still unspent is a separate question only
+ * the explorer can answer, because a transaction spending a bare script need
+ * not touch this wallet at all.
+ * @param {string} tx_hex
+ * @param {string} controller
+ * @returns {any}
+ */
+export function findDelegationRecords(tx_hex, controller) {
+    const ptr0 = passStringToWasm0(tx_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passStringToWasm0(controller, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ret = wasm.findDelegationRecords(ptr0, len0, ptr1, len1);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+
+/**
+ * Build and sign the spend of a delegation record. Returns
+ * `{ rawHex, txid, outValue, repointed, signing }`.
+ * @param {any} recipe
+ * @param {Network} network
+ * @returns {any}
+ */
+export function buildDelegationSpendTx(recipe, network) {
+    _assertClass(network, Network);
+    const ret = wasm.buildDelegationSpendTx(recipe, network.__wbg_ptr);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+
+/**
+ * Build and sign the transaction that creates a delegation record, funded by
+ * a coin of the wallet's staking key and nothing else. Returns
+ * `{ rawHex, txid, recordValue, changeValue }`.
+ *
+ * Broadcast it right after the transaction holding the coin; it may spend
+ * that coin unconfirmed, and the two are mined together.
+ * @param {any} recipe
+ * @param {Network} network
+ * @returns {any}
+ */
+export function buildDelegationCreateTx(recipe, network) {
+    _assertClass(network, Network);
+    const ret = wasm.buildDelegationCreateTx(recipe, network.__wbg_ptr);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+
+/**
+ * The signature a stake record spend built against `tipHeight` needs in the
+ * next block: `"legacy"` or `"segwitV0"`. `recordsV2Height` overrides the
+ * network's fork height (163,000 on the testnet, 1 elsewhere) for a custom
+ * chain started with `-posrecordsv2height`.
+ * @param {Network} network
+ * @param {number} tip_height
+ * @param {number | null} [records_v2_height]
+ * @returns {string}
+ */
+export function stakeRecordSigning(network, tip_height, records_v2_height) {
+    let deferred1_0;
+    let deferred1_1;
+    try {
+        _assertClass(network, Network);
+        const ret = wasm.stakeRecordSigning(network.__wbg_ptr, tip_height, isLikeNone(records_v2_height) ? 0x100000001 : (records_v2_height) >>> 0);
+        deferred1_0 = ret[0];
+        deferred1_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+    }
+}
+
+let cachedUint32ArrayMemory0 = null;
+
+function getUint32ArrayMemory0() {
+    if (cachedUint32ArrayMemory0 === null || cachedUint32ArrayMemory0.byteLength === 0) {
+        cachedUint32ArrayMemory0 = new Uint32Array(wasm.memory.buffer);
+    }
+    return cachedUint32ArrayMemory0;
+}
+
+function getArrayU32FromWasm0(ptr, len) {
+    ptr = ptr >>> 0;
+    return getUint32ArrayMemory0().subarray(ptr / 4, ptr / 4 + len);
+}
+/**
+ * Convert the given string to a QR code image uri
+ *
+ * The image format is monocromatic bitmap, returned as an encoded in base64 uri.
+ *
+ * Without `pixel_per_module` the default is no border, and 1 pixel per module, to be used
+ * for example in html: `style="image-rendering: pixelated; border: 20px solid white;"`
+ * @param {string} str
+ * @param {number | null} [pixel_per_module]
+ * @returns {string}
+ */
+export function stringToQr(str, pixel_per_module) {
+    let deferred3_0;
+    let deferred3_1;
+    try {
+        const ptr0 = passStringToWasm0(str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.stringToQr(ptr0, len0, isLikeNone(pixel_per_module) ? 0xFFFFFF : pixel_per_module);
+        var ptr2 = ret[0];
+        var len2 = ret[1];
+        if (ret[3]) {
+            ptr2 = 0; len2 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred3_0 = ptr2;
+        deferred3_1 = len2;
+        return getStringFromWasm0(ptr2, len2);
+    } finally {
+        wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+    }
+}
+
+function __wbg_adapter_6(arg0, arg1) {
     wasm.wasm_bindgen__convert__closures_____invoke__he4358746220713bc(arg0, arg1);
 }
 
-function __wbg_adapter_31(arg0, arg1) {
+function __wbg_adapter_13(arg0, arg1) {
     wasm.wasm_bindgen__convert__closures_____invoke__h3c25c7484968f562(arg0, arg1);
 }
 
-function __wbg_adapter_780(arg0, arg1, arg2, arg3) {
-    wasm.closure3719_externref_shim(arg0, arg1, arg2, arg3);
+function __wbg_adapter_16(arg0, arg1, arg2) {
+    wasm.closure2896_externref_shim(arg0, arg1, arg2);
+}
+
+function __wbg_adapter_21(arg0, arg1, arg2) {
+    wasm.closure2017_externref_shim(arg0, arg1, arg2);
+}
+
+function __wbg_adapter_782(arg0, arg1, arg2, arg3) {
+    wasm.closure3743_externref_shim(arg0, arg1, arg2, arg3);
 }
 
 /**
@@ -4260,18 +4259,26 @@ export class ContractSpend {
      * Builds the spend `requestJson` describes (see `SpendRequest`) on
      * `network`. `walletScriptsJson` lists the wallet's own scripts (hex), so
      * an output to the wallet is told apart from a payment; `chainJson`
-     * (`{tip_height, tip_median_time, coin_height, coin_start_median_time}`)
-     * lets the engine check the spend's locks. Refuses an output the request
-     * mislabels, a confidential output, a missing or second fee, and outputs
-     * that do not balance the coin, each with the reason.
+     * (`{tip_height, tip_median_time, coin_height, coin_start_median_time,
+     * prevouts}`) lets the engine check the spend's locks and every coin the
+     * wallet does not hold against the chain's record (`prevouts`, by
+     * `txid:vout`: `{script_pubkey, asset, amount}`). `walletCoinsJson` is
+     * the wallet's own record of its coins (`ContractSpend.walletCoins`),
+     * against which every wallet input the request names is checked.
+     * Refuses an output the request mislabels, a confidential output, a
+     * missing or second fee, a wallet input the record does not back, a
+     * foreign input the chain's record does not back or whose leaf its coin
+     * does not commit to, a second contract input, and inputs and outputs
+     * that do not balance, each with the reason.
      * @param {ContractInstance} instance
      * @param {Network} network
      * @param {string} request_json
      * @param {string} wallet_scripts_json
      * @param {string | null} [chain_json]
+     * @param {string | null} [wallet_coins_json]
      * @returns {ContractSpend}
      */
-    static build(instance, network, request_json, wallet_scripts_json, chain_json) {
+    static build(instance, network, request_json, wallet_scripts_json, chain_json, wallet_coins_json) {
         _assertClass(instance, ContractInstance);
         _assertClass(network, Network);
         const ptr0 = passStringToWasm0(request_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -4280,11 +4287,62 @@ export class ContractSpend {
         const len1 = WASM_VECTOR_LEN;
         var ptr2 = isLikeNone(chain_json) ? 0 : passStringToWasm0(chain_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         var len2 = WASM_VECTOR_LEN;
-        const ret = wasm.contractspend_build(instance.__wbg_ptr, network.__wbg_ptr, ptr0, len0, ptr1, len1, ptr2, len2);
+        var ptr3 = isLikeNone(wallet_coins_json) ? 0 : passStringToWasm0(wallet_coins_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        var len3 = WASM_VECTOR_LEN;
+        const ret = wasm.contractspend_build(instance.__wbg_ptr, network.__wbg_ptr, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3);
         if (ret[2]) {
             throw takeFromExternrefTable0(ret[1]);
         }
         return ContractSpend.__wrap(ret[0]);
+    }
+    /**
+     * The wallet's own record of its coins, from what `wollet` synced: as
+     * JSON, `[{txid, vout, script_pubkey, asset, amount, key_path,
+     * confidential}]`, what `build` takes as `walletCoinsJson`.
+     * @param {Wollet} wollet
+     * @returns {string}
+     */
+    static walletCoins(wollet) {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            _assertClass(wollet, Wollet);
+            const ret = wasm.contractspend_walletCoins(wollet.__wbg_ptr);
+            var ptr1 = ret[0];
+            var len1 = ret[1];
+            if (ret[3]) {
+                ptr1 = 0; len1 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred2_0 = ptr1;
+            deferred2_1 = len1;
+            return getStringFromWasm0(ptr1, len1);
+        } finally {
+            wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+        }
+    }
+    /**
+     * What each input is: `[{index, role, coin, script_pubkey, asset,
+     * amount, sequence, ...}]`.
+     * @returns {string}
+     */
+    inputs() {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            const ret = wasm.contractspend_inputs(this.__wbg_ptr);
+            var ptr1 = ret[0];
+            var len1 = ret[1];
+            if (ret[3]) {
+                ptr1 = 0; len1 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred2_0 = ptr1;
+            deferred2_1 = len1;
+            return getStringFromWasm0(ptr1, len1);
+        } finally {
+            wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+        }
     }
     /**
      * The unsigned transaction, hex.
@@ -7592,6 +7650,23 @@ export class Signer {
         wasm.__wbg_signer_free(ptr, 0);
     }
     /**
+     * Derive the taker's dedicated Sequentia cross-chain HTLC claim keypair at m/3/0.
+     *
+     * Deterministic and recoverable from the wallet seed (distinct from staking's
+     * m/2/0). Returns `{ public_key, secret_hex }`: give `public_key` to the daemon
+     * as the Sequentia claim pubkey in `ProposeXchainSwap`, and pass `secret_hex` to
+     * [`buildSeqHtlcClaimTx`] to sign the claim. The matching BTC-refund pubkey the
+     * daemon also needs is produced by the wallet's BTC side (`btc.js`).
+     * @returns {any}
+     */
+    htlcKeypair() {
+        const ret = wasm.signer_htlcKeypair(this.__wbg_ptr);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    /**
      * Derive a BIP86 taproot maker-payout address + its 32-byte `maker_prog`.
      *
      * The covenant FILL leaf pins a v1-taproot maker payout, so a maker placing an
@@ -7931,8 +8006,9 @@ export class Signer {
      * Signs a contract spend the wallet has shown: `shownDigest` is the
      * `digest` of the approval's summary as displayed. Refuses any other
      * digest, prepares the spend again and refuses if anything differs, then
-     * signs with the contract key and runs the program against the
-     * transaction it returns (hex, ready to broadcast).
+     * signs with the contract key when the path takes one, signs the
+     * wallet's own inputs with their funding keys, and runs every program
+     * against the transaction it returns (hex, ready to broadcast).
      * @param {ContractApproval} approval
      * @param {string} shown_digest
      * @returns {string}
@@ -8145,23 +8221,6 @@ export class Signer {
         } finally {
             wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
         }
-    }
-    /**
-     * Derive the taker's dedicated Sequentia cross-chain HTLC claim keypair at m/3/0.
-     *
-     * Deterministic and recoverable from the wallet seed (distinct from staking's
-     * m/2/0). Returns `{ public_key, secret_hex }`: give `public_key` to the daemon
-     * as the Sequentia claim pubkey in `ProposeXchainSwap`, and pass `secret_hex` to
-     * [`buildSeqHtlcClaimTx`] to sign the claim. The matching BTC-refund pubkey the
-     * daemon also needs is produced by the wallet's BTC side (`btc.js`).
-     * @returns {any}
-     */
-    htlcKeypair() {
-        const ret = wasm.signer_htlcKeypair(this.__wbg_ptr);
-        if (ret[2]) {
-            throw takeFromExternrefTable0(ret[1]);
-        }
-        return takeFromExternrefTable0(ret[0]);
     }
     /**
      * The key for the leaf whose owner nonce is `ownerNonceHex`:
@@ -10109,6 +10168,51 @@ export class Wollet {
         wasm.__wbg_wollet_free(ptr, 0);
     }
     /**
+     * Build a SeqDEX same-chain SwapRequest (the taker / proposer half).
+     *
+     * - `asset_p` / `amount_p`: the asset and amount the taker sends (fee-exclusive).
+     * - `asset_r` / `amount_r`: the asset and amount the taker receives.
+     * - `receive_address`: the taker's own confidential address that receives
+     *   `asset_r` and any `asset_p` change.
+     * - `fee_asset` / `fee_amount` / `fee_rate`: the open-fee-market network fee.
+     *   `fee_amount == 0` ⇒ maker-funds the fee in `asset_r` (default). Otherwise
+     *   the taker funds the fee in `fee_asset` (any held, fee-eligible asset
+     *   except `asset_r`), adding a fee input + explicit fee output; `fee_rate`
+     *   is `fee_asset`'s published rate (atoms per 1e8 native), used only for the
+     *   dust threshold.
+     *
+     * Returns a [`SwapRequest`] carrying the unsigned/unblinded PSETv2 + the
+     * revealed `unblinded_inputs`. POST it to the daemon's `ProposeTrade`
+     * (`/v1/trade/propose`). To complete: the daemon returns a SwapAccept whose
+     * PSET contains the taker's input but, being a bare PSET, no bip32
+     * derivation — so before `Signer.sign` works on it, re-attach the taker
+     * input's keypath locally with `Wollet.psetDetails`/`add_details` (the lwk
+     * signer signs via the PSET bip32 derivation). After signing, the extra
+     * bip32/global-xpub fields must be removed again (the daemon's go-elements
+     * parser rejects them) before POSTing to `CompleteTrade`
+     * (`/v1/trade/complete`); the partial signature itself is preserved.
+     * @param {AssetId} asset_p
+     * @param {bigint} amount_p
+     * @param {AssetId} asset_r
+     * @param {bigint} amount_r
+     * @param {Address} receive_address
+     * @param {AssetId} fee_asset
+     * @param {bigint} fee_amount
+     * @param {bigint} fee_rate
+     * @returns {SwapRequest}
+     */
+    seqdexSwapRequest(asset_p, amount_p, asset_r, amount_r, receive_address, fee_asset, fee_amount, fee_rate) {
+        _assertClass(asset_p, AssetId);
+        _assertClass(asset_r, AssetId);
+        _assertClass(receive_address, Address);
+        _assertClass(fee_asset, AssetId);
+        const ret = wasm.wollet_seqdexSwapRequest(this.__wbg_ptr, asset_p.__wbg_ptr, amount_p, asset_r.__wbg_ptr, amount_r, receive_address.__wbg_ptr, fee_asset.__wbg_ptr, fee_amount, fee_rate);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return SwapRequest.__wrap(ret[0]);
+    }
+    /**
      * Get the transaction list
      *
      * **Experimental**: This API may change without notice.
@@ -10491,51 +10595,6 @@ export class Wollet {
     isAmp0() {
         const ret = wasm.wollet_isAmp0(this.__wbg_ptr);
         return ret !== 0;
-    }
-    /**
-     * Build a SeqDEX same-chain SwapRequest (the taker / proposer half).
-     *
-     * - `asset_p` / `amount_p`: the asset and amount the taker sends (fee-exclusive).
-     * - `asset_r` / `amount_r`: the asset and amount the taker receives.
-     * - `receive_address`: the taker's own confidential address that receives
-     *   `asset_r` and any `asset_p` change.
-     * - `fee_asset` / `fee_amount` / `fee_rate`: the open-fee-market network fee.
-     *   `fee_amount == 0` ⇒ maker-funds the fee in `asset_r` (default). Otherwise
-     *   the taker funds the fee in `fee_asset` (any held, fee-eligible asset
-     *   except `asset_r`), adding a fee input + explicit fee output; `fee_rate`
-     *   is `fee_asset`'s published rate (atoms per 1e8 native), used only for the
-     *   dust threshold.
-     *
-     * Returns a [`SwapRequest`] carrying the unsigned/unblinded PSETv2 + the
-     * revealed `unblinded_inputs`. POST it to the daemon's `ProposeTrade`
-     * (`/v1/trade/propose`). To complete: the daemon returns a SwapAccept whose
-     * PSET contains the taker's input but, being a bare PSET, no bip32
-     * derivation — so before `Signer.sign` works on it, re-attach the taker
-     * input's keypath locally with `Wollet.psetDetails`/`add_details` (the lwk
-     * signer signs via the PSET bip32 derivation). After signing, the extra
-     * bip32/global-xpub fields must be removed again (the daemon's go-elements
-     * parser rejects them) before POSTing to `CompleteTrade`
-     * (`/v1/trade/complete`); the partial signature itself is preserved.
-     * @param {AssetId} asset_p
-     * @param {bigint} amount_p
-     * @param {AssetId} asset_r
-     * @param {bigint} amount_r
-     * @param {Address} receive_address
-     * @param {AssetId} fee_asset
-     * @param {bigint} fee_amount
-     * @param {bigint} fee_rate
-     * @returns {SwapRequest}
-     */
-    seqdexSwapRequest(asset_p, amount_p, asset_r, amount_r, receive_address, fee_asset, fee_amount, fee_rate) {
-        _assertClass(asset_p, AssetId);
-        _assertClass(asset_r, AssetId);
-        _assertClass(receive_address, Address);
-        _assertClass(fee_asset, AssetId);
-        const ret = wasm.wollet_seqdexSwapRequest(this.__wbg_ptr, asset_p.__wbg_ptr, amount_p, asset_r.__wbg_ptr, amount_r, receive_address.__wbg_ptr, fee_asset.__wbg_ptr, fee_amount, fee_rate);
-        if (ret[2]) {
-            throw takeFromExternrefTable0(ret[1]);
-        }
-        return SwapRequest.__wrap(ret[0]);
     }
 }
 if (Symbol.dispose) Wollet.prototype[Symbol.dispose] = Wollet.prototype.free;
@@ -11162,7 +11221,7 @@ function __wbg_get_imports() {
                 const a = state0.a;
                 state0.a = 0;
                 try {
-                    return __wbg_adapter_780(a, state0.b, arg0, arg1);
+                    return __wbg_adapter_782(a, state0.b, arg0, arg1);
                 } finally {
                     state0.a = a;
                 }
@@ -11550,19 +11609,14 @@ function __wbg_get_imports() {
     imports.wbg.__wbg_wbindgenthrow_451ec1a8469d7eb6 = function(arg0, arg1) {
         throw new Error(getStringFromWasm0(arg0, arg1));
     };
-    imports.wbg.__wbindgen_cast_08305c4339ac71ce = function(arg0, arg1) {
-        // Cast intrinsic for `Closure(Closure { dtor_idx: 2825, function: Function { arguments: [], shim_idx: 2826, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-        const ret = makeMutClosure(arg0, arg1, 2825, __wbg_adapter_16);
-        return ret;
-    };
-    imports.wbg.__wbindgen_cast_171237426c8e3ea0 = function(arg0, arg1) {
-        // Cast intrinsic for `Closure(Closure { dtor_idx: 2126, function: Function { arguments: [NamedExternref("MessageEvent")], shim_idx: 2127, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-        const ret = makeMutClosure(arg0, arg1, 2126, __wbg_adapter_10);
-        return ret;
-    };
     imports.wbg.__wbindgen_cast_2241b6af4c4b2941 = function(arg0, arg1) {
         // Cast intrinsic for `Ref(String) -> Externref`.
         const ret = getStringFromWasm0(arg0, arg1);
+        return ret;
+    };
+    imports.wbg.__wbindgen_cast_3f3ebc150ddd9d5a = function(arg0, arg1) {
+        // Cast intrinsic for `Closure(Closure { dtor_idx: 2849, function: Function { arguments: [], shim_idx: 2850, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
+        const ret = makeMutClosure(arg0, arg1, 2849, __wbg_adapter_6);
         return ret;
     };
     imports.wbg.__wbindgen_cast_4625c577ab2ec9ee = function(arg0) {
@@ -11570,19 +11624,19 @@ function __wbg_get_imports() {
         const ret = BigInt.asUintN(64, arg0);
         return ret;
     };
-    imports.wbg.__wbindgen_cast_5e8a7c45fa0ceaf6 = function(arg0, arg1) {
-        // Cast intrinsic for `Closure(Closure { dtor_idx: 2126, function: Function { arguments: [NamedExternref("ErrorEvent")], shim_idx: 2127, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-        const ret = makeMutClosure(arg0, arg1, 2126, __wbg_adapter_10);
+    imports.wbg.__wbindgen_cast_592c862abc5ce261 = function(arg0, arg1) {
+        // Cast intrinsic for `Closure(Closure { dtor_idx: 2016, function: Function { arguments: [NamedExternref("Event")], shim_idx: 2017, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
+        const ret = makeMutClosure(arg0, arg1, 2016, __wbg_adapter_21);
         return ret;
     };
-    imports.wbg.__wbindgen_cast_7197dc135353e1a5 = function(arg0, arg1) {
-        // Cast intrinsic for `Closure(Closure { dtor_idx: 2126, function: Function { arguments: [NamedExternref("Event")], shim_idx: 2127, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-        const ret = makeMutClosure(arg0, arg1, 2126, __wbg_adapter_10);
+    imports.wbg.__wbindgen_cast_7450f8cc8e6fb339 = function(arg0, arg1) {
+        // Cast intrinsic for `Closure(Closure { dtor_idx: 2300, function: Function { arguments: [], shim_idx: 2301, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
+        const ret = makeMutClosure(arg0, arg1, 2300, __wbg_adapter_13);
         return ret;
     };
-    imports.wbg.__wbindgen_cast_9935a20a77375421 = function(arg0, arg1) {
-        // Cast intrinsic for `Closure(Closure { dtor_idx: 2279, function: Function { arguments: [], shim_idx: 2280, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-        const ret = makeMutClosure(arg0, arg1, 2279, __wbg_adapter_31);
+    imports.wbg.__wbindgen_cast_88ab54f52e553ea5 = function(arg0, arg1) {
+        // Cast intrinsic for `Closure(Closure { dtor_idx: 2885, function: Function { arguments: [Externref], shim_idx: 2896, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
+        const ret = makeMutClosure(arg0, arg1, 2885, __wbg_adapter_16);
         return ret;
     };
     imports.wbg.__wbindgen_cast_9ae0607507abb057 = function(arg0) {
@@ -11590,9 +11644,19 @@ function __wbg_get_imports() {
         const ret = arg0;
         return ret;
     };
-    imports.wbg.__wbindgen_cast_b00b6ec31d6d8080 = function(arg0, arg1) {
-        // Cast intrinsic for `Closure(Closure { dtor_idx: 2861, function: Function { arguments: [Externref], shim_idx: 2872, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-        const ret = makeMutClosure(arg0, arg1, 2861, __wbg_adapter_13);
+    imports.wbg.__wbindgen_cast_a4ef23a981de6a93 = function(arg0, arg1) {
+        // Cast intrinsic for `Closure(Closure { dtor_idx: 2016, function: Function { arguments: [NamedExternref("MessageEvent")], shim_idx: 2017, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
+        const ret = makeMutClosure(arg0, arg1, 2016, __wbg_adapter_21);
+        return ret;
+    };
+    imports.wbg.__wbindgen_cast_b7b9020604530453 = function(arg0, arg1) {
+        // Cast intrinsic for `Closure(Closure { dtor_idx: 2016, function: Function { arguments: [NamedExternref("ErrorEvent")], shim_idx: 2017, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
+        const ret = makeMutClosure(arg0, arg1, 2016, __wbg_adapter_21);
+        return ret;
+    };
+    imports.wbg.__wbindgen_cast_c2e56e4c38088205 = function(arg0, arg1) {
+        // Cast intrinsic for `Closure(Closure { dtor_idx: 2016, function: Function { arguments: [NamedExternref("CloseEvent")], shim_idx: 2017, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
+        const ret = makeMutClosure(arg0, arg1, 2016, __wbg_adapter_21);
         return ret;
     };
     imports.wbg.__wbindgen_cast_cb9088102bce6b30 = function(arg0, arg1) {
@@ -11603,11 +11667,6 @@ function __wbg_get_imports() {
     imports.wbg.__wbindgen_cast_d6cd19b81560fd6e = function(arg0) {
         // Cast intrinsic for `F64 -> Externref`.
         const ret = arg0;
-        return ret;
-    };
-    imports.wbg.__wbindgen_cast_e7efafb2413a8a05 = function(arg0, arg1) {
-        // Cast intrinsic for `Closure(Closure { dtor_idx: 2126, function: Function { arguments: [NamedExternref("CloseEvent")], shim_idx: 2127, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-        const ret = makeMutClosure(arg0, arg1, 2126, __wbg_adapter_10);
         return ret;
     };
     imports.wbg.__wbindgen_init_externref_table = function() {

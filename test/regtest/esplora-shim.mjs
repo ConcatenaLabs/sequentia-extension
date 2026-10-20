@@ -176,6 +176,7 @@ export function startEsploraShim({ rpc, port, pools = null }) {
       }
       if ((m = p.match(/^\/tx\/([0-9a-f]{64})\/hex$/))) return send(200, await call('getrawtransaction', [m[1], 0]));
       if ((m = p.match(/^\/tx\/([0-9a-f]{64})\/status$/))) return json(status(m[1]));
+      if ((m = p.match(/^\/tx\/([0-9a-f]{64})$/))) return json({ ...(txJson.get(m[1]) || jsonOf(await call('getrawtransaction', [m[1], true]))), status: status(m[1]) });
       if ((m = p.match(/^\/tx\/([0-9a-f]{64})\/outspend\/(\d+)$/))) {
         const sp = spentBy.get(`${m[1]}:${m[2]}`);
         if (sp && await live(sp.txid)) return json({ spent: true, txid: sp.txid, vin: sp.vin, status: status(sp.txid) });

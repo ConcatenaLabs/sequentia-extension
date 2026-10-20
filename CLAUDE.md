@@ -98,6 +98,9 @@ token (already public in sequentia-web-wallet) — not a secret.
   the kit's contract engine (`src/contracts.js` hands it the request); never
   decide anything about a contract in JavaScript, and sign only the digest the
   approval page showed.
+- A site's contract spend with the wallet's own coins: `SEQUENTIAD=… PIGNUS_WEB=…
+  CHROME=… node test/regtest/pignus-v2.mjs` (the Pignus page, bridged to the
+  router, on an anchored regtest chain).
 - Staking on a private chain: `SEQUENTIAD=… node test/regtest/stake-records.mjs
   block-one|fork`. It rewrites `src/config.js` and the engine's network only
   through `test/regtest/loader.mjs`, which fails if either source text it

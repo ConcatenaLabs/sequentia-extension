@@ -33,10 +33,12 @@ confidential `tsqb1…` addresses are an explicit opt-in).
   `openampSignTagged`, `openampSignSpend`, `openampSignSupervision`), so an
   issuance or transfer-agent platform uses the account the user already holds
   restricted assets in rather than a second identity generated in a browser tab.
-  A site can ask for a spend of a contract (`signContractSpend`): the kit's
-  contract engine builds and checks it, the approval window shows the
-  template, the path, the parameters and the wallet's balance change, and the
-  wallet signs only what it showed.
+  A site can ask for a spend of a contract (`signContractSpend`), with the
+  wallet's own coins and a foreign coin beside the contract's (a Pignus take,
+  repayment or top-up, which the wallet funds): the kit's contract engine
+  builds and checks it, the approval window shows the template, the path, the
+  parameters, every input and the wallet's balance change, and the wallet
+  signs only what it showed.
   Protocol spec: [doc/PROVIDER.md](doc/PROVIDER.md).
 - **Mode, and leaves** — one setting (Settings → Mode), kept for each wallet.
   User mode: one figure per asset, and the wallet chooses how value moves.
@@ -111,6 +113,13 @@ committed, so no build step is needed to load the extension.
   test/regtest/contract-spend.mjs` asks for a faucet drip through the provider
   router, reads and decides the approval through the worker's own messages,
   renders the approval page, confirms the drip, and checks each refusal.
+- A Pignus version 2 loan against a private chain: `SEQUENTIAD=/path/to/sequentiad
+  PIGNUS_WEB=/path/to/pignus/web CHROME=/path/to/chrome node
+  test/regtest/pignus-v2.mjs` runs the Pignus page in a headless Chromium with
+  its `window.sequentia` bridged to the provider router, takes an offer, tops
+  up and repays from the page, renders and clicks each approval page, confirms
+  each spend, and checks the refusals. Its chain is anchored to a regtest
+  parent run by the same binary, since the kit reads anchored headers.
 - Service-worker console: `CHROME=/path/to/chrome node scripts/sw-console-check.mjs`
   loads the unpacked extension in a headless Chromium twice and fails on any
   exception or console error the worker raises. Run it after any change to a
