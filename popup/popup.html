@@ -218,11 +218,13 @@
       </div>
       <div class="card">
         <h2>Mode</h2>
-        <p class="sub">User mode shows one balance per asset. Developer mode shows every rail (on-chain, leaves, Lightning) and lets each step be chosen by hand. Sites can read this setting and follow it.</p>
         <select id="setMode">
-          <option value="user">User</option>
-          <option value="developer">Developer</option>
+          <option value="user">User mode</option>
+          <option value="developer">Developer mode</option>
         </select>
+        <p class="sub" id="modeUserLine"><b>User mode</b>: One figure per asset, and the wallet chooses how value moves.</p>
+        <p class="sub" id="modeDeveloperLine"><b>Developer mode</b>: Every rail by name, side by side (on-chain, leaves and Lightning), each with its balance and its manual controls, and the developer tools.</p>
+        <p class="sub">Kept for this wallet. Sites that ask the wallet for its mode follow it.</p>
       </div>
       <div class="card hide" id="leafCard">
         <h2>Leaves</h2>

@@ -38,17 +38,22 @@ confidential `tsqb1…` addresses are an explicit opt-in).
   template, the path, the parameters and the wallet's balance change, and the
   wallet signs only what it showed.
   Protocol spec: [doc/PROVIDER.md](doc/PROVIDER.md).
-- **Mode, and leaves** — one setting (Settings → Mode): user mode shows one
-  balance per asset; developer mode shows every rail and lets each step be
-  chosen by hand. Sites read it (`getWalletMode`, the `modeChanged` event). In
-  developer mode the wallet can join an operator and hold Sequentia assets as
+- **Mode, and leaves** — one setting (Settings → Mode), kept for each wallet.
+  User mode: one figure per asset, and the wallet chooses how value moves.
+  Developer mode: every rail by name, side by side (on-chain, leaves and
+  Lightning), each with its balance and its manual controls, and the developer
+  tools. Sites read it (`getWalletMode`, the `modeChanged` event) and follow it.
+  In developer mode the wallet can join an operator and hold Sequentia assets as
   leaves of the operator's tree, paid and received off the chain: a site reads
-  the leaf balances (`getLeafBalances`), asks for a receive request
-  (`requestLeafReceive`) or a payment to one (`sendLeaves`), each payment
-  behind the approval window, and hears `leafArrived` and `leafSyncDue`. The
-  leaf wallet runs in the offscreen document and syncs on its own schedule
-  while the browser runs and the wallet is unlocked. BTC is never a leaf: it
-  stays on its own chain and on Lightning.
+  the leaf balances (`getLeafBalances`) and the leaf wallet's address
+  (`getLeafAddress`), asks for a receive request (`requestLeafReceive`), a
+  payment to one (`sendLeaves`), a board (`boardLeaves`) or an exit
+  (`exitLeaf`), each behind the approval window, the board's and the exit's fees
+  shown before anything is signed, and hears `leafArrived` and `leafSyncDue`.
+  The leaf wallet runs in the offscreen document and syncs on its own schedule
+  while the browser runs and the wallet is unlocked, in either mode once an
+  operator is joined; leaves count in each asset's figure and in the headline in
+  both modes. BTC is never a leaf: it stays on its own chain and on Lightning.
 - **Staking pool delegation** — the Stake tab lends an existing stake's weight
   to a pool, moves it to another pool, and takes it back. The staked coins
   never move. Delegating puts a small record on-chain (0.001 of the Sequence
@@ -116,9 +121,10 @@ committed, so no build step is needed to load the extension.
   needs the `arca` repository's operator harness running
   (`bark-cli/tests/arca_operator_for_browsers.rs`, started fresh for each run)
   and its command-line wallet as the counterparty. The test site
-  (`test/leaves/site.html`) connects, reads the mode and the leaf balances, asks
-  for a receive request and a send through the approval window, and hears the
-  events; every step is a DOM assertion and a screenshot, every console line of
+  (`test/leaves/site.html`) follows the wallet's mode (its leaf features show
+  only in developer mode, and follow `modeChanged`), connects, reads the leaf
+  balances and address, asks for a receive request, a send, a board and an exit
+  through the approval window, and hears the events; every step is a DOM assertion and a screenshot, every console line of
   the extension's contexts is logged, and an error from any of them fails the
   drive.
 - Icons: `node scripts/gen-icons.mjs`

@@ -61,18 +61,8 @@ export class ArcaWallet {
     }
     /**
      * Runs one command, as `arca <command>` does, `args` a JSON object of its
-     * arguments. The answer is `{"result", "start"}`: the command's JSON,
-     * and what the start of the command found (the witness of the
-     * operator's signer's record, and the re-check of every coin against the
-     * chain), which the command line runs on every start and prints when
-     * it changed something.
-     *
-     * Commands: `info`, `address`, `balance`, `coins`, `record {leaf_id}`,
-     * `board {asset, amount, fee_asset?}`, `boards`, `receive {asset?,
-     * amount?}`, `send {request, amount?, asset?}`, `mailbox`, `restore`, `quote
-     * {leaves?, max_fee_ppm?}`, `participate {leaves?, not_before?,
-     * max_fee_ppm?, shown}`, `participations`, `sync`, `schedule`,
-     * `recheck`, `exit {leaf_id, fee_asset?}`, `refusals`.
+     * arguments: the library's [`command::run`], whose answer is `{"result",
+     * "start"}` and whose commands are [`command::COMMANDS`].
      * @param {string} command
      * @param {string} args
      * @returns {string}
@@ -645,7 +635,7 @@ function __wbg_get_imports() {
             return ret;
         }, arguments); },
         __wbindgen_generic_0000000000000001: function(arg0, arg1) {
-            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 962, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
+            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 965, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
             const ret = makeMutClosure(arg0, arg1, wasm_bindgen__convert__closures_____invoke__hde160c6f8cc1d9e4);
             return ret;
         },

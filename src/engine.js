@@ -11,6 +11,7 @@
 // same load-bearing discipline as the web wallet.
 
 import './shim.js';
+import { rememberWallet, tagOf } from './mode.js';
 import init, {
   Mnemonic, Network, Signer, Wollet, Update, EsploraClient, Address, AssetId,
   Pset, Transaction, BtcWallet, stringToQr,
@@ -159,6 +160,8 @@ export async function openFromPhrase(phrase) {
   const m = new Mnemonic(mnemonic);
   signer = new Signer(m, network);
   wollet = new Wollet(network, signer.wpkhSlip77Descriptor());
+  // The wallet's tag keys what is kept for each wallet (its mode, its leaf operator).
+  try { await rememberWallet(tagOf(wollet.descriptor().toString())); } catch {}
   btcW = new BtcWallet(T4_API);
   addrIndex = null;
   scannedOnce = false;

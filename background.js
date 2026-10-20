@@ -23,6 +23,7 @@ import { btc as btcLib } from './vendor/btc.js';
 import * as perms from './src/permissions.js';
 import * as router from './src/provider-router.js';
 import * as leaves from './src/leaves.js';
+import { MODE_WORDS } from './src/mode.js';
 import {
   vaultExists, vaultCreate, vaultUnlock, vaultLock, sessionMnemonic,
   armAutoLock, touchAutoLock,
@@ -202,17 +203,25 @@ async function overview({ withLn = false } = {}) {
     } catch { /* keep the cache */ }
   }
 
+  // Leaves count in each asset's figure and in the headline in both modes; developer
+  // mode also shows the split by rail. The figure is the leaf wallet's balance as its
+  // host last reported it (every state the library counts).
+  const walletMode = await leaves.mode();
+  const leafPer = ((await leaves.leafSum().catch(() => null)) || {}).perAsset || {};
+
   const rows = [];
   const push = (key, onchainAtoms, alwaysShow) => {
     const lnEntry = lnSum.perKind[key];
     const lnAtoms = lnEntry ? BigInt(lnEntry.units) : 0n;
-    const total = BigInt(onchainAtoms) + lnAtoms;
+    const leafAtoms = BigInt(leafPer[key] || 0);
+    const total = BigInt(onchainAtoms) + lnAtoms + leafAtoms;
     if (!alwaysShow && total <= 0n) return;
     const m = A.assetMeta(key);
     rows.push({
       key,
       ticker: m.ticker, name: m.name, precision: m.precision,
       onchain: String(onchainAtoms), ln: lnAtoms.toString(), lnChannels: lnEntry ? lnEntry.channels : 0,
+      leaves: key === 'BTC' ? null : leafAtoms.toString(),
       total: total.toString(),
       refStr: A.refValueStr(key, total, ref),
       refVal: (() => { const rv = A.refValue(key, total, ref); return rv ? rv.v : null; })(),
@@ -236,6 +245,11 @@ async function overview({ withLn = false } = {}) {
     // reads spendable 0, and hiding the row made real, settled funds invisible.
     push(k, 0n, true);
   }
+  // An asset held only as leaves still has its row.
+  for (const k of Object.keys(leafPer)) {
+    if (k in bal.seq || k in lnSum.perKind) continue;
+    push(k, 0n, false);
+  }
   for (const [id, atoms] of Object.entries(openamp.balancesMap())) push('oamp:' + id, atoms, false);
   rows.sort((a, b) => (a.key === 'BTC' ? -1 : b.key === 'BTC' ? 1 : (b.refVal || 0) - (a.refVal || 0)));
 
@@ -244,6 +258,7 @@ async function overview({ withLn = false } = {}) {
 
   return {
     rows,
+    mode: walletMode,
     ref, refOptions: A.refOptions(),
     totalRefStr: anyPriced ? A.fmtRef(totalRef, ref) : null,
     pricesStale: A.pricesStale(),
@@ -433,12 +448,13 @@ const uiMethods = {
   'lnMove': async ({ kind, amount }) => await ln.moveToLightning({ kind, atoms: amount }),
   'lnClose': async ({ kind }) => await ln.closeToChain({ kind }),
   // --- the wallet's mode, and leaves (developer mode) ---
-  'getMode': async () => ({ mode: await leaves.mode() }),
+  'getMode': async () => ({ mode: await leaves.mode(), words: MODE_WORDS }),
+  // The leaf wallet keeps running in user mode (its coins have dates to keep); only
+  // what is shown and what a site may reach follows the mode.
   'setMode': async ({ mode }) => {
     const m = await leaves.setMode(mode);
     emitToTabs('modeChanged', { mode: m }, null).catch(() => {});
-    if (m === 'developer') leaves.ensureRunning().catch(() => {});
-    else await leaves.stop();
+    leaves.ensureRunning().catch(() => {});
     return { mode: m };
   },
   'leaves.state': async () => {
@@ -488,8 +504,16 @@ const uiMethods = {
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // The leaf wallet's events, from its host in the offscreen document: relayed to
   // connected sites (an open wallet page hears the same message itself).
+  // Leaf events reach sites only in developer mode; the balance is kept for the popup in
+  // either mode.
   if (msg && msg.scope === 'leaf-event' && sender.id === chrome.runtime.id) {
-    if (msg.event === 'leafArrived' || msg.event === 'leafSyncDue') emitToConnected(msg.event, msg.data).catch(() => {});
+    if (msg.event === 'leafBalance') {
+      leaves.rememberLeafSum(msg.data && msg.data.balance)
+        .then(() => chrome.runtime.sendMessage({ scope: 'ui-event', event: 'leaves-changed' }).catch(() => {}))
+        .catch(() => {});
+    } else if (msg.event === 'leafArrived' || msg.event === 'leafSyncDue') {
+      leaves.mode().then((m) => { if (m === 'developer') return emitToConnected(msg.event, msg.data); }).catch(() => {});
+    }
     return false;
   }
   // Offscreen-document job telemetry: relay progress to the dapp pages.

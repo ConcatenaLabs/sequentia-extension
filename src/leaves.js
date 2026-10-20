@@ -1,18 +1,29 @@
-// The service worker's side of the leaf wallet (developer mode).
+// The service worker's side of the leaf wallet.
 //
 // The leaf wallet itself runs in the offscreen document (offscreen-leaves.js), which
 // holds the operator wallet library's store and syncs it on the library's schedule.
-// This module keeps the wallet's mode and the operator the user joined, starts the
-// offscreen host when the wallet unlocks, closes it when the wallet locks, and asks it
-// for what the provider and the popup need. Nothing about a leaf is decided here:
-// every answer and every refusal is the library's.
+// This module keeps the operator each wallet joined, starts the offscreen host when the
+// wallet unlocks, closes it when the wallet locks, and asks it for what the provider and
+// the popup need. Nothing about a leaf is decided here: every answer and every refusal
+// is the library's.
+//
+// Leaves are a developer-mode rail: in user mode nothing of them is shown and no
+// provider method reaches them. A wallet that joined an operator keeps its leaf wallet
+// open and syncing in either mode all the same, since its coins must be refreshed or
+// taken home on their dates, and their value counts in each asset's figure and the
+// headline (the host reports it after every change, see `leafBalance`).
 
 import { ensureOffscreen, offscreenUp } from './offscreen-doc.js';
-import { stGet, stSet } from './util.js';
+import { stGet, stSet, stDel } from './util.js';
 import { sessionMnemonic } from './vault.js';
+import { mode, setMode, walletTag } from './mode.js';
 
-const CONFIG_KEY = 'ext.leaves';
-const SETTINGS_KEY = 'ext.settings';
+export { mode, setMode };
+
+const LEGACY_CONFIG_KEY = 'ext.leaves';
+const CONFIGS_KEY = 'ext.leaves.byWallet';   // { [walletTag]: the operator joined }
+const ADDRESS_KEY = 'ext.leaves.address';     // { [walletTag]: { address, script_pubkey } }
+const SUM_KEY = 'ext.leaves.sum';             // { [walletTag]: { at, perAsset: { asset: atoms } } }
 
 export const NOT_DEVELOPER = 'leaves are a developer-mode rail: turn developer mode on in the wallet’s Settings';
 export const NOT_JOINED = 'this wallet has not joined a leaf operator: join one in the wallet’s Settings';
@@ -27,21 +38,64 @@ export class LeafError extends Error {
   }
 }
 
-// ---- the mode: one setting, 'user' until the user changes it ----
-export async function mode() {
-  const s = (await stGet('local', SETTINGS_KEY)) || {};
-  return s.mode === 'developer' ? 'developer' : 'user';
+// ---- the operator joined, for each wallet: its server, the node, the exit delays ----
+export async function config() {
+  const tag = await walletTag();
+  if (!tag) return null;
+  const all = (await stGet('local', CONFIGS_KEY)) || {};
+  if (all[tag]) return all[tag];
+  // The one operator kept before it was kept for each wallet is this wallet's, once.
+  const legacy = await stGet('local', LEGACY_CONFIG_KEY);
+  if (legacy) {
+    all[tag] = legacy;
+    await stSet('local', CONFIGS_KEY, all);
+    await stDel('local', LEGACY_CONFIG_KEY);
+    return legacy;
+  }
+  return null;
 }
-export async function setMode(m) {
-  if (m !== 'developer' && m !== 'user') throw new Error("the mode is 'developer' or 'user'");
-  const s = (await stGet('local', SETTINGS_KEY)) || {};
-  s.mode = m;
-  await stSet('local', SETTINGS_KEY, s);
-  return m;
+async function setConfig(cfg) {
+  const tag = await walletTag();
+  if (!tag) throw new Error('open the wallet first');
+  const all = (await stGet('local', CONFIGS_KEY)) || {};
+  all[tag] = cfg;
+  await stSet('local', CONFIGS_KEY, all);
 }
 
-// ---- the operator joined: its server, the node, the exit delays ----
-export async function config() { return (await stGet('local', CONFIG_KEY)) || null; }
+// The leaf wallet's value per asset, as the host last reported it (leaves of every
+// state the library counts), for the popup's figures and headline.
+export async function leafSum() {
+  const tag = await walletTag();
+  const all = (await stGet('local', SUM_KEY)) || {};
+  return (tag && all[tag]) || null;
+}
+export async function rememberLeafSum(balance) {
+  const tag = await walletTag();
+  if (!tag) return;
+  const perAsset = {};
+  for (const [a, states] of Object.entries((balance && balance.arca) || {})) {
+    let t = 0n;
+    for (const v of Object.values(states || {})) t += BigInt(v);
+    if (t > 0n) perAsset[a] = t.toString();
+  }
+  const all = (await stGet('local', SUM_KEY)) || {};
+  all[tag] = { at: Date.now(), perAsset };
+  await stSet('local', SUM_KEY, all);
+}
+
+// One on-chain address of the leaf wallet, the same each time it is asked: the address
+// a site shows for funding a board or an exit's fee coin. Taking a new one on every ask
+// would let a site grow the wallet's scan without end.
+export async function address() {
+  await requireLeaves();
+  const tag = await walletTag();
+  const all = (await stGet('local', ADDRESS_KEY)) || {};
+  if (all[tag] && all[tag].address) return all[tag];
+  const a = await run('address');
+  all[tag] = { address: a.address, script_pubkey: a.script_pubkey };
+  await stSet('local', ADDRESS_KEY, all);
+  return all[tag];
+}
 
 // The host's answers come back as messages; the service worker never blocks on one.
 async function host(op, args = {}) {
@@ -65,15 +119,13 @@ export async function join(cfg) {
   const v = await host('start', { mnemonic, config: clean, nodePassword: clean.node_password, tickMs: clean.tick_ms });
   // A wallet created now answers its `info` as every command answers, { result, start }.
   const info = (v.info && v.info.result) || (await host('run', { command: 'info' })).result;
-  await stSet('local', CONFIG_KEY, { ...clean, operator: info && info.operator, joinedAt: Date.now() });
+  await setConfig({ ...clean, operator: info && info.operator, joinedAt: Date.now() });
   return info;
 }
 
-// Opens the leaf wallet in the offscreen host when developer mode is on, an operator is
-// joined and the wallet is unlocked; a no-op when it is already open. Answers whether
-// it is open.
+// Opens the leaf wallet in the offscreen host when this wallet joined an operator and is
+// unlocked, in either mode; a no-op when it is already open. Answers whether it is open.
 export async function ensureRunning() {
-  if ((await mode()) !== 'developer') return false;
   const cfg = await config();
   if (!cfg) return false;
   const mnemonic = await sessionMnemonic();
@@ -84,8 +136,8 @@ export async function ensureRunning() {
   return true;
 }
 
-// Closes the leaf wallet (on lock, or when developer mode is turned off). Never brings
-// the offscreen document up just to close it.
+// Closes the leaf wallet (on lock). Never brings the offscreen document up just to
+// close it.
 export async function stop() {
   if (!(await offscreenUp())) return;
   try { await chrome.runtime.sendMessage({ scope: 'leaf', op: 'stop', args: {} }); } catch {}

@@ -108,6 +108,18 @@ async function ensureOpenOrThrow() {
   if (!(await engine.ensureOpen())) throw new Error('the wallet is locked');
 }
 
+// An asset and an amount of it, as the leaf approvals show them.
+function leafAsset(hex) {
+  const m = A.assetMeta(hex);
+  return m.ticker && m.ticker !== '?' ? m.ticker + ' (' + hex + ')' : hex;
+}
+function leafAmount(atoms, hex) {
+  if (atoms == null || !hex) return String(atoms ?? '');
+  const m = A.assetMeta(hex);
+  const t = m.ticker && m.ticker !== '?' ? m.ticker : hex.slice(0, 12) + '\u2026';
+  return engine.fmt(String(atoms), hex) + ' ' + t + ' (' + atoms + ' atoms)';
+}
+
 // ---- the method table ----
 export async function handleDappRequest(origin, method, params = {}) {
   if (!origin || !/^https?:\/\//.test(origin)) throw new Error('bad origin');
@@ -123,14 +135,16 @@ export async function handleDappRequest(origin, method, params = {}) {
           'broadcast', 'createInvoice', 'payInvoice',
           'getUtxos', 'lnChannels', 'lnRequestInbound', 'dexFillOnchain', 'dexSwapLn', 'dexJobResult', 'dexMarketOrder', 'dexPlaceLimit', 'getBtcPublicKey', 'getBtcAddress', 'signBtcTaproot', 'prepareBtcSend',
           'openampGetIdentity', 'openampSignTagged', 'openampSignSpend', 'openampSignSupervision',
-          'signContractSpend', 'getWalletMode', 'getLeafBalances', 'requestLeafReceive', 'sendLeaves'],
+          'signContractSpend', 'getWalletMode', 'getLeafBalances', 'getLeafAddress', 'requestLeafReceive', 'sendLeaves',
+          'boardLeaves', 'exitLeaf'],
         // What this build can do beyond the method names, for sites that have
         // to know before they build something: 'pset-site-built' means
         // signPset fills in this wallet's key origins itself, so a PSET a site
         // composed (with only the outputs it spends) can be signed here.
         // 'contract-spend' means signContractSpend runs the kit's contract engine.
-        // 'leaves' means the leaf methods (getLeafBalances, requestLeafReceive,
-        // sendLeaves) and their events are served, in developer mode.
+        // 'leaves' means the leaf methods (getLeafBalances, getLeafAddress,
+        // requestLeafReceive, sendLeaves, boardLeaves, exitLeaf) and their events are
+        // served, in developer mode.
         features: ['pset-site-built', 'contract-spend', 'leaves'],
         events: ['accountsChanged', 'disconnect', 'modeChanged', 'leafArrived', 'leafSyncDue'],
       };
@@ -560,6 +574,79 @@ export async function handleDappRequest(origin, method, params = {}) {
       }, async () => {
         await ensureOpenOrThrow();
         return await leaves.run('send', { request: text, asset: plan.asset, amount: plan.amount });
+      });
+    }
+
+    case 'getLeafAddress': {
+      await requireUnlockedAndConnected(origin);
+      return await leaves.address();
+    }
+
+    // A board and an exit: the library quotes the fee first, the window shows it, and
+    // the library goes ahead only on the fee shown (it refuses if the fee changed).
+    case 'boardLeaves': {
+      await requireConnected(origin);
+      const asset = String(params.asset ?? '').toLowerCase();
+      if (!/^[0-9a-f]{64}$/.test(asset)) throw new Error('asset must be a 64-hex asset id');
+      const amount = String(params.amount ?? '');
+      if (!/^\d+$/.test(amount) || BigInt(amount) <= 0n) throw new Error('amount must be a positive number of atoms');
+      const feeAsset = params.fee_asset != null && params.fee_asset !== '' ? String(params.fee_asset).toLowerCase() : null;
+      if (feeAsset && !/^[0-9a-f]{64}$/.test(feeAsset)) throw new Error('fee_asset must be a 64-hex asset id');
+      if (!(await sessionMnemonic())) throw new Error('the wallet is locked; open the wallet popup and unlock first');
+      await leaves.requireLeaves();
+      const args = { asset, amount };
+      if (feeAsset) args.fee_asset = feeAsset;
+      const quote = await leaves.run('board_quote', args);
+      const fee = quote.fee || {};
+      return requestApproval(origin, 'boardLeaves', {
+        text: origin + ' asks you to board an on-chain coin into your leaves: one transaction from your leaf wallet\u2019s on-chain coins to the operator\u2019s tree. The coin is a leaf once the transaction is final.',
+        rows: [
+          ['Asset', leafAsset(asset)],
+          ['Amount boarded', leafAmount(amount, asset)],
+          ['Fee', leafAmount(fee.amount, fee.asset) + ' (the node\u2019s floor now, in the fee asset\u2019s own atoms)'],
+          ['Transaction', quote.vsize + ' vB, spending ' + quote.inputs + ' coin(s)'],
+        ],
+        detail: 'The board goes ahead only on the fee shown. If it has changed by the time the wallet signs, nothing is signed and the site hears why.',
+      }, async () => {
+        await ensureOpenOrThrow();
+        return await leaves.run('board', { ...args, shown: fee });
+      });
+    }
+
+    case 'exitLeaf': {
+      await requireConnected(origin);
+      const leafId = String(params.leaf_id ?? '');
+      if (!leafId) throw new Error('leaf_id is required');
+      const feeAsset = params.fee_asset != null && params.fee_asset !== '' ? String(params.fee_asset).toLowerCase() : null;
+      if (feeAsset && !/^[0-9a-f]{64}$/.test(feeAsset)) throw new Error('fee_asset must be a 64-hex asset id');
+      if (!(await sessionMnemonic())) throw new Error('the wallet is locked; open the wallet popup and unlock first');
+      await leaves.requireLeaves();
+      const args = { leaf_id: leafId };
+      if (feeAsset) args.fee_asset = feeAsset;
+      const quote = await leaves.run('exit_quote', args);
+      const rows = [
+        ['Leaf', leafId],
+        ['Coin', leafAmount(quote.value, quote.asset)],
+      ];
+      (quote.steps || []).forEach((st, i) => {
+        const fees = (st.fee || []).map((f) => leafAmount(f.amount, f.asset)).join(' + ') || 'none';
+        rows.push(['Transaction ' + (i + 1), st.vsize + ' vB, fee ' + fees + ', paid from ' + st.paid_by]);
+      });
+      if (!(quote.steps || []).length) rows.push(['Now', 'nothing to broadcast before the claim']);
+      const claim = quote.claim || {};
+      rows.push(['Claim, later', claim.error ? claim.error
+        : 'fee about ' + ((claim.fee || []).map((f) => leafAmount(f.amount, f.asset)).join(' + ') || 'none') + ' at the floor when it is made'
+          + (claim.pays ? ', paying ' + leafAmount(claim.pays, quote.asset) + ' to this wallet' : '')]);
+      if (quote.exit_delay_seconds != null) rows.push(['Exit delay', Math.round(quote.exit_delay_seconds / 3600 * 10) / 10 + ' h after the leaf\u2019s transaction is in a block']);
+      return requestApproval(origin, 'exitLeaf', {
+        text: origin + ' asks you to take a leaf home on-chain by yourself, without the operator: the transactions of its path now, then, once its exit delay has run, the claim to one of your addresses. The wallet carries the exit on by itself until the claim is final.',
+        rows,
+        detail: 'Fees are each asset\u2019s own atoms at the node\u2019s floor now. The path is broadcast only on the fees shown; if they have changed, nothing is broadcast and the site hears why.',
+      }, async () => {
+        await ensureOpenOrThrow();
+        const run = { leaf_id: leafId, shown: quote.unroll || {} };
+        if (quote.fee_asset) run.fee_asset = quote.fee_asset;
+        return await leaves.run('exit', run);
       });
     }
 

@@ -30,18 +30,8 @@ export class ArcaWallet {
     static open(mnemonic: string, node_password?: string | null): ArcaWallet;
     /**
      * Runs one command, as `arca <command>` does, `args` a JSON object of its
-     * arguments. The answer is `{"result", "start"}`: the command's JSON,
-     * and what the start of the command found (the witness of the
-     * operator's signer's record, and the re-check of every coin against the
-     * chain), which the command line runs on every start and prints when
-     * it changed something.
-     *
-     * Commands: `info`, `address`, `balance`, `coins`, `record {leaf_id}`,
-     * `board {asset, amount, fee_asset?}`, `boards`, `receive {asset?,
-     * amount?}`, `send {request, amount?, asset?}`, `mailbox`, `restore`, `quote
-     * {leaves?, max_fee_ppm?}`, `participate {leaves?, not_before?,
-     * max_fee_ppm?, shown}`, `participations`, `sync`, `schedule`,
-     * `recheck`, `exit {leaf_id, fee_asset?}`, `refusals`.
+     * arguments: the library's [`command::run`], whose answer is `{"result",
+     * "start"}` and whose commands are [`command::COMMANDS`].
      */
     run(command: string, args: string): string;
 }

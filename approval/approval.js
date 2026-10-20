@@ -28,6 +28,8 @@ const TITLES = {
   signContractSpend: 'Sign this contract spend?',
   requestLeafReceive: 'Hand out a receive request for leaves?',
   sendLeaves: 'Pay from your leaves?',
+  boardLeaves: 'Board a coin into your leaves?',
+  exitLeaf: 'Take a leaf home on-chain?',
 };
 
 function fmtAtoms(atoms, d) {
