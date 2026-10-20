@@ -111,7 +111,8 @@ does every step; the wallet signs only when all five hold:
 
 1. the template is on the wallet's list, which is the templates the kit carries
    (`sequentia/one-key`, `sequentia/one-key-exit`, `sequentia/faucet-drip`,
-   `pignus/vault`, `pignus/offer`), and so is every template an output opens; a
+   `pignus/vault`, `pignus/offer`, `sequentia/capped-sale`,
+   `sequentia/subscription-escrow`), and so is every template an output opens; a
    site can pass a template it wrote (`descriptor` and `sources`, each source
    with its includes resolved), which is read and checked but never signed for;
 2. the engine recomputed the output from the template and the instance, and the
@@ -125,7 +126,13 @@ does every step; the wallet signs only when all five hold:
    opens, where the coins go, and the checks;
 5. the key is a contract key, the one the path names (`m/8383h/1h/0h/0/0`),
    or none on a path that takes no signature; the wallet's funding keys sign
-   only its own inputs.
+   only its own inputs. On a capped sale's purchase the buyer's key is a value
+   of the request (`spender.BUYER_KEY`), and the wallet signs only when it is
+   this wallet's contract key (`getContractKey`): its signature is over the
+   program's `sig_all_hash`, so it is the buyer's signature over that purchase
+   and no other. A purchase past the key's cap is refused before any window
+   opens, and the approval says what is bought, against which cap, and what
+   the treasury is paid.
 
 The approval window signs the digest of what it showed; a request changed
 after it was shown is another digest, and nothing is signed.
@@ -151,8 +158,12 @@ Parameters:
     witness, sequence?, label?}`, a coin spent through a script leaf with the
     witness given (hex items, the leaf and its control block last), spent only
     when the chain's record of the coin, which the wallet reads itself, agrees
-    and the leaf is committed in the coin's output key. Without `inputs` the
-    contract coin is the only input.
+    and the leaf is committed in the coin's output key; `{is: 'sibling', coin,
+    instance}`, another coin of the same template spent by the same tapscript
+    path (each subscription coin of an escrow's release), with its own
+    instance, spent only when the chain's record agrees and its instance names
+    the same key and locks, and signed with the same contract key. Without
+    `inputs` the contract coin is the only input.
   - Each output says what it does: `contract` (back to the contract, or to its
     next state), `wallet`, `pay`, `fee`, `open` (a new contract, `open` its
     instance record, of a template the kit carries) or `foreign` (foreign
@@ -179,6 +190,23 @@ Approving signs the digest of the summary the window showed, and nothing else.
 ### `getStakerPublicKey()` — silent, requires connection and an unlocked wallet
 `{ staker_pubkey }`: the wallet's staking key (derivation `m/2/0`), the key a
 stake is bonded to.
+
+### `getContractKey()` — silent, requires connection and an unlocked wallet
+`{ contract_key, path }`: the wallet's contract key, x-only hex, at
+`m/8383h/1h/0h/0/0`. It is the key a project puts on a capped sale's
+allocation list for this buyer, and the key an issuer names as a subscription
+escrow's release key. Only `signContractSpend` signs with it, through the
+approval.
+
+### `signContractStatement({ tag, statement? , hash?, label? })` — approval per request
+`{ signature, xonly }`: a BIP340 signature with the contract key over the
+tagged hash `sha256(sha256(tag) || sha256(tag) || message)`, the same form and
+the same tag policy as `openampSignTagged` (no `tap…`, `bip340…`, `elements…`,
+`sequentia/…` tag, nothing with `sighash`, refused by the kit as well). It
+proves the contract key to a platform that names it in a contract, such as an
+escrow's release key. A Simplicity spend's signature hash begins with the
+chain's genesis hash twice, where a statement's begins with `sha256(tag)`
+twice, so a statement's signature cannot stand for a spend.
 
 ### `signStakerMessage({ message })` — approval per request
 `{ signature, staker_pubkey }`: a signature over the UTF-8 message under the

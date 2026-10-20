@@ -20,7 +20,10 @@
 // add a foreign coin spent through a script leaf with a given witness (an oracle's
 // beacon coin, spent and recreated): this module reads the chain's record of it, and
 // of the contract coin, from Esplora, and the engine refuses a coin the record does
-// not back. This module asks the engine, renders the approval it returns, and signs
+// not back. A spend may add other coins of the same template spent by the same
+// tapscript path (every subscription coin of an escrow released together), each with
+// its own instance; their records are read the same way. A capped sale's purchase is
+// signed with the contract key only when the buyer's key it names is this wallet's. This module asks the engine, renders the approval it returns, and signs
 // the digest of exactly what it rendered. Refusals are shown in the engine's own
 // words.
 //
@@ -140,11 +143,12 @@ export function fundFromWallet (request, coins, changeAddress) {
   const r = JSON.parse(JSON.stringify(request))
   const inputs = r.inputs || [{ is: 'contract' }]
   const key = (c) => c.txid + ':' + c.vout
-  const used = new Set(inputs.filter(i => i.is !== 'contract').map(key))
+  const coinOf = (i) => (i.is === 'sibling' ? i.coin : i)
+  const used = new Set(inputs.filter(i => i.is !== 'contract').map(i => key(coinOf(i))))
   const have = {}
   const add = (a, n) => { have[a] = (have[a] || 0n) + BigInt(n) }
   add(r.coin.asset, r.coin.amount)
-  for (const i of inputs) if (i.is !== 'contract') add(i.asset, i.amount)
+  for (const i of inputs) if (i.is !== 'contract') add(coinOf(i).asset, coinOf(i).amount)
   const need = {}
   for (const o of r.outputs) need[o.asset] = (need[o.asset] || 0n) + BigInt(o.amount)
   for (const [asset, n] of Object.entries(need)) {
@@ -200,11 +204,12 @@ export async function prepare (ctx, { template, instanceJson, request, fund = fa
   const coins = ctx.walletCoins ? ctx.walletCoins() : []
   if (fund) request = fundFromWallet(request, coins, ctx.receiveAddress())
   const foreign = (request.inputs || []).filter(i => i.is === 'foreign')
-  const records = request.inputs ? [[request.coin.txid, request.coin.vout], ...foreign.map(f => [f.txid, f.vout])] : []
+  const siblings = (request.inputs || []).filter(i => i.is === 'sibling').map(i => i.coin)
+  const records = request.inputs ? [[request.coin.txid, request.coin.vout], ...foreign.map(f => [f.txid, f.vout]), ...siblings.map(c => [c.txid, c.vout])] : []
   const facts = await chainFacts(ctx.esploraFetch, request.coin.txid, records)
   const spend = lwk.ContractSpend.build(instance, ctx.network(), JSON.stringify(request), JSON.stringify(ctx.walletScripts()), JSON.stringify(facts), JSON.stringify(coins))
   const assets = {}
-  for (const o of [request.coin, ...(request.inputs || []).filter(i => i.asset), ...request.outputs]) {
+  for (const o of [request.coin, ...(request.inputs || []).filter(i => i.asset), ...siblings, ...request.outputs]) {
     const m = ctx.assetMeta(o.asset)
     if (m && m.ticker) assets[o.asset] = { ticker: m.ticker, precision: m.precision || 0 }
   }
@@ -271,6 +276,9 @@ export function approvalSections (s) {
       ['What it does', s.path.effect]
     ]
   })
+  // What the spend does in the template's own terms, where the kit knows them
+  // (a capped sale's purchase: what is bought, against which cap, for what).
+  if (s.reading && Array.isArray(s.reading.shown)) sections.push({ title: 'What this ' + (s.reading.kind || 'spend') + ' does', rows: s.reading.shown.map((line, n) => [String(n + 1), line]) })
   sections.push({ title: 'Parameters', rows: s.params.map(p => [p.label + ' [' + p.role + ']', p.shown]) })
   if (s.slots && s.slots.length) sections.push({ title: 'State', rows: s.slots.map(p => [p.label + ' [' + p.role + ']', p.shown]) })
   if (s.spender && s.spender.length) sections.push({ title: 'Values the spender chose', rows: s.spender.map(v => [v.name, v.value]) })
@@ -280,7 +288,7 @@ export function approvalSections (s) {
       rows: s.inputs.flatMap(i => [
         ['Input ' + i.index, i.shown],
         ...(i.request_says ? [['Input ' + i.index + ', as the request calls it', i.request_says + ' (the request\'s word, not checked)']] : []),
-        ...(i.is === 'foreign' ? [['Input ' + i.index + ', checked against the chain', i.checked_against_chain ? 'yes: the chain\'s record of the coin is what the request says' : 'no']] : [])
+        ...((i.is === 'foreign' || i.is === 'sibling') ? [['Input ' + i.index + ', checked against the chain', i.checked_against_chain ? 'yes: the chain\'s record of the coin is what the request says' : 'no']] : [])
       ])
     })
   }
@@ -426,7 +434,7 @@ export function mountContracts (ctx, root) {
   field(dripForm, 'Fee rate (atoms of the dripped asset per 1,000 vB)', dripRate)
   const reqForm = el('div'); reqForm.id = 'contractRequestForm'
   const reqText = area('contractRequest', 8)
-  field(reqForm, 'The request: {"path", "coin", "inputs"?: [{"is": "contract"}, {"is": "wallet", ...}, {"is": "foreign", ..., "witness"}], "outputs": [{"to": "contract|wallet|pay|fee|open|foreign", "address"|"script", "asset", "amount"}], "spender", "next_slots", ...}', reqText)
+  field(reqForm, 'The request: {"path", "coin", "inputs"?: [{"is": "contract"}, {"is": "wallet", ...}, {"is": "foreign", ..., "witness"}, {"is": "sibling", "coin", "instance"}], "outputs": [{"to": "contract|wallet|pay|fee|open|foreign", "address"|"script", "asset", "amount"}], "spender", "next_slots", ...}', reqText)
   const fundBox = el('input'); fundBox.type = 'checkbox'; fundBox.id = 'contractFund'
   const fundLabel = el('label', 'field', ' Fund it from this wallet: add this wallet\'s coins for what the inputs do not cover, and the change'); fundLabel.prepend(fundBox)
   reqForm.appendChild(fundLabel)

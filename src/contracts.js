@@ -19,7 +19,7 @@ import * as lwk from '../pkg/lwk_wasm.js';
 import * as engine from './engine.js';
 import * as A from './assets.js';
 import { BASE, ESPLORA } from './config.js';
-import { prepare, prepareDrip, sign, broadcast, approvalSections } from '../vendor/contracts.js';
+import { prepare, prepareDrip, sign, broadcast, approvalSections, CONTRACT_KEY_PATH } from '../vendor/contracts.js';
 
 // The wallet's list of templates is the kit's: a site cannot add one.
 const noStore = { getItem: () => null, setItem() {}, removeItem() {} };
@@ -80,6 +80,17 @@ export async function prepareForSite(params) {
   } catch (e) {
     throw new Error(errText(e));
   }
+}
+
+// The wallet's contract key, as a site may learn it.
+export function contractKey() {
+  return { contract_key: engine.getSigner().xonlyPublicKeyAt(CONTRACT_KEY_PATH), path: CONTRACT_KEY_PATH };
+}
+
+// A statement signed with the contract key: { signature, xonly }. The kit refuses
+// a reserved tag again, whatever the caller checked.
+export function signStatement(tag, messageHex) {
+  return JSON.parse(engine.getSigner().contractSignTagged(tag, messageHex));
 }
 
 // What the approval page renders.
