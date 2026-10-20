@@ -246,6 +246,26 @@ function encodeCovenantTerms(c){
   return w.bytes();
 }
 
+// seqob.v1.SimplicityCovenantTerms (offer settlement oneof field 25): a funded
+// resting order under the Simplicity template seqdex/order (covenant-sim.js).
+// As for CovenantTerms, fields 1-2 (the outpoint) are outside the signed bytes:
+// the relay re-points the order at (txid, 2k+1) after a partial fill with its
+// maker offline. maker_script and refund_key are HEX in the offer object.
+function encodeSimplicityCovenantTerms(c){
+  if (!c) return null;
+  const w = new PW();
+  w.str(3, O(c,'asset_a','assetA'));
+  w.str(4, O(c,'asset_b','assetB'));
+  w.uint(5, O(c,'rate_num','rateNum'));
+  w.uint(6, O(c,'rate_den','rateDen'));
+  w.uint(7, O(c,'min_lot','minLot'));
+  w.lenbytes(8, hexToBytes(O(c,'maker_script','makerScript')));
+  w.uint(9, O(c,'expiry_locktime','expiryLocktime'));
+  w.lenbytes(10, hexToBytes(O(c,'refund_key','refundKey')));
+  w.str(11, O(c,'template_hash','templateHash'));
+  return w.bytes();
+}
+
 // seqob.v1.CrossChainTerms (offer settlement oneof field 21). Field numbers and
 // proto3 omit-zero semantics match the Go relay's deterministic marshal exactly,
 // so a maker-signed CROSS offer verifies here byte-for-byte (direction 0 =
@@ -303,6 +323,8 @@ export function canonicalOfferBytes(o){
   w.msg(22, encodeLightning(O(o,'lightning')));
   // covenant = 23: passive-CLOB funded resting order.
   w.msg(23, encodeCovenantTerms(O(o,'covenant')));
+  // simplicity_covenant = 25: the same, under the Simplicity template seqdex/order.
+  w.msg(25, encodeSimplicityCovenantTerms(O(o,'simplicity_covenant','simplicityCovenant')));
   // maker_sig (31) is deliberately omitted.
   return w.bytes();
 }
@@ -435,6 +457,12 @@ export function normRelayOffer(o){
     }
     for (const k of ['merkle_path', 'merklePath']){
       if (Array.isArray(cov[k])) cov[k] = cov[k].map(b64ToHex);
+    }
+  }
+  const sim = o && (o.simplicity_covenant || o.simplicityCovenant);
+  if (sim){
+    for (const k of ['maker_script', 'makerScript', 'refund_key', 'refundKey']){
+      if (sim[k] != null) sim[k] = b64ToHex(sim[k]);
     }
   }
   return o;
