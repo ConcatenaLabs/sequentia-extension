@@ -59,7 +59,11 @@ confidential `tsqb1…` addresses are an explicit opt-in).
   operator's round (`takeOrder`) and places an order on the chain from leaves
   (`placeOrderFromLeaves`); the wallet hands a take's forfeits over and lists an
   order on the relay by itself, with no window open, and reports where each
-  stands (`getLeafTakes`, `getLeafOrders`, `leafTake`). The leaf wallet runs in the offscreen document and syncs on its own schedule
+  stands (`getLeafTakes`, `getLeafOrders`, `leafTake`). Two wallets that hold
+  leaves swap two assets in one reassignment in the tree: one offers
+  (`leafSwapOffer`), the other accepts (`leafSwapAccept`) and the first completes
+  (`leafSwapComplete`), each window showing what is given, got and paid before
+  anything is signed (`getLeafSwaps`, `leafSwapCancel`). The leaf wallet runs in the offscreen document and syncs on its own schedule
   while the browser runs and the wallet is unlocked, in either mode once an
   operator is joined; leaves count in each asset's figure and in the headline in
   both modes. BTC is never a leaf: it stays on its own chain and on Lightning.
@@ -161,6 +165,15 @@ committed, so no build step is needed to load the extension.
   through the approval window, and hears the events; every step is a DOM assertion and a screenshot, every console line of
   the extension's contexts is logged, and an error from any of them fails the
   drive.
+- An in-tree swap through the provider, end to end:
+  `HEADLESS=1 CHROME=/path/to/chrome ARCA_OPERATOR_CONTROL=127.0.0.1:18640
+  ARCA_CLI=/path/to/arca node test/leaves/swap-drive.mjs <evidence-dir> <work-dir>`,
+  with the same harness and the command-line wallet as the other wallet. The test site
+  accepts the command-line wallet's offer (`leafSwapAccept`), then offers one of its
+  own, rejects it once (the offer is cancelled), offers it again and completes it with
+  the command-line wallet's acceptance (`leafSwapComplete`); each window is checked and
+  shot, both wallets' leaves are checked after each swap, and in user mode every swap
+  method is refused before any window.
 - The SeqDEX site's leaves room, end to end in headless Chromium:
   `CHROME=/path/to/chrome ARCA_OPERATOR_CONTROL=127.0.0.1:18640
   SEQOBD=/path/to/seqobd SEQDEX_WEB=/path/to/seqdex-web node test/leaf-room/drive.mjs

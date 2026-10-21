@@ -33,6 +33,10 @@ const TITLES = {
   exitLeaf: 'Take a leaf home on-chain?',
   takeOrder: 'Fill an on-chain order from your leaves?',
   placeOrderFromLeaves: 'Place an order on the chain from your leaves?',
+  leafSwapOffer: 'Offer a swap of your leaves?',
+  leafSwapAccept: 'Accept a swap of leaves?',
+  leafSwapComplete: 'Complete your swap of leaves?',
+  leafSwapCancel: 'Cancel a swap of leaves?',
 };
 
 function fmtAtoms(atoms, d) {
