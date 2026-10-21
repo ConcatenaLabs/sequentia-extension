@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { planTrade, restTerms, lotFit, covenantQuote, orderProgress, fillStanding, MAX_ORDERS_PER_TRADE } from '../src/market-plan.js';
+import { planTrade, restTerms, lotFit, covenantQuote, orderProgress, fillStanding, fillOfSpend, progressFromChain, MAX_ORDERS_PER_TRADE } from '../src/market-plan.js';
 import { ceilPrice } from '../vendor/covenant.js';
 
 const G = 'aa'.repeat(32);   // the base (say a metal, precision 8)
@@ -127,4 +127,25 @@ test('a fill is settled only once the relay calls it final', () => {
   assert.equal(fillStanding(t, [{ txid: t, state: 'confirmed' }]).state, 'sent');
   assert.equal(fillStanding(t, [{ txid: t, state: 'final' }]).state, 'settled');
   assert.equal(fillStanding(t, [{ txid: t, state: 'final' }, { txid: t, state: 'undone' }]).state, 'sent');
+});
+
+test('an order followed on the chain: each spend that pays its maker is a fill; anything else ends it', () => {
+  const ids = { orderSpk: '5120' + 'a'.repeat(64), makerSpk: '5120' + 'b'.repeat(64) };
+  // Input 1 spends the order: credit at 2, rest at 3.
+  const part = { txid: 't1', vout: [{}, {}, { scriptpubkey: ids.makerSpk, value: 4000 }, { scriptpubkey: ids.orderSpk, value: 600 }] };
+  const f1 = fillOfSpend(part, 1, 1000n, ids);
+  assert.deepEqual([f1.filled, f1.credit, f1.remainder, f1.next], [400n, 4000n, 600n, { txid: 't1', vout: 3 }]);
+  const whole = { txid: 't2', vout: [{ scriptpubkey: ids.makerSpk, value: 6000 }, { scriptpubkey: '0014' + 'c'.repeat(40), value: 1 }] };
+  const f2 = fillOfSpend(whole, 0, 600n, ids);
+  assert.deepEqual([f2.filled, f2.remainder, f2.next], [600n, 0n, null]);
+  // A refund pays the maker's own address, not the credit script: not a fill.
+  assert.equal(fillOfSpend({ txid: 't3', vout: [{ scriptpubkey: '0014' + 'd'.repeat(40), value: 999 }] }, 0, 1000n, ids), null);
+  const rec = { offer_id: 'x', maker_pubkey: 'k', txid: 'f'.repeat(64), vout: 0, sell_atoms: '1000' };
+  const p = progressFromChain(rec, [{ ...f1, confirmed: true }, { ...f2, confirmed: false }], [{ offer_id: 'x', maker_pubkey: 'k', txid: 't1', state: 'final' }]);
+  assert.equal(p.holds, 0n); assert.equal(p.filled, 1000n); assert.equal(p.credited, 10000n); assert.equal(p.final, false);
+  assert.deepEqual(p.fills.map((f) => [f.txid, f.state, f.standing]), [['t1', 'final', 'settled'], ['t2', 'mempool', 'sent']]);
+  // With no relay records at all (a relay restarted, or one without them), the chain
+  // still says what filled, and nothing reads settled.
+  const q = progressFromChain(rec, [{ ...f1, confirmed: true }], []);
+  assert.equal(q.holds, 600n); assert.equal(q.restsAt, 't1:3'); assert.equal(q.fills[0].standing, 'sent');
 });

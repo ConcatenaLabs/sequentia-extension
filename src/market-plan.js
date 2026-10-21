@@ -162,6 +162,39 @@ export function orderProgress(rec, fills) {
   };
 }
 
+// One spend of a resting order, read from the spending transaction as the order's FILL
+// leaf reads it: input k spends the order, output 2k pays the maker's credit to its
+// payout script, output 2k+1 is the order resting again under its own script (a partial
+// fill) or anything else (a full fill). `tx` is the explorer's transaction (`vout` with
+// `scriptpubkey`, `value`, `asset`), `held` what the order held before. Returns null when
+// the spend is not a fill of this order (its credit output does not pay the maker: the
+// order taken back, or not this order at all).
+export function fillOfSpend(tx, k, held, { orderSpk, makerSpk }) {
+  const credit = tx && tx.vout && tx.vout[2 * k];
+  if (!credit || String(credit.scriptpubkey || '').toLowerCase() !== String(makerSpk).toLowerCase()) return null;
+  const rest = tx.vout[2 * k + 1];
+  const restsAgain = !!rest && String(rest.scriptpubkey || '').toLowerCase() === String(orderSpk).toLowerCase() && rest.value != null;
+  const remainder = restsAgain ? big(rest.value) : 0n;
+  return { txid: tx.txid, filled: big(held) - remainder, credit: big(credit.value), remainder, next: restsAgain ? { txid: tx.txid, vout: 2 * k + 1 } : null };
+}
+
+// An order's progress read from the chain (`spends`, its fills in order, each from
+// fillOfSpend, with `confirmed`), each fill settled only where the relay's record of it
+// says final. The relay's records live in its memory, so the chain is what says how much
+// an order filled; the relay only says when a fill is final.
+export function progressFromChain(rec, spends, relayFills) {
+  const finalTx = new Set((relayFills || []).filter((f) => f.offer_id === rec.offer_id && f.maker_pubkey === rec.maker_pubkey && f.state === 'final').map((f) => f.txid));
+  let holds = big(rec.sell_atoms), credited = 0n, restsAt = rec.txid && rec.vout != null ? `${rec.txid}:${rec.vout}` : null;
+  const fills = [];
+  for (const f of spends) {
+    holds = f.remainder; credited += f.credit;
+    restsAt = f.next ? `${f.next.txid}:${f.next.vout}` : null;
+    const settled = finalTx.has(f.txid);
+    fills.push({ txid: f.txid, filled: String(f.filled), credit: String(f.credit), state: settled ? 'final' : f.confirmed ? 'confirmed' : 'mempool', standing: settled ? 'settled' : 'sent' });
+  }
+  return { restsAt, holds, filled: big(rec.sell_atoms) - holds, credited, fills, final: fills.length > 0 && fills.every((f) => f.state === 'final') };
+}
+
 // Where a fill the wallet took stands, from the relay's record of it: 'sent' until the
 // relay records it in a block and calls it final, 'settled' once it does. An undone
 // fill is sent again (its transaction is back in the node's mempool).
