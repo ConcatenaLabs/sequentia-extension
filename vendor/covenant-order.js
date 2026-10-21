@@ -98,7 +98,9 @@ function hexOf(v){ return typeof v === 'string' ? v.toLowerCase() : bytesToHex(v
 //                  one maker-and-operator signature pair over such a script
 //                  spends two equal credits paid to it at once.
 //   makerX         32-byte x-only key authorizing the REFUND leaf (wallet key)
-//   internalKey    optional non-NUMS x-only key for a maker key-path cancel
+//   internalKey    optional, and only the NUMS point: any other key is a key
+//                  path that takes the order back from under a taker, which
+//                  takers and the relay refuse, so it is refused here too
 // Returns { order, tap, spkHex, sellAtoms, requiredBForFull } — the maker then
 // funds spkHex with sellAtoms of A and posts buildCovenantTerms(order, txid,vout).
 export function planPlaceOrder(params){
@@ -108,6 +110,9 @@ export function planPlaceOrder(params){
   } = params;
   const sell = BigInt(sellAtoms);
   if (sell < BigInt(minLot)) throw new Error(`sell ${sell} below min_lot ${minLot}`);
+  if (internalKey && bytesToHex(hexToBytes(internalKey)) !== bytesToHex(NUMS))
+    throw new Error(`internal key ${bytesToHex(hexToBytes(internalKey))} is not the NUMS point: it is a key path that takes ` +
+      'the order back from under any taker; takers and the relay refuse such an order, so the wallet places only NUMS-keyed ones');
   const order = {
     assetA, assetB,
     rateNum: BigInt(rateNum), rateDen: BigInt(rateDen), minLot: BigInt(minLot),
