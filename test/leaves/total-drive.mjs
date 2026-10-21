@@ -4,7 +4,7 @@
 // tree, a Lightning channel, and the Sequence token staked under both locks. The web wallet's
 // tooling/total-drive.mjs puts them there (and writes the phrase to a file of mode 600); this
 // drive opens the same phrase in the extension, joins the same operator (its leaf wallet
-// restores the leaves from the mailbox: `restore`, then `sync`), and reads the popup's one
+// restores the leaves from the mailbox, as joining does), and reads the popup's one
 // figure per asset and its headline in user mode, beside the web wallet's (`WEB_TOTALS`).
 // It reads only: nothing is boarded, sent, bonded or spent.
 //
@@ -131,7 +131,7 @@ async function main() {
     const first = (await ui('receive', { confidential: false })).result.address;
     note(`     the phrase's first address in the extension: ${first}`);
 
-    // ---- leaves: join the same operator, then restore from the mailbox ----
+    // ---- leaves: join the same operator (which restores the phrase's leaves) ----
     await pop.click('[data-tab=settings]');
     await pop.eval("(()=>{const s=document.querySelector('#setMode'); s.value='developer'; s.dispatchEvent(new Event('change')); return true})()");
     await pop.waitFor("!document.querySelector('#leafCard').classList.contains('hide')", 30000);
@@ -145,10 +145,11 @@ async function main() {
     // worker first): restore is asked from the worker's own context.
     const sw = await b.pageOf(swTarget.targetId);
     const host = (args, op = 'run') => sw.eval(`chrome.runtime.sendMessage({scope:'leaf', op:${JSON.stringify(op)}, args:${JSON.stringify(args)}})`);
-    const restored = await host({ command: 'restore', args: {} });
-    check('the leaf wallet restores from the mailbox', restored && restored.ok, restored && (restored.ok ? Object.keys(restored.value.result || {}) : restored.error));
+    // Joining restored the phrase's leaves from the mailbox: nothing more is asked for them.
     const bal = await host({ command: 'balance', args: {} });
     note(`     leaf balance: ${JSON.stringify(bal.ok ? bal.value.result : bal.error)}`);
+    const live = bal.ok ? Object.values((bal.value.result || {}).arca || {}).reduce((n, st) => n + BigInt((st && st.live) || 0), 0n) : 0n;
+    check('joining restored the phrase\'s leaves', live > 0n, String(live));
     const careAt = await host({}, 'status');
     note(`     care, as it ran once the leaf wallet opened: ${JSON.stringify(careAt && careAt.value && careAt.value.lastCare && careAt.value.lastCare.summary)}`);
 
