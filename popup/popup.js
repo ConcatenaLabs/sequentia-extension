@@ -36,7 +36,7 @@ function tab(name) {
   if (name === 'history') renderHistory();
   if (name === 'settings') renderSettings();
   if (name === 'send') fillSendSelectors();
-  if (name === 'stake') { renderStake(); renderRewards(); }
+  if (name === 'stake') { renderStakes(); renderStake(); renderRewards(); }
 }
 for (const b of document.querySelectorAll('.tabs [data-tab]')) b.onclick = () => tab(b.dataset.tab);
 
@@ -610,6 +610,86 @@ $('btnReveal').onclick = async () => {
 
 boot().catch((e) => { view('vBoot'); $('vBoot').textContent = 'Failed to start: ' + e.message; });
 
+
+// ---- the stakes of this wallet's key ----------------------------------------
+// Every stake of the key, whichever wallet bonded it and under either lock, with
+// Unbond once its lock has passed and Withdraw once its unbonding is over. Each
+// step is reviewed here first; the service worker builds and signs it only once
+// the review is confirmed, and broadcasts it only if it moves what was shown.
+const tseq = (atoms) => fmtAtoms(atoms, 8) + ' tSEQ';
+function stakeWhen(s) {
+  switch (s.state) {
+    case 'pending': return 'Staking, waiting for its first confirmation.';
+    case 'bonded':
+      if (s.timeLock) {
+        if (!s.maturesAtTime) return 'Staked, with ' + s.lock + '.';
+        return 'Staked, with ' + s.lock + '. It can be unbonded from about ' + new Date(s.maturesAtTime * 1000).toLocaleString() + '.';
+      }
+      return 'Staked, with ' + s.lock + '. It can be unbonded at block ' + Number(s.maturesAt).toLocaleString('en-US') + '.';
+    case 'unbondable': return 'Its lock has passed: it can be unbonded.';
+    case 'unbonding': return 'Unbonding: no longer counted as stake. It can be withdrawn into the wallet about two weeks after the unbond confirmed.';
+    case 'claimable': return 'Unbonded: it can be withdrawn into the wallet.';
+    case 'claiming': return 'Withdrawing into the wallet, waiting for the confirmation.';
+    case 'left': return 'Spent another way.';
+    case 'unknown': return 'Not found on the chain.';
+    default: return 'Could not read where it stands; try again in a moment.';
+  }
+}
+async function renderStakes() {
+  const box = $('stakeList');
+  let r;
+  try { r = await rpc('stakes'); }
+  catch (e) { box.textContent = 'Could not read your stakes: ' + e.message; return; }
+  box.innerHTML = '';
+  if (!r.supported) { box.textContent = 'This build cannot unbond a stake; update the extension.'; return; }
+  if (!r.stakes.length) { box.textContent = 'No stakes.'; return; }
+  for (const s of r.stakes) {
+    const row = el('div', 'item stake-row'); row.dataset.txid = s.txid; row.dataset.state = s.state;
+    const mid = el('div', 'grow');
+    mid.appendChild(el('div', null, tseq(s.held !== '0' ? s.held : s.atoms)));
+    mid.appendChild(el('div', 'sub', stakeWhen(s)));
+    row.appendChild(mid);
+    if (s.state === 'unbondable') {
+      const b = el('button', 'ghost tiny', 'Unbond'); b.onclick = () => stakeReview('unbond', s); row.appendChild(b);
+    } else if (s.state === 'claimable') {
+      const b = el('button', 'ghost tiny', 'Withdraw'); b.onclick = () => stakeReview('claim', s); row.appendChild(b);
+    }
+    box.appendChild(row);
+  }
+}
+async function stakeReview(kind, s) {
+  $('stakeListMsg').className = 'status'; $('stakeListMsg').textContent = '';
+  let rv;
+  try { rv = await rpc(kind === 'unbond' ? 'stakeUnbondReview' : 'stakeClaimReview', { txid: s.txid }); }
+  catch (e) { $('stakeListMsg').className = 'status err'; $('stakeListMsg').textContent = e.message; return; }
+  const { m, c } = modal(kind === 'unbond' ? 'Unbond this stake' : 'Withdraw this stake');
+  const kv = kind === 'unbond'
+    ? [['Network', 'Sequentia (testnet); not parent-chain BTC'], ['Stake', tseq(rv.stake)], ['Network fee', tseq(rv.fee) + ' (out of the stake)'],
+       ['Then', 'it stops counting as stake at once, and ' + tseq(rv.unbonding) + ' can be withdrawn into this wallet about two weeks after this confirms']]
+    : [['Network', 'Sequentia (testnet); not parent-chain BTC'], ['→ ' + rv.address, tseq(rv.out)], ['Network fee', tseq(rv.fee)]];
+  for (const [k, v] of kv) { const d = el('div', 'kv'); d.appendChild(el('span', 'k', k)); d.appendChild(el('span', 'v', v)); c.appendChild(d); }
+  const st = el('div', 'status'); const row = el('div', 'row');
+  const ok = el('button', 'primary', 'Confirm & sign'); ok.id = 'btnStakeConfirm';
+  const no = el('button', 'ghost', 'Cancel');
+  row.appendChild(ok); row.appendChild(no); c.appendChild(row); c.appendChild(st);
+  no.onclick = () => { rpc('stakeStepDrop', { id: rv.id }).catch(() => {}); m.remove(); };
+  ok.onclick = async () => {
+    ok.disabled = no.disabled = true; st.textContent = 'Signing & broadcasting…';
+    try {
+      const res = await rpc('stakeStepConfirm', { id: rv.id });
+      m.remove();
+      toast((kind === 'unbond' ? 'Unbonding: ' : 'Withdrawing: ') + String(res.txid).slice(0, 20) + '…');
+      renderStakes(); refreshOverview();
+    } catch (e) {
+      st.className = 'status err';
+      st.textContent = /bad-unbond-premature/.test(e.message)
+        ? 'Not yet: the chain has not gone far enough past the unbond. Try again in a few minutes.'
+        : 'Failed: ' + e.message;
+      // The review is spent either way: Cancel closes it, and the row offers the step again.
+      no.disabled = false; no.onclick = () => { m.remove(); renderStakes(); };
+    }
+  };
+}
 
 // ---- staking pools (delegation only) ----------------------------------------
 // Delegating lends the weight this wallet's staking key already carries. The

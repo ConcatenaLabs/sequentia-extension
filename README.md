@@ -69,6 +69,15 @@ confidential `tsqb1…` addresses are an explicit opt-in).
   while the browser runs and the wallet is unlocked, in either mode once an
   operator is joined; leaves count in each asset's figure and in the headline in
   both modes. BTC is never a leaf: it stays on its own chain and on Lightning.
+- **Stakes** — the Stake tab lists every stake of the wallet's staking key,
+  whichever wallet bonded it (the web wallet bonds with a lock of 43,200 blocks,
+  Ambra with a time lock of 2,532 units of 512 seconds, about 15 days), found on
+  the chain from the phrase alone. A stake can be unbonded once its lock has
+  passed, the fee out of the stake and never above 1% of it; it stops counting
+  as stake at once, and once the chain is anchored 2,016 Bitcoin blocks past the
+  unbond it can be withdrawn into the wallet. Each step is reviewed in the popup
+  before the transaction is built and signed, and broadcast only if it moves
+  what the review showed.
 - **Staking pool delegation** — the Stake tab lends an existing stake's weight
   to a pool, moves it to another pool, and takes it back. The staked coins
   never move. Delegating puts a small record on-chain (0.001 of the Sequence
@@ -79,8 +88,8 @@ confidential `tsqb1…` addresses are an explicit opt-in).
   again reuses the payment.
 
 Not included in the popup (use the [web wallet](https://sequentiatestnet.com/wallet)
-or the desktop node wallet): creating or unbonding a stake, running a pool,
-asset issuance, and a DEX trading UI.
+or the desktop node wallet): creating a stake, running a pool, asset
+issuance, and a DEX trading UI.
 
 ## Security model
 
@@ -120,7 +129,11 @@ committed, so no build step is needed to load the extension.
   test/regtest/stake-records.mjs block-one` (and `fork`) starts a regtest
   node, serves it through a small esplora stand-in (`test/regtest/esplora-shim.mjs`),
   and drives join, move and leave through the service worker's own message
-  handlers, checking every transaction into a block.
+  handlers, checking every transaction into a block. `SEQUENTIAD=/path/to/sequentiad
+  node test/regtest/stake-unbond.mjs` bonds a stake under each lock, lists both,
+  sees an early unbond refused by the wallet and by the node, moves the chain's
+  clock and height past both locks, unbonds and withdraws both through their
+  reviews, and checks each transaction into a block.
 - A contract spend against a private chain: `SEQUENTIAD=/path/to/sequentiad
   SWK_TEMPLATES=/path/to/SWK/lwk_contracts/templates CHROME=/path/to/chrome node
   test/regtest/contract-spend.mjs` asks for a faucet drip through the provider

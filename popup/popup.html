@@ -153,6 +153,12 @@
 
     <!-- stake: delegation only -->
     <div id="tStake" class="hide">
+      <div class="card" id="stakeListCard">
+        <h2>Your stakes</h2>
+        <p class="sub">The Sequence token (tSEQ) this wallet has staked, from this browser or another wallet with the same phrase. A stake can be unbonded once its lock has passed; it then stops counting as stake, and about two weeks later it can be withdrawn into the wallet.</p>
+        <div id="stakeList" class="sub">…</div>
+        <div class="status" id="stakeListMsg"></div>
+      </div>
       <div class="card">
         <h2>Staking pool</h2>
         <p class="sub">Lend your stake's weight to a pool so it produces blocks for you. Your coins never move and the pool can never spend them: it is lent only the right to sign with your weight. You can take that back at any moment, without asking anyone.</p>
@@ -166,7 +172,7 @@
           <button id="btnLeavePool" class="ghost hide">Leave this pool</button>
         </div>
         <div class="status" id="stakeMsg"></div>
-        <p class="sub" style="margin-top:10px">Staking itself, and running a pool, are done from the desktop node wallet: both need a key online on the machine that produces blocks.</p>
+        <p class="sub" style="margin-top:10px">Staking new tokens is done from the web wallet, Ambra or the desktop node wallet, and running a pool from the desktop node wallet, which needs a key online on the machine that produces blocks.</p>
       </div>
       <div class="card">
         <h2>Staking rewards</h2>
