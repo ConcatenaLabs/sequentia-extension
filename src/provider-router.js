@@ -18,6 +18,7 @@ import * as contracts from './contracts.js';
 import * as leaves from './leaves.js';
 import { readRequest, planSend, leafBalancesAnswer } from './leaf-request.js';
 import * as leafTrade from './leaf-trade.js';
+import * as leafSwap from './leaf-swap.js';
 
 // ---- pending approvals ----
 const pending = new Map();
@@ -137,7 +138,8 @@ export async function handleDappRequest(origin, method, params = {}) {
           'getUtxos', 'lnChannels', 'lnRequestInbound', 'dexFillOnchain', 'dexSwapLn', 'dexJobResult', 'dexMarketOrder', 'dexPlaceLimit', 'getBtcPublicKey', 'getBtcAddress', 'signBtcTaproot', 'prepareBtcSend',
           'openampGetIdentity', 'openampSignTagged', 'openampSignSpend', 'openampSignSupervision',
           'signContractSpend', 'getContractKey', 'signContractStatement', 'getWalletMode', 'getLeafBalances', 'getLeafAddress', 'requestLeafReceive', 'sendLeaves',
-          'boardLeaves', 'exitLeaf', 'getLeafOperator', 'takeOrder', 'getLeafTakes', 'placeOrderFromLeaves', 'getLeafOrders'],
+          'boardLeaves', 'exitLeaf', 'getLeafOperator', 'takeOrder', 'getLeafTakes', 'placeOrderFromLeaves', 'getLeafOrders',
+          'leafSwapOffer', 'leafSwapAccept', 'leafSwapComplete', 'getLeafSwaps', 'leafSwapCancel'],
         // What this build can do beyond the method names, for sites that have
         // to know before they build something: 'pset-site-built' means
         // signPset fills in this wallet's key origins itself, so a PSET a site
@@ -147,8 +149,10 @@ export async function handleDappRequest(origin, method, params = {}) {
         // requestLeafReceive, sendLeaves, boardLeaves, exitLeaf) and their events are
         // served, in developer mode; 'leaf-orders' the methods that fill an on-chain
         // order from leaves and place one from them (getLeafOperator, takeOrder,
-        // getLeafTakes, placeOrderFromLeaves, getLeafOrders) and the leafTake event.
-        features: ['pset-site-built', 'contract-spend', 'leaves', 'leaf-orders'],
+        // getLeafTakes, placeOrderFromLeaves, getLeafOrders) and the leafTake event;
+        // 'leaf-swaps' the in-tree swap between two wallets holding leaves
+        // (leafSwapOffer, leafSwapAccept, leafSwapComplete, getLeafSwaps, leafSwapCancel).
+        features: ['pset-site-built', 'contract-spend', 'leaves', 'leaf-orders', 'leaf-swaps'],
         events: ['accountsChanged', 'disconnect', 'modeChanged', 'leafArrived', 'leafSyncDue', 'leafTake'],
       };
 
@@ -788,6 +792,106 @@ export async function handleDappRequest(origin, method, params = {}) {
       }, async () => {
         await ensureOpenOrThrow();
         return await leafTrade.place(origin, args, quote);
+      });
+    }
+
+    // An in-tree swap (src/leaf-swap.js). The maker's offer holds its coins and signs
+    // nothing; the window shows what the library says it gives, gets and pays, and a
+    // rejected offer is cancelled at once, so its coins are free again.
+    case 'leafSwapOffer': {
+      await requireConnected(origin);
+      const hex64 = (v, name) => { const x = String(v ?? '').toLowerCase(); if (!/^[0-9a-f]{64}$/.test(x)) throw new Error(name + ' must be a 64-hex asset id'); return x; };
+      const pos = (v, name) => { const x = String(v ?? ''); if (!/^\d+$/.test(x) || BigInt(x) <= 0n) throw new Error(name + ' must be a positive number of atoms'); return x; };
+      const args = { give_asset: hex64(params.give_asset, 'give_asset'), give: pos(params.give, 'give'),
+        want_asset: hex64(params.want_asset, 'want_asset'), want: pos(params.want, 'want') };
+      if (args.give_asset === args.want_asset) throw new Error('a swap exchanges two assets');
+      if (!(await sessionMnemonic())) throw new Error('the wallet is locked; open the wallet popup and unlock first');
+      await leaves.requireLeaves();
+      const o = await leaves.run('swap_offer', args);
+      try {
+        return await requestApproval(origin, 'leafSwapOffer', {
+          text: origin + ' asks you to offer a swap to another wallet that holds leaves of your operator: one reassignment in the tree moves both assets at once, once the other wallet accepts and you complete it.',
+          deltas: [{ ticker: (A.assetMeta(o.gives.asset).ticker || o.gives.asset.slice(0, 12)), atoms: '-' + o.gives.value, precision: A.assetMeta(o.gives.asset).precision || 0 },
+            { ticker: (A.assetMeta(o.gets.asset).ticker || o.gets.asset.slice(0, 12)), atoms: String(o.gets.value), precision: A.assetMeta(o.gets.asset).precision || 0 }],
+          rows: leafSwap.offerRows(o, leafAmount),
+          detail: 'Approving hands the offer to the site, which passes it to the other wallet. Nothing is signed until you complete the swap with its acceptance; rejecting cancels the offer and frees your coins.',
+        }, async () => {
+          await leafSwap.remember(o.swap, { origin, role: 'maker', swap: o.swap, gives: o.gives, gets: o.gets, pays: o.pays, at: Date.now() });
+          return { swap: o.swap, offer: o.offer, gives: o.gives, gets: o.gets, pays: o.pays };
+        });
+      } catch (e) {
+        await leaves.run('swap_cancel', { swap: o.swap }).catch(() => {});
+        throw e;
+      }
+    }
+
+    // The taker's side: the library reads the offer (signing, holding and storing
+    // nothing); the window shows that; the acceptance is signed only on those terms.
+    case 'leafSwapAccept': {
+      await requireConnected(origin);
+      const offer = String(params.offer ?? '').trim();
+      if (!offer) throw new Error('offer is required: the other wallet\u2019s offer text');
+      if (!(await sessionMnemonic())) throw new Error('the wallet is locked; open the wallet popup and unlock first');
+      await leaves.requireLeaves();
+      const r = await leaves.run('swap_read', { offer });
+      return requestApproval(origin, 'leafSwapAccept', {
+        text: origin + ' asks you to accept another wallet\u2019s swap: one reassignment in the tree, which you sign now and the other wallet completes.',
+        deltas: [{ ticker: (A.assetMeta(r.gives.asset).ticker || r.gives.asset.slice(0, 12)), atoms: '-' + r.gives.value, precision: A.assetMeta(r.gives.asset).precision || 0 },
+          { ticker: (A.assetMeta(r.gets.asset).ticker || r.gets.asset.slice(0, 12)), atoms: String(r.gets.value), precision: A.assetMeta(r.gets.asset).precision || 0 }],
+        rows: leafSwap.readRows(r, leafAmount),
+        detail: 'Your signature covers this swap\u2019s whole set of outputs and nothing else, and is given only on the terms shown. Until the other wallet completes it, the swap can be cancelled: your coins then move to a fresh leaf of your own.',
+      }, async () => {
+        await ensureOpenOrThrow();
+        const a = await leaves.run('swap_accept', { offer, shown: r });
+        await leafSwap.remember(a.swap, { origin, role: 'taker', swap: a.swap, gives: r.gives, gets: r.gets, pays: r.pays, at: Date.now() });
+        return { swap: a.swap, accept: a.accept, gets: a.gets, gives: a.gives, pays: a.pays };
+      });
+    }
+
+    // The maker's completion: the window shows the offer this acceptance names, as the
+    // library answered it when it was made; the library checks that the acceptance keeps
+    // it exactly, then signs and has the operator co-sign.
+    case 'leafSwapComplete': {
+      await requireConnected(origin);
+      const accept = String(params.accept ?? '').trim();
+      if (!accept) throw new Error('accept is required: the other wallet\u2019s acceptance text');
+      if (!(await sessionMnemonic())) throw new Error('the wallet is locked; open the wallet popup and unlock first');
+      await leaves.requireLeaves();
+      const id = leafSwap.textSwapId(accept);
+      const rec = id ? (await leafSwap.records())[id] : null;
+      if (!rec || rec.origin !== origin || rec.role !== 'maker') throw new Error('this acceptance names no swap this site offered from this wallet');
+      return requestApproval(origin, 'leafSwapComplete', {
+        text: origin + ' asks you to complete your swap with the other wallet\u2019s acceptance: you sign your side of the reassignment and the operator co-signs it.',
+        deltas: [{ ticker: (A.assetMeta(rec.gives.asset).ticker || rec.gives.asset.slice(0, 12)), atoms: '-' + rec.gives.value, precision: A.assetMeta(rec.gives.asset).precision || 0 },
+          { ticker: (A.assetMeta(rec.gets.asset).ticker || rec.gets.asset.slice(0, 12)), atoms: String(rec.gets.value), precision: A.assetMeta(rec.gets.asset).precision || 0 }],
+        rows: leafSwap.completeRows(rec, leafAmount),
+        detail: 'The wallet signs only if the acceptance keeps your coins and outputs exactly as offered. Final once a round settles it, its block certified and its Bitcoin anchor buried.',
+      }, async () => {
+        await ensureOpenOrThrow();
+        const d = await leaves.run('swap_complete', { accept });
+        return { swap: d.swap, done: true };
+      });
+    }
+
+    case 'getLeafSwaps': {
+      await requireUnlockedAndConnected(origin);
+      await leaves.requireLeaves();
+      return { swaps: leafSwap.forOrigin(await leaves.run('swaps'), await leafSwap.records(), origin) };
+    }
+
+    case 'leafSwapCancel': {
+      await requireConnected(origin);
+      const swap = String(params.swap ?? '');
+      if (!/^[0-9a-f]{64}$/.test(swap)) throw new Error('swap must be a swap id');
+      await leaves.requireLeaves();
+      const rec = (await leafSwap.records())[swap];
+      if (!rec || rec.origin !== origin) throw new Error('this site started no swap ' + swap);
+      return requestApproval(origin, 'leafSwapCancel', {
+        text: origin + ' asks you to cancel a swap: an offer frees its coins; an accepted swap moves your coins to a fresh leaf of your own, so the acceptance can never complete.',
+        rows: leafSwap.completeRows(rec, leafAmount),
+      }, async () => {
+        await ensureOpenOrThrow();
+        return await leaves.run('swap_cancel', { swap });
       });
     }
 

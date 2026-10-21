@@ -3,9 +3,10 @@
 // wallet's developer mode (sequentia-web-wallet/leaves.js).
 
 // Whether something is moving that sync must follow now, whatever the schedule says:
-// a coin pending, being sent, given to a participation, under a forfeit or on its way
-// out, or a participation not yet done.
-const MOVING = new Set(['pending', 'sending', 'given', 'forfeited', 'exiting']);
+// a coin pending, being sent, held for an in-tree swap (the other wallet completes it,
+// and only a sync reads what it pays this one), given to a participation, under a
+// forfeit or on its way out, or a participation not yet done.
+const MOVING = new Set(['pending', 'sending', 'offered', 'given', 'forfeited', 'exiting']);
 const DONE_PARTICIPATION = new Set(['released', 'void', 'expired', 'refused']);
 export function inFlight(coins, participations) {
   if ((coins || []).some((c) => MOVING.has(c.state))) return true;

@@ -48,7 +48,10 @@ wasm. Read this before changing anything.
   (`src/leaf-trade.js`, records in `src/leaf-orders.js`) are carried on with no window
   open: the host syncs every few seconds while a take waits on its forfeits, and the
   service worker lists an order on the relay once the library says it rests. Both run in
-  either mode once started; only what a site sees follows the mode. Mode and leaf events reach
+  either mode once started; only what a site sees follows the mode. An in-tree swap
+  (`src/leaf-swap.js`) keeps only which site started which swap and what the library
+  answered when it did; the host follows a coin held for a swap ('offered') until the
+  other wallet completes it, so its mailbox is read. Mode and leaf events reach
   pages through `chrome.tabs.sendMessage` to the content script, not the
   service worker's ports, which die when it sleeps.
 - **BigInt never crosses the message boundary** — all RPC amounts are strings.

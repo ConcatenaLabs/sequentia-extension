@@ -58,6 +58,7 @@ test('the host syncs on the library\'s schedule, more often while something move
   assert.equal(nextAskMs({ due: false, now: 100, next_sync_at: null }, 60000), 60000);
   assert.equal(inFlight([{ state: 'live' }], []), false);
   assert.equal(inFlight([{ state: 'pending' }], []), true);
+  assert.equal(inFlight([{ state: 'offered' }], []), true, 'a coin held for an in-tree swap is followed until the swap completes');
   assert.equal(inFlight([], [{ state: 'pending', released: false }]), true);
   assert.equal(inFlight([], [{ state: 'released' }]), false);
 });

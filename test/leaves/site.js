@@ -46,6 +46,11 @@
     $('btnExit').onclick = () => call('exitLeaf', opt({ leaf_id: val('leafId'), fee_asset: val('feeAsset') }));
     $('btnReceive').onclick = () => call('requestLeafReceive', opt({ asset: val('asset'), amount: val('amount') }));
     $('btnSend').onclick = () => call('sendLeaves', opt({ request: val('request'), asset: val('asset'), amount: val('amount') }));
+    $('btnSwapOffer').onclick = () => call('leafSwapOffer', { give_asset: val('giveAsset'), give: val('give'), want_asset: val('wantAsset'), want: val('want') });
+    $('btnSwapAccept').onclick = () => call('leafSwapAccept', { offer: val('swapOffer') });
+    $('btnSwapComplete').onclick = () => call('leafSwapComplete', { accept: val('swapAccept') });
+    $('btnSwaps').onclick = () => call('getLeafSwaps');
+    $('btnSwapCancel').onclick = () => call('leafSwapCancel', { swap: val('swapId') });
     window.siteEvents = events;
     readMode();
   }

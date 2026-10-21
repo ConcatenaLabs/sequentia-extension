@@ -742,6 +742,66 @@ made it, each time the take changes; in developer mode only.
 
 `getCapabilities().features` carries `leaf-orders` on builds that serve this section.
 
+## The in-tree swap between two wallets that hold leaves
+
+Two wallets that hold leaves of one operator swap two assets in one reassignment in
+the operator's tree: nothing goes on the chain until a round settles it, and neither
+wallet can take the other's asset without giving its own. The two wallets pass two
+texts between them, which the site carries: the maker's offer, then the taker's
+acceptance. These methods are refused in user mode, and to a wallet that has joined no
+operator, with the same words as the other leaf methods. BTC is never a leaf: both
+assets are Sequentia assets.
+
+### `leafSwapOffer({ give_asset, give, want_asset, want })` — approval per request
+Offers `give` atoms of `give_asset` for `want` atoms of `want_asset`. The library makes
+the offer first (`swap_offer`): it holds the coins the offer spends and signs nothing.
+The window shows what is given, what is got, and what the maker pays: the
+reassignment's margin and the margins its coins leave, in the asset given. Rejecting
+cancels the offer at once and frees the coins. Returns:
+```js
+{ swap: '<id>', offer: '<text>', gives: { asset, value }, gets: { asset, value },
+  pays: { asset, margin, margins } }
+```
+The site hands `offer` to the other wallet.
+
+### `leafSwapAccept({ offer })` — approval per request
+Accepts another wallet's offer. The library reads it first (`swap_read`): it checks the
+maker's coins as a receiver checks a coin, that they keep exactly what the offer gives,
+its change and its margin, and that the first output is what the maker wants; it signs,
+holds and stores nothing. The window shows what is got (a leaf), what is given, what
+this wallet pays (the margins its coins leave), what the maker pays, the change, and
+the date by which the coins got must be taken on the chain at the latest (every coin a
+swap makes rests on every coin it spends). On approval the library signs only on the
+terms shown (`refused: the swap's terms changed since they were shown; they are now …`
+otherwise). Returns:
+```js
+{ swap: '<id>', accept: '<text>', gets, gives, pays }
+```
+The site hands `accept` back to the maker.
+
+### `leafSwapComplete({ accept })` — approval per request
+Completes a swap this site offered from this wallet with the other wallet's acceptance.
+The window shows the offer it completes as the library answered it when it was made.
+On approval the library checks that the acceptance keeps the maker's coins and outputs
+exactly as offered, signs the maker's side, and has the operator co-sign; both wallets'
+new leaves then wait for them at the operator. Returns `{ swap, done: true }`.
+
+### `getLeafSwaps()` — silent, requires connection and developer mode
+The swaps this site started from this wallet, as the library lists them:
+```js
+{ swaps: [{ swap, role: 'maker' | 'taker', state: 'open' | 'accepted' | 'done' | 'cancelled',
+            gives, gets, offer? }] }
+```
+`offer` is an open offer's text, to hand to a taker again.
+
+### `leafSwapCancel({ swap })` — approval per request
+Cancels a swap this site started. An offer frees its coins. An acceptance has the
+taker's signatures in it, so the wallet spends the coins it signed to a fresh leaf of
+its own, after which the acceptance can never complete; the library's answer says so,
+or that the coins are already spent by the maker completing the swap.
+
+`getCapabilities().features` carries `leaf-swaps` on builds that serve this section.
+
 ## Events
 
 Subscribe with `window.sequentia.on(event, handler)` and unsubscribe with
