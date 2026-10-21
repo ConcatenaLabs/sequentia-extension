@@ -55,7 +55,11 @@ confidential `tsqb1…` addresses are an explicit opt-in).
   payment to one (`sendLeaves`), a board (`boardLeaves`) or an exit
   (`exitLeaf`), each behind the approval window, the board's and the exit's fees
   shown before anything is signed, and hears `leafArrived` and `leafSyncDue`.
-  The leaf wallet runs in the offscreen document and syncs on its own schedule
+  A site's on-chain room fills an on-chain order from leaves through the
+  operator's round (`takeOrder`) and places an order on the chain from leaves
+  (`placeOrderFromLeaves`); the wallet hands a take's forfeits over and lists an
+  order on the relay by itself, with no window open, and reports where each
+  stands (`getLeafTakes`, `getLeafOrders`, `leafTake`). The leaf wallet runs in the offscreen document and syncs on its own schedule
   while the browser runs and the wallet is unlocked, in either mode once an
   operator is joined; leaves count in each asset's figure and in the headline in
   both modes. BTC is never a leaf: it stays on its own chain and on Lightning.
@@ -157,6 +161,21 @@ committed, so no build step is needed to load the extension.
   through the approval window, and hears the events; every step is a DOM assertion and a screenshot, every console line of
   the extension's contexts is logged, and an error from any of them fails the
   drive.
+- The SeqDEX site's leaves room, end to end in headless Chromium:
+  `CHROME=/path/to/chrome ARCA_OPERATOR_CONTROL=127.0.0.1:18640
+  SEQOBD=/path/to/seqobd SEQDEX_WEB=/path/to/seqdex-web node test/leaf-room/drive.mjs
+  <evidence-dir> <work-dir>` needs the `arca` repository's operator harness running
+  (`bark-cli/tests/arca_operator_for_browsers.rs`, started fresh for each run) and
+  SeqDEX's relay binary (`seqobd`, from the `seqdex` repository), which the drive
+  starts itself, following the operator. Two browser profiles, a maker and a taker,
+  reach the site, the relay, the operator and its node at https://sequentiatestnet.com
+  through a stand-in box (`test/leaf-room/box.mjs`, a throwaway certificate). The
+  maker places an order from leaves through the room; the taker fills part of it from
+  leaves, closes the popup and restarts the browser inside the forfeit window, and the
+  wallet hands its forfeits over once unlocked; the fill reaches final, an anchor
+  rollback undoes it, and it is final again once mined again; a full fill of the rest
+  is not offered while it is not final. Every state is a DOM assertion and a
+  screenshot, and the service worker's console is read after every start.
 - Icons: `node scripts/gen-icons.mjs`
 - Rebuild the SWK wasm (needs the SWK checkout + clang):
   ```sh

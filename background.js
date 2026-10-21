@@ -23,6 +23,8 @@ import { btc as btcLib } from './vendor/btc.js';
 import * as perms from './src/permissions.js';
 import * as router from './src/provider-router.js';
 import * as leaves from './src/leaves.js';
+import * as leafTrade from './src/leaf-trade.js';
+import { takeRecords, updateTake } from './src/leaf-orders.js';
 import { MODE_WORDS } from './src/mode.js';
 import {
   vaultExists, vaultCreate, vaultUnlock, vaultLock, sessionMnemonic,
@@ -132,7 +134,7 @@ async function afterUnlock() {
     ln.resumePendingMove().catch(() => {});
     // The leaf wallet (developer mode, an operator joined): opened in the offscreen
     // document, which syncs it on the library's schedule from here on.
-    leaves.ensureRunning().catch((e) => console.warn('[leaves] could not start:', (e && e.message) ?? e));
+    leaves.ensureRunning().then(() => resumeLeafTrades()).catch((e) => console.warn('[leaves] could not start:', (e && e.message) ?? e));
   })().catch(() => {});
 }
 
@@ -159,9 +161,34 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   if (await sessionMnemonic()) {
     await engine.ensureOpen().catch(() => {});
     if (await ln.pendingMove()) ln.resumePendingMove().catch(() => {});
-    leaves.ensureRunning().catch(() => {});
+    leaves.ensureRunning().then(() => resumeLeafTrades()).catch(() => {});
+  } else {
+    markTakesWaiting().catch(() => {});
   }
 })();
+
+// Takes and orders made from leaves carry on by themselves once the leaf wallet runs:
+// the host is told which takes to sync for, and each order that rests is listed.
+async function resumeLeafTrades() {
+  badgeTakes(false);
+  await leafTrade.watchTakes().catch((e) => console.warn('[leaves] takes not watched:', (e && e.message) ?? e));
+  await leafTrade.progressOrders().catch(() => {});
+}
+
+// A take whose forfeits the wallet has not handed over needs the wallet unlocked within
+// the operator's window; while the wallet is locked the toolbar says so.
+async function markTakesWaiting() {
+  const recs = await takeRecords().catch(() => []);
+  const open = recs.filter((r) => !r.done);
+  if (open.length) badgeTakes(true);
+}
+function badgeTakes(on) {
+  try {
+    chrome.action.setBadgeText({ text: on ? '!' : '' });
+    if (on) chrome.action.setTitle({ title: 'A take from your leaves waits: unlock the wallet so it can hand over its forfeits in time' });
+    else chrome.action.setTitle({ title: chrome.runtime.getManifest().action?.default_title || 'Sequentia wallet' });
+  } catch { /* no toolbar action in this context */ }
+}
 
 // The leaf wallet lives in the offscreen document, which a browser can close (a
 // crash, a memory purge). Once a minute, while the wallet is unlocked in developer
@@ -169,7 +196,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 try {
   chrome.alarms.create('leafHost', { periodInMinutes: 1 });
   chrome.alarms.onAlarm.addListener((a) => {
-    if (a && a.name === 'leafHost') leaves.ensureRunning().catch(() => {});
+    if (a && a.name === 'leafHost') leaves.ensureRunning().then((up) => (up ? resumeLeafTrades() : null)).catch(() => {});
   });
 } catch { /* alarms unavailable in this context */ }
 
@@ -513,6 +540,20 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         .catch(() => {});
     } else if (msg.event === 'leafArrived' || msg.event === 'leafSyncDue') {
       leaves.mode().then((m) => { if (m === 'developer') return emitToConnected(msg.event, msg.data); }).catch(() => {});
+    } else if (msg.event === 'leafTake') {
+      // A take changed: told to the site that made it, in developer mode; a take done
+      // is marked so, and the host stops syncing for it.
+      (async () => {
+        const c = await leafTrade.takeChanged(msg.data || {});
+        if (!c) return;
+        if (['released', 'void'].includes(c.answer.stage)) {
+          await updateTake(c.answer.take, { done: true });
+          leafTrade.watchTakes().catch(() => {});
+        }
+        if ((await leaves.mode()) === 'developer') await emitToTabs('leafTake', c.answer, [c.origin]);
+      })().catch(() => {});
+    } else if (msg.event === 'leafSynced') {
+      leafTrade.progressOrders().catch(() => {});
     }
     return false;
   }

@@ -17,6 +17,7 @@ import { stGet } from './util.js';
 import * as contracts from './contracts.js';
 import * as leaves from './leaves.js';
 import { readRequest, planSend, leafBalancesAnswer } from './leaf-request.js';
+import * as leafTrade from './leaf-trade.js';
 
 // ---- pending approvals ----
 const pending = new Map();
@@ -136,7 +137,7 @@ export async function handleDappRequest(origin, method, params = {}) {
           'getUtxos', 'lnChannels', 'lnRequestInbound', 'dexFillOnchain', 'dexSwapLn', 'dexJobResult', 'dexMarketOrder', 'dexPlaceLimit', 'getBtcPublicKey', 'getBtcAddress', 'signBtcTaproot', 'prepareBtcSend',
           'openampGetIdentity', 'openampSignTagged', 'openampSignSpend', 'openampSignSupervision',
           'signContractSpend', 'getContractKey', 'signContractStatement', 'getWalletMode', 'getLeafBalances', 'getLeafAddress', 'requestLeafReceive', 'sendLeaves',
-          'boardLeaves', 'exitLeaf'],
+          'boardLeaves', 'exitLeaf', 'getLeafOperator', 'takeOrder', 'getLeafTakes', 'placeOrderFromLeaves', 'getLeafOrders'],
         // What this build can do beyond the method names, for sites that have
         // to know before they build something: 'pset-site-built' means
         // signPset fills in this wallet's key origins itself, so a PSET a site
@@ -144,9 +145,11 @@ export async function handleDappRequest(origin, method, params = {}) {
         // 'contract-spend' means signContractSpend runs the kit's contract engine.
         // 'leaves' means the leaf methods (getLeafBalances, getLeafAddress,
         // requestLeafReceive, sendLeaves, boardLeaves, exitLeaf) and their events are
-        // served, in developer mode.
-        features: ['pset-site-built', 'contract-spend', 'leaves'],
-        events: ['accountsChanged', 'disconnect', 'modeChanged', 'leafArrived', 'leafSyncDue'],
+        // served, in developer mode; 'leaf-orders' the methods that fill an on-chain
+        // order from leaves and place one from them (getLeafOperator, takeOrder,
+        // getLeafTakes, placeOrderFromLeaves, getLeafOrders) and the leafTake event.
+        features: ['pset-site-built', 'contract-spend', 'leaves', 'leaf-orders'],
+        events: ['accountsChanged', 'disconnect', 'modeChanged', 'leafArrived', 'leafSyncDue', 'leafTake'],
       };
 
     case 'getNetwork':
@@ -679,6 +682,119 @@ export async function handleDappRequest(origin, method, params = {}) {
         if (quote.fee_asset) run.fee_asset = quote.fee_asset;
         return await leaves.run('exit', run);
       });
+    }
+
+    // ---- on-chain orders filled from leaves and placed from them ----
+
+    case 'getLeafOperator': {
+      await requireUnlockedAndConnected(origin);
+      await leaves.requireLeaves();
+      return await leafTrade.operator();
+    }
+
+    // A take: the library reads the order on its own node (its script from the terms,
+    // unspent, final) and prices the fill by the covenant's arithmetic; the window shows
+    // that quote, and the take goes ahead only on the fill, price and fee shown.
+    case 'takeOrder': {
+      await requireConnected(origin);
+      const served = params.order;
+      if (!served || typeof served !== 'object' || !(served.covenant || served.covenant_txid)) {
+        throw new Error('order must be the relay’s offer of an on-chain order (its covenant terms)');
+      }
+      const amount = params.amount != null && params.amount !== '' ? String(params.amount) : null;
+      if (amount != null && (!/^\d+$/.test(amount) || BigInt(amount) <= 0n)) throw new Error('amount must be a positive number of atoms');
+      const maxFee = params.max_fee_ppm != null && params.max_fee_ppm !== '' ? String(params.max_fee_ppm) : null;
+      if (maxFee != null && !/^\d+$/.test(maxFee)) throw new Error('max_fee_ppm must be a whole number');
+      if (!(await sessionMnemonic())) throw new Error('the wallet is locked; open the wallet popup and unlock first');
+      await leaves.requireLeaves();
+      const args = { order: served };
+      if (amount != null) args.amount = amount;
+      if (maxFee != null) args.max_fee_ppm = maxFee;
+      const quote = await leaves.run('take_quote', args);
+      const op = await leafTrade.operator();
+      const win = op.forfeit_window_seconds;
+      const a = quote.asset_a, b = quote.asset_b;
+      const tick = (h) => { const m = A.assetMeta(h); return m.ticker && m.ticker !== '?' ? m.ticker : h.slice(0, 12) + '…'; };
+      const rows = [
+        ['Order', quote.order + ' (on the chain; the wallet found it on its own node, unspent and final)'],
+        ['You get', leafAmount(quote.filled, a) + ' as a leaf, in the round’s batch, once the round is final'],
+        ['You give', leafAmount(quote.gives, b) + ': the price and the operator’s fee, from your leaves'],
+        ['Price', leafAmount(quote.price, b) + ', paid on the chain to the order’s maker'],
+        ['Operator’s fee', leafAmount(quote.fee, b) + ' (its schedule for this asset)'],
+        ['Order after the fill', BigInt(quote.remainder) > 0n ? leafAmount(quote.remainder, a) + ' rests again on the chain, under the same terms' : 'filled whole'],
+        ['Operator', op.operator || '?'],
+      ];
+      if (quote.pays_itself_first) rows.push(['First', 'no single leaf holds exactly ' + leafAmount(quote.gives, b) + ': the wallet first pays itself one out of round, with nothing paid to the operator']);
+      rows.push(['Your part', 'Once the operator builds the round, this wallet hands over the forfeit of the coin it gives, within '
+        + (win != null ? Math.round(win / 60) + ' minutes' : 'the operator’s window') + '. Keep the browser running with the wallet unlocked until then; closing this window or the popup is fine. If the forfeits do not come in time, the take is voided and your coins are yours again.']);
+      return requestApproval(origin, 'takeOrder', {
+        text: origin + ' asks you to fill an on-chain order from your leaves, through the operator’s round: the round spends the order, pays its maker on the chain and pays you a leaf.',
+        deltas: [{ ticker: tick(b), atoms: '-' + quote.gives, precision: A.assetMeta(b).precision || 0 },
+          { ticker: tick(a), atoms: String(quote.filled), precision: A.assetMeta(a).precision || 0 }],
+        rows,
+        detail: 'The fill is final once the round’s block is certified and its Bitcoin anchor buried. If Bitcoin reorganises below it, so does Sequentia, and the fill is undone until the round is mined again. The take goes ahead only on the fill, price and fee shown.',
+      }, async () => {
+        await ensureOpenOrThrow();
+        return await leafTrade.take(origin, served, args, quote, win);
+      });
+    }
+
+    case 'getLeafTakes': {
+      await requireUnlockedAndConnected(origin);
+      await leaves.requireLeaves();
+      return { takes: await leafTrade.takesFor(origin) };
+    }
+
+    // An order placed from leaves: an offboard of exactly its amount into the address
+    // its terms make, through the operator's round; the wallet lists it on the relay
+    // once it rests there. The library quotes the placement first; the window shows the
+    // quote, and the order is placed only on the fee shown.
+    case 'placeOrderFromLeaves': {
+      await requireConnected(origin);
+      const hex64 = (v, name) => { const x = String(v ?? '').toLowerCase(); if (!/^[0-9a-f]{64}$/.test(x)) throw new Error(name + ' must be a 64-hex asset id'); return x; };
+      const pos = (v, name) => { const x = String(v ?? ''); if (!/^\d+$/.test(x) || BigInt(x) <= 0n) throw new Error(name + ' must be a positive whole number'); return x; };
+      const args = {
+        sell: hex64(params.sell, 'sell'), want: hex64(params.want, 'want'),
+        amount: pos(params.amount, 'amount'), rate_num: pos(params.rate_num, 'rate_num'), rate_den: pos(params.rate_den, 'rate_den'),
+      };
+      if (args.sell === args.want) throw new Error('an order sells one asset for another');
+      if (params.min_lot != null && params.min_lot !== '') args.min_lot = pos(params.min_lot, 'min_lot');
+      if (params.max_fee_ppm != null && params.max_fee_ppm !== '') args.max_fee_ppm = pos(params.max_fee_ppm, 'max_fee_ppm');
+      if (!(await sessionMnemonic())) throw new Error('the wallet is locked; open the wallet popup and unlock first');
+      await leaves.requireLeaves();
+      if (params.expiry != null && params.expiry !== '') args.expiry = pos(params.expiry, 'expiry');
+      else {
+        // A day ahead of the chain's median time unless the site names when the order may be refunded.
+        const sch = await leaves.run('schedule');
+        args.expiry = String(Number(sch.now) + 86400);
+      }
+      const quote = await leaves.run('order_quote', args);
+      const fee = quote.fee || {};
+      const refundAt = new Date(Number(quote.expiry_locktime ?? args.expiry) * 1000).toISOString().replace('T', ' ').replace(/\.\d+Z$/, ' UTC');
+      return requestApproval(origin, 'placeOrderFromLeaves', {
+        text: origin + ' asks you to place an order on the chain from your leaves: the operator’s round pays exactly the order’s amount into the order’s own address, where it rests with you offline until someone fills it, and the wallet lists it on the order book.',
+        deltas: [{ ticker: (A.assetMeta(args.sell).ticker || args.sell.slice(0, 12)), atoms: '-' + args.amount, precision: A.assetMeta(args.sell).precision || 0 }],
+        rows: [
+          ['Sell', leafAmount(args.amount, args.sell)],
+          ['For', leafAmount(quote.full_price, args.want) + ' if filled whole; ' + args.rate_num + ' of it for every ' + args.rate_den + ' sold, each fill rounded up'],
+          ['Smallest fill', leafAmount(quote.min_lot ?? args.min_lot ?? args.amount, args.sell)],
+          ['Paid to', String(quote.credits_to || 'the order’s own key')],
+          ['Fee', leafAmount(fee.amount, fee.asset || args.sell) + ' (the coins’ refresh ' + (fee.refresh ?? '?') + ', the offboard ' + (fee.offboard ?? '?') + ', the unlock margin ' + (fee.unlock_margin ?? '?') + ')'],
+          ['Change', quote.change && BigInt(quote.change) > 0n ? leafAmount(quote.change, args.sell) + ' back as a leaf' : 'none'],
+          ['Refund', 'what rests unfilled can be taken back from ' + refundAt + ' (median time), and not before: the order cannot be cancelled earlier'],
+          ['Listed at', leafTrade.RELAY],
+        ],
+        detail: 'The order rests once the round is final and the offboard unlocked into its address; the wallet then lists it at the relay and keeps it listed while it rests. The order is placed only on the fee shown.',
+      }, async () => {
+        await ensureOpenOrThrow();
+        return await leafTrade.place(origin, args, quote);
+      });
+    }
+
+    case 'getLeafOrders': {
+      await requireUnlockedAndConnected(origin);
+      await leaves.requireLeaves();
+      return { orders: await leafTrade.ordersFor(origin) };
     }
 
     case 'getBtcAddress': {

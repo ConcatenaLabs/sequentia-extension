@@ -24,6 +24,8 @@
 //        (created against `config` when this browser holds none); answers { created, info? }
 //   'run'   { command, args }               -> the library's { result, start }
 //   'sync'                                  -> runs sync now (events as on the schedule)
+//   'watch' { takes, tickMs? }              -> the takes to sync for every tickMs while
+//        their forfeits wait on the wallet; each change of one is sent as `leafTake`
 //   'stop'                                  -> closes the wallet and stops the schedule
 // The mnemonic is handed to the worker and not kept here.
 
@@ -34,7 +36,8 @@ let worker = null;
 let next = 1;
 const pending = new Map();
 let failed = null;
-const S = { open: false, fp: null, timer: null, heldFor: null, schedule: null, coins: [], participations: [], lastSync: null, lastError: null, tickMs: TICK_MS };
+const S = { open: false, fp: null, timer: null, heldFor: null, schedule: null, coins: [], participations: [], lastSync: null, lastError: null, tickMs: TICK_MS,
+  watch: new Set(), watchMs: 3000, seen: new Map() };
 
 function errorOf(e) {
   if (e && typeof e === 'object' && e.message) return { kind: e.kind || 'error', message: e.message, code: e.code, status: e.status };
@@ -86,7 +89,28 @@ async function reportBalance() {
     emit('leafBalance', { balance: b });
   } catch { /* the next change reports it again */ }
 }
-const READS = new Set(['info', 'address', 'balance', 'coins', 'record', 'boards', 'participations', 'schedule', 'refusals', 'quote', 'board_quote', 'exit_quote']);
+const SCAN_BUSY = /Scan already in progress/;
+const READS = new Set(['info', 'address', 'balance', 'coins', 'record', 'boards', 'participations', 'schedule', 'refusals', 'quote', 'board_quote', 'exit_quote',
+  'take_quote', 'order_quote', 'orders']);
+
+// The takes the service worker asked the host to watch (`watch`): while one waits on
+// the wallet (its forfeits not yet handed over), the host syncs every `watchMs`, so
+// they go in as soon as the operator builds the round, well inside its forfeit window.
+// Each change of a watched take is reported as `leafTake`.
+const TAKE_WAITS = new Set(['pending', 'issued']);
+function takeWaits() {
+  return S.participations.some((p) => S.watch.has(p.participation) && !p.released && TAKE_WAITS.has(String(p.state)));
+}
+function reportTakes() {
+  for (const p of S.participations) {
+    if (!S.watch.has(p.participation)) continue;
+    const key = `${p.state}/${p.round || ''}/${p.released ? 1 : 0}`;
+    if (S.seen.get(p.participation) === key) continue;
+    S.seen.set(p.participation, key);
+    console.info(`[leaves] take ${p.participation.slice(0, 12)}…: ${p.state}${p.round ? ', round ' + p.round.slice(0, 12) + '…' : ''}${p.released ? ', released' : ''}`);
+    emit('leafTake', { take: p.participation, participation: p });
+  }
+}
 
 function arrivals(mailbox) {
   for (const c of ((mailbox && mailbox.accepted) || [])) {
@@ -106,6 +130,7 @@ async function sync(by) {
     S.coins = (await call('run', { command: 'coins' })).result || [];
     S.participations = (await call('run', { command: 'participations' })).result || [];
   } catch { /* the next tick reads them again */ }
+  reportTakes();
   await reportBalance();
   return v;
 }
@@ -126,9 +151,13 @@ async function tick() {
     S.schedule = s;
     const moving = inFlight(S.coins, S.participations);
     if (s && s.due) emit('leafSyncDue', { now: s.now, next_sync_at: s.next_sync_at, why: s.why ?? null });
-    const d = syncDecision(s, S.heldFor, moving);
+    let d = syncDecision(s, S.heldFor, moving);
     S.heldFor = d.held;
+    // A take the service worker asked to watch, and the host has not synced since:
+    // sync now, whatever the schedule says (its forfeits may be due within minutes).
+    if (!d.sync && S.watchPending) d = { sync: true, why: 'take' };
     if (d.sync) {
+      S.watchPending = false;
       await sync(d.why);
       S.schedule = (await call('run', { command: 'schedule' })).result;
     } else if (freshRequestWaits(s)) {
@@ -141,6 +170,7 @@ async function tick() {
     }
     S.lastError = null;
     wait = inFlight(S.coins, S.participations) ? Math.min(S.tickMs, 30_000) : nextAskMs(S.schedule, S.tickMs);
+    if (takeWaits()) wait = Math.min(wait, S.watchMs);
   } catch (e) {
     S.lastError = errorOf(e);
     console.warn('[leaves] the scheduled pass failed:', S.lastError.message);
@@ -189,14 +219,40 @@ async function handle(op, args) {
       if (!S.open) throw { kind: 'refused', message: 'the leaf wallet is not open' };
       const command = String(args.command);
       try {
-        return await call('run', { command, args: args.args || {} });
+        // The node runs one UTXO-set scan at a time, and every wallet sharing it scans:
+        // a read refused for that alone is asked again, a little later. A command that
+        // signs or moves anything is never repeated here; the caller sees the refusal.
+        for (let i = 0; ; i++) {
+          try { return await call('run', { command, args: args.args || {} }); }
+          catch (e) {
+            if (!(READS.has(command) || command === 'sync') || i >= 8 || !SCAN_BUSY.test(String((e && e.message) || e))) throw e;
+            await new Promise((r) => setTimeout(r, 750 * (i + 1)));
+          }
+        }
       } finally {
-        if (!READS.has(command)) await reportBalance();
+        if (!READS.has(command)) {
+          await reportBalance();
+          // A command that moves coins (a take, an order, a board, a send) changes what
+          // the schedule follows: read the coins and participations again now, so the
+          // next tick syncs for what moves instead of waiting for the next sync to see it.
+          try {
+            S.coins = (await call('run', { command: 'coins' })).result || [];
+            S.participations = (await call('run', { command: 'participations' })).result || [];
+          } catch { /* the next sync reads them */ }
+          if (inFlight(S.coins, S.participations)) plan(1000);
+        }
       }
     }
     case 'sync':
       if (!S.open) throw { kind: 'refused', message: 'the leaf wallet is not open' };
       return await sync('asked');
+    case 'watch': {
+      S.watch = new Set((args.takes || []).map(String));
+      if (args.tickMs) S.watchMs = Math.max(1000, Number(args.tickMs));
+      // A take just made, or one left from before a restart: sync for it now.
+      if (S.open && S.watch.size) { S.watchPending = true; plan(0); }
+      return { watching: [...S.watch] };
+    }
     case 'stop':
       if (S.open) console.info('[leaves] the leaf wallet is closed');
       S.open = false;

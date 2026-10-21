@@ -13,6 +13,9 @@
 //                        the taker settles; the maker just reflects order_status.
 //   cancel(...)       -> stop advertising (relay OfferCancel) and, after expiry,
 //                        reclaim the funds via the REFUND leaf.
+//   postExisting(...) -> post an order whose coin already rests on the chain (an
+//                        offboard from leaves into the order's address), once the
+//                        output there pays the terms' script with exactly its amount.
 //
 // The covenant scriptPubKey + FILL witness + fill recipe are 100% pure JS
 // (covenant.js, byte-matched to the chain). The ONE thing that is NOT expressible
@@ -30,6 +33,7 @@
 // ---------------------------------------------------------------------------
 
 import { deriveTaptree, verifyAgainstSPK, planFill, ceilPrice, bytesToHex, hexToBytes, NUMS, LOCKTIME_THRESHOLD } from './covenant.js';
+import { buildCovenantOffer, leafProductFits } from './covenant-flow.js';
 
 // --- CovenantTerms (seqob.v1.Offer field 23) <-> Order ----------------------
 
@@ -133,6 +137,56 @@ export async function place(params, hooks){
   const posted = await hooks.postCovenantOffer({ order: plan.order, covenant, plan });
   return { plan, address, txid, vout, covenant, posted };
 }
+
+// --- post an order whose coin already rests on the chain -------------------
+
+// postExisting publishes an order whose coin something other than this wallet's
+// own send put on the chain: an offboard from leaves into the order's address, or
+// any funding the maker made elsewhere. Nothing is funded and nothing is signed
+// but the offer. The relay is told nothing the chain does not show: the output at
+// (txid, vout) is read through the host (`hooks.fetchOutput`), and the offer is
+// posted only when that output pays the very script the terms make, holds asset A
+// in the clear, and holds exactly `sellAtoms` (the relay lists a covenant only
+// when its outpoint holds exactly the offer amount).
+//   params: planPlaceOrder's (asset ids in INTERNAL order, as the leaf commits
+//           them; the offer's pair is their display form), plus
+//     txid, vout       where the order rests
+//     offerId          the offer's id (16 random bytes in hex by convention)
+//     makerPubkey      the 33-byte hex key the offer is signed with
+//     nowUnix, ttlSecs the offer's created and expiry times on the relay (the
+//                      covenant's own REFUND lock is in the terms)
+//   hooks.fetchOutput(txid, vout) -> Promise<{ scriptPubKey, asset, value }>
+//                      the output as the wallet's node or explorer reads it:
+//                      script hex, asset DISPLAY hex (null when blinded),
+//                      value atoms (null when blinded)
+//   hooks.postCovenantOffer(offer) -> Promise<any>   (seqob.postCovenantOffer, signing)
+// Returns { plan, covenant, offer, posted }. Throws before posting on any mismatch.
+export async function postExisting(params, hooks){
+  const plan = planPlaceOrder(params);
+  if (!leafProductFits(plan.sellAtoms, plan.order.rateNum, plan.order.rateDen))
+    throw new Error('the order\'s amount and rate overflow the fill leaf\'s arithmetic: no taker could fill it');
+  const txid = String(params.txid || '').toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(txid)) throw new Error('the order\'s txid must be 64 hex');
+  const vout = Number(params.vout);
+  if (!Number.isInteger(vout) || vout < 0) throw new Error('the order\'s vout must be a non-negative integer');
+  const out = await hooks.fetchOutput(txid, vout);
+  if (!out) throw new Error(`no output ${txid}:${vout} on the chain`);
+  verifyAgainstSPK(plan.order, out.scriptPubKey);
+  const displayA = revHex(hexOf(params.assetA)), displayB = revHex(hexOf(params.assetB));
+  if (out.asset == null || out.value == null) throw new Error(`output ${txid}:${vout} hides its asset or value: an order rests in the clear`);
+  if (String(out.asset).toLowerCase() !== displayA) throw new Error(`output ${txid}:${vout} holds asset ${out.asset}, and the order sells ${displayA}`);
+  if (BigInt(out.value) !== plan.sellAtoms) throw new Error(`output ${txid}:${vout} holds ${out.value}, and the order sells ${plan.sellAtoms}: the relay lists an order only at exactly its amount`);
+  const covenant = buildCovenantTerms(plan.order, txid, vout, plan.tap);
+  const offer = buildCovenantOffer({
+    assetA: displayA, assetB: displayB, sellAtoms: plan.sellAtoms, recvAtoms: plan.requiredBForFull,
+    covenant, makerPubkey: params.makerPubkey, offerId: params.offerId,
+    nowUnix: params.nowUnix, ttlSecs: params.ttlSecs, allowPartial: true, minLot: plan.order.minLot,
+  });
+  const posted = await hooks.postCovenantOffer(offer);
+  return { plan, covenant, offer, posted };
+}
+
+function revHex(h){ return String(h).match(/../g).reverse().join(''); }
 
 // --- taker: settle a Matched cross against a resting covenant ---------------
 
@@ -285,4 +339,4 @@ export async function cancel(offerId, refundParams, hooks){
 function truthy(...vs){ for (const v of vs) if (v === true || v === 'true' || v === 1) return true; return false; }
 function pick(obj, ...names){ for (const n of names){ if (obj && obj[n] !== undefined && obj[n] !== null) return obj[n]; } return undefined; }
 
-export const __test__ = { buildCovenantTerms, orderFromCovenantTerms, planPlaceOrder, planFillFromMatched, planRefund, cancel, hexOf };
+export const __test__ = { buildCovenantTerms, orderFromCovenantTerms, planPlaceOrder, planFillFromMatched, planRefund, cancel, postExisting, hexOf, revHex };
