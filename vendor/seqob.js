@@ -171,6 +171,19 @@ export function encodeSwapComplete(c){
 
 // --- deterministic Offer encoding (sign/verify) ----------------------------
 
+// seqob.v1.TimeInForce (offer field 24), as the relay's JSON names it or as a number.
+const TIME_IN_FORCE = { TIME_IN_FORCE_UNSPECIFIED: 0, TIME_IN_FORCE_IOC: 1, TIME_IN_FORCE_FOK: 2, TIME_IN_FORCE_POST_ONLY: 3 };
+function timeInForceNum(v){
+  if (v == null || v === '') return 0;
+  if (typeof v === 'number') return v;
+  if (typeof v === 'string'){
+    if (v in TIME_IN_FORCE) return TIME_IN_FORCE[v];
+    if (/^[0-9]+$/.test(v)) return Number(v);
+    throw new Error('unknown time_in_force ' + v);
+  }
+  return v || 0;
+}
+
 function tradeDirNum(v){
   if (typeof v === 'number') return v;
   if (typeof v === 'string'){
@@ -314,6 +327,11 @@ export function canonicalOfferBytes(o){
   // relay's blinded book (matches confidential-vs-confidential only). Placed
   // BEFORE the settlement oneof (20+) so the ascending field order is preserved.
   w.bool(19, O(o,'confidential','confidential'));
+  // time_in_force = 24: the incoming order's execution option, signed like every
+  // field but maker_sig; UNSPECIFIED (0) is omitted, as proto3 omits it. It goes
+  // HERE, before the settlement oneof (20+): protobuf-go writes every field
+  // outside a oneof first, in number order, and the oneof's fields after them.
+  w.enum(24, timeInForceNum(O(o,'time_in_force','timeInForce')));
   // oneof settlement, in field-number order: same_chain = 20, cross_chain = 21.
   // Only the set variant is present in a served offer, so exactly one emits; a
   // cross offer now verifies here too (was: cross offers could never verify).
