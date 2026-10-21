@@ -33,6 +33,14 @@ export const LSP = {
 // private chain started with -posrecordsv2height.
 export const RECORDS_V2_HEIGHT = null;
 
+// How many Bitcoin blocks an unbonding output waits, counted from the Bitcoin block
+// its unbond's block is anchored to, before it can be withdrawn into the wallet
+// (the network's -posunbonddepth). A number from the network, overridden for a
+// private chain started with another depth.
+export const UNBOND_ANCHOR_DEPTH = 2016;
+// The Sequentia block -> Bitcoin anchor height lookup the box serves (`{ anchorheight }`).
+export const ANCHOR_URL = BASE + '/anchor/';
+
 export const DEFAULT_FEERATE = 2000;   // sat/kvB reference feerate (2 sat/vB), above min relay
 export const BTC_FEERATE = 2;          // sat/vB for parent-chain testnet4 sends
 export const EXCHANGE_RATE_SCALE = 100000000;

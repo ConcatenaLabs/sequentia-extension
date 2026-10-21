@@ -1,5 +1,5 @@
 // Module hooks that point the extension at a private regtest chain: config.js
-// gets the shim's endpoints and the chain's records-v2 height, and the engine
+// gets the shim's endpoints, the chain's records-v2 height and its unbonding depth, and the engine
 // opens the chain's own network instead of the testnet's. Each rewrite must
 // match exactly once, so a changed source fails the run instead of silently
 // talking to the public testnet.
@@ -20,6 +20,7 @@ export async function load(url, context, nextLoad) {
     s = replaceOnce(s, "export const BASE = 'https://sequentiatestnet.com';", `export const BASE = ${JSON.stringify(cfg.base)};`, url);
     s = replaceOnce(s, "export const T4_API = BASE + '/testnet4/api';", `export const T4_API = ${JSON.stringify(cfg.t4)};`, url);
     s = replaceOnce(s, 'export const RECORDS_V2_HEIGHT = null;', `export const RECORDS_V2_HEIGHT = ${JSON.stringify(cfg.recordsV2Height)};`, url);
+    if (cfg.unbondDepth != null) s = replaceOnce(s, 'export const UNBOND_ANCHOR_DEPTH = 2016;', `export const UNBOND_ANCHOR_DEPTH = ${JSON.stringify(cfg.unbondDepth)};`, url);
     return { ...r, source: s };
   }
   if (url.endsWith('/src/engine.js')) {

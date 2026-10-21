@@ -380,10 +380,10 @@ const uiMethods = {
     return { aid: openamp.aid(), address, qr: address ? engine.qrFor(address) : null, aidQr: engine.qrFor(openamp.aid()) };
   },
   // --- staking pools -------------------------------------------------------
-  // Delegation only: lend the weight this wallet's staking key already carries,
-  // move it, take it back. Registering a stake locks coins for an unbonding
-  // period and running a pool means being online with the signing key on the
-  // machine producing blocks, so neither is offered from a browser popup.
+  // Delegation: lend the weight this wallet's staking key already carries,
+  // move it, take it back. Running a pool means being online with the signing
+  // key on the machine producing blocks, so it is not offered from a browser
+  // popup.
   'stakingOverview': async () => {
     await engine.ensureOpen();
     if (!staking.supported()) return { supported: false };
@@ -441,6 +441,21 @@ const uiMethods = {
     return next;
   },
 
+  // The stakes of this wallet's key, under either lock, and the two steps that end
+  // one: each reviewed in the popup before the kit builds and signs it.
+  'stakes': async () => {
+    await engine.ensureOpen();
+    return await staking.listStakes();
+  },
+  'stakeUnbondReview': async ({ txid }) => { await engine.ensureOpen(); return await staking.prepareUnbond(txid); },
+  'stakeClaimReview': async ({ txid }) => { await engine.ensureOpen(); return await staking.prepareClaim(txid); },
+  'stakeStepConfirm': async ({ id }) => {
+    await engine.ensureOpen();
+    const r = await staking.confirmStakeStep(id);
+    engine.syncFresh().catch(() => {});
+    return r;
+  },
+  'stakeStepDrop': async ({ id }) => { staking.dropStakeReview(id); return { ok: true }; },
   'stakingDelegate': async ({ signer }) => {
     await engine.ensureOpen();
     // Two transactions: the wallet pays its staking key, then the record is

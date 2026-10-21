@@ -1,15 +1,17 @@
 // SEQUENTIA staking pools, from the extension.
 //
-// What this offers is DELEGATION only: lend the stake weight this wallet's
-// staking key already carries to a pool, move it between pools, and take it
-// back. It does not offer staking itself, and it does not offer running a pool.
+// What this offers is DELEGATION: lend the stake weight this wallet's staking
+// key already carries to a pool, move it between pools, and take it back; and
+// the stakes of that key, however they were bonded (the web wallet bonds with a
+// height lock, Ambra with a time lock): listed, counted in the balance, unbonded
+// once their lock has passed and withdrawn into the wallet once unbonded. It does
+// not bond new stakes, and it does not offer running a pool.
 //
-// The line is not arbitrary. Registering a stake locks coins for an unbonding
-// period, and announcing a payout policy binds every block a key ever produces
-// and needs that key online on the machine producing them; neither belongs to a
-// browser popup that is closed most of the time. Delegating asks nothing of the
-// device afterwards: the record sits on-chain lending weight whether or not this
-// extension is ever opened again.
+// The line is not arbitrary. Announcing a payout policy binds every block a key
+// ever produces and needs that key online on the machine producing them, which
+// does not belong to a browser popup that is closed most of the time. Delegating
+// asks nothing of the device afterwards: the record sits on-chain lending weight
+// whether or not this extension is ever opened again.
 //
 // The safety properties that make that reasonable, all enforced by the chain:
 //   * the pool's key appears nowhere in the staking output's spending
@@ -33,10 +35,13 @@
 
 import * as lwk from '../pkg/lwk_wasm.js';
 import { btc } from '../vendor/btc.js';
-import { BASE, ESPLORA, RECORDS_V2_HEIGHT } from './config.js';
+import { BASE, ESPLORA, RECORDS_V2_HEIGHT, UNBOND_ANCHOR_DEPTH, ANCHOR_URL } from './config.js';
 import {
   getSigner, getWollet, getMnemonic, getNetwork, getPolicyHex, withWollet, signPset, broadcastRaw,
 } from './engine.js';
+import { stGet, stSet } from './util.js';
+import * as stakeRecords from '../vendor/stake-records.js';
+import { heldAtoms, lockWords } from './stake-view.js';
 // Kept in its own module, free of the wasm engine, so the copy that IS the
 // delegator's protection can be unit-tested.
 export { delegationWarnings as warnings } from './staking-warnings.js';
@@ -454,4 +459,215 @@ export async function buildSpend(record, rotateTo) {
     throw new Error(`the kit signed this spend "${built.signing}" where block ${tip + 1} needs "${signing}"; not broadcasting it`);
   }
   return built;   // { rawHex, txid, outValue, repointed, signing }
+}
+
+
+// ---- stakes: listed, counted, unbonded and withdrawn -------------------------
+//
+// Every decision about a stake is the web wallet's stake-records.js (vendored,
+// byte for byte): where the chain holds a stake of this key under either lock
+// (`findStakes`), where it stands (`stakeState`: a height lock is judged by the
+// tip's height, a time lock by the tip's median time, a claim by the tip's
+// Bitcoin anchor), and the kit's transactions that move it (`buildUnbond`, its
+// fee out of the stake and capped at 1% of it, and `buildClaim`). This module
+// hands it the extension's context and keeps what the popup shows.
+
+/// The stakes of this wallet's key that it has seen, kept in the service
+/// worker's storage shim as the web wallet keeps them in localStorage: one entry
+/// per bond, { pubkey, csv, txid, atoms, time, unbond?, claim? }. Keyed by the
+/// staking key, so each wallet keeps its own.
+const stakesKey = (pub) => 'ext.stakes.' + pub;
+
+async function anchorOf(hash) {
+  const r = await fetch(ANCHOR_URL + hash, { cache: 'no-store' });
+  if (!r.ok) return null;
+  const a = await r.json();
+  return a && a.anchorheight != null ? Number(a.anchorheight) : null;
+}
+
+/// The context stake-records.js runs in, built from this wallet. Only the parts
+/// stakes need are filled: the extension finds its delegation record itself
+/// (`findDelegation` above), and joining is `delegate`.
+export function stakeCtx() {
+  const pub = getSigner().stakerPublicKey();
+  return {
+    lwk,
+    network: getNetwork(),
+    mnemonic: () => { const m = getMnemonic(); if (!m) throw new Error('the wallet is locked'); return m; },
+    stakerPublicKey: () => pub,
+    stakerScript: () => stakerScript(pub),
+    esplora: (p) => fetch(ESPLORA + p, { cache: 'no-store' }),
+    broadcast: async (hex) => (await broadcastRaw({ hex })).txid,
+    tipHeight,
+    recordsV2Height: RECORDS_V2_HEIGHT ?? undefined,
+    feeRate: Number(FEE_RATE_SAT_KVB),
+    walletTxs: () => [],
+    hints: () => [[], []],
+    anchorHeightOf: anchorOf,
+    spendAnchorHeight: async () => {
+      const r = await fetch(ESPLORA + '/blocks/tip/hash', { cache: 'no-store' });
+      if (!r.ok) return null;
+      return anchorOf((await r.text()).trim());
+    },
+    unbondDepth: UNBOND_ANCHOR_DEPTH,
+    store: globalThis.localStorage,
+    stakesKey: stakesKey(pub),
+  };
+}
+
+function readStakes(ctx) {
+  try { return JSON.parse(ctx.store.getItem(ctx.stakesKey) || '[]'); } catch { return []; }
+}
+
+const STAKED_KEY = 'ext.staked';   // { [stakerKey]: { at, atoms, stakes, delegation } }
+
+/// Every stake of this wallet's key, under either lock, with where it stands:
+/// the chain's stakes this wallet has not seen are added first (a restore, or a
+/// stake bonded from the same phrase in another wallet), a stake claimed back is
+/// dropped, and the sum still the holder's is kept for the balance
+/// (`stakedSum`). Amounts are strings.
+export async function listStakes() {
+  if (!stakeRecords.unbondingSupported(lwk)) return { supported: false, stakes: [] };
+  const ctx = stakeCtx();
+  try {
+    const found = [];
+    for (const csv of stakeRecords.STAKE_CSVS) found.push(...await stakeRecords.findStakes(ctx, csv));
+    const cur = readStakes(ctx);
+    const have = new Set(cur.map((s) => s.txid));
+    const add = found.filter((f) => !have.has(f.txid));
+    if (add.length) ctx.store.setItem(ctx.stakesKey, JSON.stringify([...cur, ...add]));
+  } catch { /* the explorer could not be read: the stakes kept here are still shown */ }
+  const tip = await tipHeight();
+  const out = [];
+  const claimed = new Set();
+  for (const s of readStakes(ctx)) {
+    let state = null;
+    if (tip > 0) {
+      try { state = await stakeRecords.stakeState(ctx, s, tip); } catch { /* transient: shown as last kept */ }
+    }
+    if (state && state.state === 'claimed') { claimed.add(s.txid); continue; }
+    out.push({
+      txid: s.txid, csv: s.csv, timeLock: stakeRecords.isTimeCsv(s.csv), lock: lockWords(s.csv),
+      atoms: String(s.atoms), held: heldAtoms(s, state).toString(),
+      state: state ? state.state : 'unread',
+      maturesAt: state && state.maturesAt != null ? state.maturesAt : null,
+      maturesAtTime: state && state.maturesAtTime != null ? state.maturesAtTime : null,
+      tipTime: state && state.tipTime != null ? state.tipTime : null,
+      claimableAt: state && state.claimableAt != null ? state.claimableAt : null,
+      spendAnchor: state && state.spendAnchor != null ? state.spendAnchor : null,
+      unbondTxid: (state && state.unbonding && state.unbonding.txid) || (s.unbond && s.unbond.txid) || null,
+      claimTxid: (state && state.claim) || (s.claim && s.claim.txid) || null,
+    });
+  }
+  // A stake claimed back is in the wallet: it is forgotten here. Re-read before
+  // writing, so a step recorded while this ran is kept.
+  if (claimed.size) ctx.store.setItem(ctx.stakesKey, JSON.stringify(readStakes(ctx).filter((s) => !claimed.has(s.txid))));
+  return { supported: true, stakes: out, tip };
+}
+
+/// The Sequence token this wallet holds at its staking key: each stake still
+/// the holder's and the delegation record. Read from the chain when what was
+/// last read is older than `maxAgeMs`; with Infinity, never (null when nothing
+/// was read yet).
+export async function stakedSum({ maxAgeMs = 5 * 60_000, board = undefined } = {}) {
+  let pub;
+  try { pub = getSigner().stakerPublicKey(); } catch { return null; }
+  const all = (await stGet('local', STAKED_KEY)) || {};
+  const last = all[pub];
+  if (last && Date.now() - last.at < maxAgeMs) return last;
+  if (maxAgeMs === Infinity) return null;   // only what was read before, and nothing was
+  let stakes = 0n, delegation = 0n;
+  try {
+    const l = await listStakes();
+    // The explorer did not answer: what was read before stands.
+    if (!l.tip) return last || null;
+    for (const s of l.stakes) stakes += BigInt(s.held);
+  } catch { return last || null; }
+  try {
+    const d = await findDelegation(board === undefined ? await fetchPools().catch(() => null) : board);
+    if (d) delegation = BigInt(d.atoms);
+  } catch { /* counted as last read */ if (last) delegation = BigInt(last.delegation || 0); }
+  const v = { at: Date.now(), atoms: (stakes + delegation).toString(), stakes: stakes.toString(), delegation: delegation.toString() };
+  all[pub] = v;
+  await stSet('local', STAKED_KEY, all);
+  return v;
+}
+/// The staked sum is read again at the next balance.
+export async function forgetStakedSum() {
+  try {
+    const pub = getSigner().stakerPublicKey();
+    const all = (await stGet('local', STAKED_KEY)) || {};
+    if (all[pub]) { all[pub].at = 0; await stSet('local', STAKED_KEY, all); }
+  } catch {}
+}
+
+// Reviews shown in the popup before anything is signed: what an unbond or a
+// withdrawal will be, worked out from the stake's state alone. The transaction is
+// built and signed only once the review is confirmed, and broadcast only if it
+// moves exactly what the review showed.
+const reviews = new Map();
+let nextReview = 1;
+
+async function stakeStateOf(txid) {
+  const ctx = stakeCtx();
+  const entry = readStakes(ctx).find((s) => s.txid === txid);
+  if (!entry) throw new Error('this wallet has no stake ' + txid);
+  const tip = await stakeRecords.chainTip(ctx);
+  return { ctx, entry, state: await stakeRecords.stakeState(ctx, entry, tip) };
+}
+
+/// The review of an unbond: the stake, the fee (out of the stake, at most 1% of
+/// it) and what goes into the unbonding output.
+export async function prepareUnbond(txid) {
+  const { state } = await stakeStateOf(txid);
+  if (state.state !== 'unbondable') throw new Error('this stake cannot be unbonded yet');
+  const value = BigInt(state.stake.value);
+  let fee = stakeRecords.feeFor({ feeRate: Number(FEE_RATE_SAT_KVB) }, 'unbond');
+  const cap = BigInt(lwk.unbondFeeCap(state.stake.value));
+  if (fee > cap) fee = cap;
+  const id = 'u' + nextReview++;
+  const review = { id, kind: 'unbond', txid, stake: value.toString(), fee: fee.toString(), unbonding: (value - fee).toString(),
+    depth: UNBOND_ANCHOR_DEPTH };
+  reviews.set(id, review);
+  return review;
+}
+
+/// The review of a withdrawal: the unbonding output back to a fresh unblinded
+/// address of this wallet, less the fee.
+export async function prepareClaim(txid) {
+  const { state } = await stakeStateOf(txid);
+  if (state.state !== 'claimable') throw new Error('this stake cannot be withdrawn yet');
+  const value = BigInt(state.unbonding.value);
+  const fee = stakeRecords.feeFor({ feeRate: Number(FEE_RATE_SAT_KVB) }, 'claim');
+  const address = getWollet().address(undefined).address().toUnconfidential().toString();
+  const id = 'c' + nextReview++;
+  const review = { id, kind: 'claim', txid, unbonding: value.toString(), fee: fee.toString(), out: (value - fee).toString(), address };
+  reviews.set(id, review);
+  return review;
+}
+
+export function dropStakeReview(id) { reviews.delete(id); }
+
+/// The review confirmed: the transaction built and signed now, against the chain
+/// as it is now, and broadcast only if it moves what the review showed.
+export async function confirmStakeStep(id) {
+  const r = reviews.get(id);
+  if (!r) throw new Error('this review has expired; open it again');
+  reviews.delete(id);
+  const { ctx, state } = await stakeStateOf(r.txid);
+  let built;
+  if (r.kind === 'unbond') {
+    built = await stakeRecords.buildUnbond(ctx, state);
+    if (String(built.unbondingValue) !== r.unbonding) {
+      throw new Error(`the unbond would put ${built.unbondingValue} in the unbonding output, not the ${r.unbonding} shown; nothing was broadcast`);
+    }
+  } else {
+    built = await stakeRecords.buildClaim(ctx, state, r.address);
+    if (String(built.outValue) !== r.out) {
+      throw new Error(`the withdrawal would pay ${built.outValue}, not the ${r.out} shown; nothing was broadcast`);
+    }
+  }
+  const txid = await stakeRecords.broadcastStep(ctx, r.txid, r.kind, built);
+  await forgetStakedSum();
+  return { txid, signing: built.signing };
 }

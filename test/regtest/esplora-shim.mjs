@@ -148,6 +148,8 @@ export function startEsploraShim({ rpc, port, pools = null }) {
       log.push(`${req.method} ${p}`);
       let m;
       if (p === '/pools/pools.json' && pools) return json(pools);
+      // The box's anchor lookup: the Bitcoin height a Sequentia block is anchored to.
+      if ((m = p.match(/^\/anchor\/([0-9a-f]{64})$/))) return json({ anchorheight: (await call('getblockheader', [m[1]])).anchorheight });
       if (req.method === 'POST' && p === '/tx') {
         if (postsUntilFailure > 0 && --postsUntilFailure === 0) {
           return send(400, 'sendrawtransaction RPC error: {"code":-26,"message":"refused by the regtest shim on request"}');
@@ -162,7 +164,7 @@ export function startEsploraShim({ rpc, port, pools = null }) {
       if ((m = p.match(/^\/block\/([0-9a-f]{64})\/header$/))) return send(200, await call('getblockheader', [m[1], false]));
       if ((m = p.match(/^\/block\/([0-9a-f]{64})$/))) {
         const h = await call('getblockheader', [m[1]]);
-        return json({ id: h.hash, height: h.height, mediantime: h.mediantime, timestamp: h.time });
+        return json({ id: h.hash, height: h.height, previousblockhash: h.previousblockhash, mediantime: h.mediantime, timestamp: h.time });
       }
       if ((m = p.match(/^\/address\/([^/]+)\/utxo$/))) {
         const s = await call('scantxoutset', ['start', [`addr(${m[1]})`]]);

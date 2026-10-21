@@ -65,7 +65,7 @@ wasm. Read this before changing anything.
 - `vendor/btc.js`, `vendor/seqln.js`, `vendor/seqln-keys.js`,
   `vendor/seqob.js`, `vendor/covenant.js`, `vendor/covenant-order.js`, `vendor/covenant-flow.js`,
   `vendor/covenant-fill-host.js`, `vendor/noble-ciphers.js`, `vendor/contracts.js`, `vendor/bolt11.js`,
-  `vendor/lnupgrade.js`, `vendor/own-txs.js` and
+  `vendor/lnupgrade.js`, `vendor/own-txs.js`, `vendor/stake-records.js` and
   `vendor/lightning/` are copied from `sequentia-web-wallet` — fix bugs THERE
   and re-copy, don't fork them silently.
 - `leaves/worker.js` is copied from `sequentia-web-wallet/leaves/worker.js`
@@ -116,9 +116,13 @@ token (already public in sequentia-web-wallet) — not a secret.
   opened and released from SeqPal's page: `test/regtest/seqpal-issuer.mjs`,
   driven by SeqPal's `scripts/regtest-escrow.sh` (`ISSUER_PAGE`).
 - Staking on a private chain: `SEQUENTIAD=… node test/regtest/stake-records.mjs
-  block-one|fork`. It rewrites `src/config.js` and the engine's network only
-  through `test/regtest/loader.mjs`, which fails if either source text it
-  replaces has changed.
+  block-one|fork`; a stake under each lock (height and time) found, unbonded and
+  withdrawn: `SEQUENTIAD=… node test/regtest/stake-unbond.mjs`. Both rewrite
+  `src/config.js` and the engine's network only through `test/regtest/loader.mjs`,
+  which fails if a source text it replaces has changed. Every decision about a
+  stake (where the chain holds one, where it stands, the unbond's and the
+  withdrawal's transactions) is `vendor/stake-records.js`'s; `src/staking.js`
+  gives it the extension's context (`stakeCtx`).
 - A site using the leaf methods, headed, against a local operator:
   `CHROME=… ARCA_OPERATOR_CONTROL=… ARCA_CLI=… node test/leaves/drive.mjs
   <evidence-dir> <work-dir>` (README, Development). Start the operator harness
