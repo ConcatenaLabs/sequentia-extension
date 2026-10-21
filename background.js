@@ -249,13 +249,21 @@ async function overview({ withLn = false } = {}) {
   // host last reported it (every state the library counts).
   const walletMode = await leaves.mode();
   const leafPer = ((await leaves.leafSum().catch(() => null)) || {}).perAsset || {};
+  // The Sequence token at the wallet's staking key (each stake still the holder's, under
+  // either lock, and the delegation record) counts in its figure and the headline, in
+  // both modes. The fast first paint uses what was last read; the second pass reads the
+  // chain again when that is older than five minutes.
+  const policy = engine.getPolicyHex();
+  const stakedNow = await staking.stakedSum({ maxAgeMs: withLn ? 5 * 60_000 : Infinity }).catch(() => null);
+  const stakedAtoms = stakedNow ? BigInt(stakedNow.atoms) : 0n;
 
   const rows = [];
   const push = (key, onchainAtoms, alwaysShow) => {
     const lnEntry = lnSum.perKind[key];
     const lnAtoms = lnEntry ? BigInt(lnEntry.units) : 0n;
     const leafAtoms = BigInt(leafPer[key] || 0);
-    const total = BigInt(onchainAtoms) + lnAtoms + leafAtoms;
+    const staked = key === policy ? stakedAtoms : 0n;
+    const total = BigInt(onchainAtoms) + lnAtoms + leafAtoms + staked;
     if (!alwaysShow && total <= 0n) return;
     const m = A.assetMeta(key);
     rows.push({
@@ -263,6 +271,7 @@ async function overview({ withLn = false } = {}) {
       ticker: m.ticker, name: m.name, precision: m.precision,
       onchain: String(onchainAtoms), ln: lnAtoms.toString(), lnChannels: lnEntry ? lnEntry.channels : 0,
       leaves: key === 'BTC' ? null : leafAtoms.toString(),
+      staked: staked.toString(),
       total: total.toString(),
       refStr: A.refValueStr(key, total, ref),
       refVal: (() => { const rv = A.refValue(key, total, ref); return rv ? rv.v : null; })(),
@@ -286,11 +295,13 @@ async function overview({ withLn = false } = {}) {
     // reads spendable 0, and hiding the row made real, settled funds invisible.
     push(k, 0n, true);
   }
-  // An asset held only as leaves still has its row.
+  // An asset held only as leaves still has its row; so does the Sequence token when all
+  // of it is staked.
   for (const k of Object.keys(leafPer)) {
     if (k in bal.seq || k in lnSum.perKind) continue;
     push(k, 0n, false);
   }
+  if (policy && stakedAtoms > 0n && !(policy in bal.seq) && !(policy in lnSum.perKind) && !(policy in leafPer)) push(policy, 0n, false);
   for (const [id, atoms] of Object.entries(openamp.balancesMap())) push('oamp:' + id, atoms, false);
   rows.sort((a, b) => (a.key === 'BTC' ? -1 : b.key === 'BTC' ? 1 : (b.refVal || 0) - (a.refVal || 0)));
 

@@ -213,6 +213,16 @@ const one = (list, txid) => list.find((s) => s.txid === txid);
   const sum = await staking.stakedSum({ maxAgeMs: 0 });
   assert.equal(sum.atoms, String(110 * COIN), 'both stakes count in what is staked');
   results.stakedSum = sum.atoms;
+  // The popup's balance: the Sequence token's one figure counts what is staked, in both
+  // modes, and its parts are a tap away in user mode.
+  const ov = await ui('overview', { withLn: false });
+  const row = ov.rows.find((r) => r.key === policyAsset);
+  assert.ok(row, 'the Sequence token has its row');
+  assert.equal(row.staked, String(110 * COIN));
+  assert.equal(BigInt(row.total), BigInt(row.onchain) + BigInt(row.leaves || 0) + BigInt(row.ln) + BigInt(row.staked), 'the figure is on-chain + leaves + Lightning + staked');
+  const { userSplit } = await import(pathToFileURL(path.join(ROOT, 'src/balance-view.js')).href);
+  results.overview = { mode: ov.mode, onchain: row.onchain, staked: row.staked, total: row.total, userSplit: userSplit(row, String) };
+  log('overview: tSEQ figure', row.total, '=', row.onchain, 'on-chain +', row.staked, 'staked; user mode split:', results.overview.userSplit);
 }
 
 // ---- an unbond before the lock ---------------------------------------------------

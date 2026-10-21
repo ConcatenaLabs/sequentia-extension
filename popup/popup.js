@@ -1,6 +1,7 @@
 // Popup UI. All wallet logic lives in the background engine; this file only
 // renders state and relays user intents over the ui RPC scope.
 import { lnInvoiceKind } from '../src/util.js';
+import { userSplit, developerSplit } from '../src/balance-view.js';
 
 const $ = (id) => document.getElementById(id);
 const el = (t, c, txt) => { const e = document.createElement(t); if (c) e.className = c; if (txt != null) e.textContent = txt; return e; };
@@ -126,8 +127,13 @@ function renderOverview() {
     const n = el('div', 'status', 'Finishing a pending move of ' + OV.pendingMove.ticker + ' to Lightning…');
     list.appendChild(n);
   }
+  // Each figure counts every part (on-chain, leaves, Lightning and, for the Sequence
+  // token, staked) in both modes. User mode shows that one figure, its parts a tap away
+  // in plain words; developer mode names every rail under it, with Move to and from
+  // Lightning.
+  const dev = OV.mode === 'developer';
   for (const r of OV.rows) {
-    const row = el('div', 'asset-row');
+    const row = el('div', 'asset-row'); row.dataset.key = r.key;
     const head = el('div', 'arow-head');
     const tk = el('span', 'tk', r.ticker); tk.title = r.ticker; head.appendChild(tk);
     if (r.verified) { const b = el('span', 'badge-v', '✓'); b.title = r.key === 'BTC' ? 'Bitcoin, the parent chain' : (r.domain ? 'Verified · ' + r.domain : 'Verified in the Sequentia asset registry'); head.appendChild(b); }
@@ -136,7 +142,7 @@ function renderOverview() {
     const nm = el('div', 'sub', r.name); nm.title = r.name + (r.domain ? ' · registered by ' + r.domain : '');
     mid.appendChild(nm); head.appendChild(mid);
     const amt = el('span', 'amt');
-    amt.appendChild(el('div', null, fmtAtoms(r.total, r.precision)));
+    amt.appendChild(el('div', 'fig', fmtAtoms(r.total, r.precision)));
     if (r.refStr) amt.appendChild(el('div', 'sub', r.refStr));
     head.appendChild(amt);
     row.appendChild(head);
@@ -144,11 +150,19 @@ function renderOverview() {
     if (r.restricted && r.legend) {
       const meta = el('div', 'ln-meta'); meta.appendChild(el('div', null, r.legend)); row.appendChild(meta);
     }
-    // Developer mode: every rail of the asset on one line. BTC is never a leaf.
-    if (OV.mode === 'developer' && r.key !== 'BTC' && !r.restricted) {
-      row.appendChild(el('div', 'sub rail-split', fmtAtoms(r.onchain, r.precision) + ' on-chain · '
-        + fmtAtoms(r.leaves || '0', r.precision) + ' leaves · ' + fmtAtoms(r.ln || '0', r.precision) + ' Lightning'));
+    const fmt = (v) => fmtAtoms(v, r.precision);
+    if (!dev) {
+      const split = userSplit(r, fmt);
+      if (split) {
+        row.classList.add('tappable'); row.title = 'Show where this balance is';
+        if (SPLIT_OPEN.has(r.key)) row.appendChild(el('div', 'sub rail-split', split));
+        row.onclick = () => { if (SPLIT_OPEN.has(r.key)) SPLIT_OPEN.delete(r.key); else SPLIT_OPEN.add(r.key); renderOverview(); };
+      }
+      list.appendChild(row);
+      continue;
     }
+    // Developer mode: every rail of the asset on one line. BTC is never a leaf.
+    if (r.key !== 'BTC' && !r.restricted) row.appendChild(el('div', 'sub rail-split', developerSplit(r, fmt)));
     const lnAtoms = BigInt(r.ln || 0);
     const canMove = (r.key === 'BTC' || r.feePriced) && !r.restricted;
     if (OV.lnDeployed && canMove && (lnAtoms > 0n || BigInt(r.onchain) > 0n)) {
@@ -173,6 +187,8 @@ function renderOverview() {
     list.appendChild(row);
   }
 }
+// The rows whose split is open in user mode, kept across renders.
+const SPLIT_OPEN = new Set();
 
 // ---- modals ----
 function modal(title) {

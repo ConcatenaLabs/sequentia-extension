@@ -156,7 +156,22 @@ export function ownChannelsFor(kind) {
   return out;
 }
 
-// Summary for the popup: per-kind LN spendable, serializable (strings).
+// The wallet's share of its own channels for a kind, the reserve included: its
+// Lightning balance, which counts in the asset's figure. An LSP that predates
+// balance_units reports only what can be sent, which stands in for it.
+export function balanceFor(kind) {
+  const chs = (lastStatus && lastStatus.channels) || [];
+  let units = 0, n = 0;
+  for (const c of chs) {
+    if (!c.node_key) continue;
+    const isBtc = (c.asset_label === 'BTC' || c.leg === 'btc');
+    const match = kind === 'BTC' ? isBtc : (!isBtc && (c.asset === kind || c.asset_label === A.assetMeta(kind).ticker));
+    if (match && String(c.state || '').startsWith('CHANNELD')) { units += Number(c.balance_units ?? c.spendable_units ?? 0); n++; }
+  }
+  return { units, channels: n };
+}
+
+// Summary for the popup: per-kind Lightning balance (`balanceFor`), serializable (strings).
 export async function summary(heldHexes) {
   lnInit();
   if (!seqlnState().deployed) return { deployed: false, perKind: {} };
@@ -164,7 +179,7 @@ export async function summary(heldHexes) {
   const swapped = (await stGet('local', 'ext.lnAssets').catch(() => null)) || [];
   const perKind = {};
   for (const k of [...new Set(['BTC', ...heldHexes, ...swapped])]) {
-    const s = spendableFor(k);
+    const s = balanceFor(k);
     if (s.channels > 0) perKind[k] = { units: String(Math.round(s.units)), channels: s.channels };
   }
   return { deployed: true, perKind };

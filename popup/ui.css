@@ -70,6 +70,9 @@ button.tiny { padding: 4px 10px; font-size: 11px; margin-top: 0; }
 .amt .sub { font-size: 11px; }
 .ln-meta { margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--line); font-size: 11px; color: var(--sub); }
 .bal-acts { display: flex; gap: 6px; margin-top: 6px; }
+/* User mode: a row whose figure has several parts opens them under it on a tap. */
+.asset-row.tappable { cursor: pointer; }
+.rail-split { margin-top: 6px; }
 
 /* history */
 .item { display: flex; gap: 8px; align-items: center; padding: 8px 2px; border-bottom: 1px solid var(--line); font-size: 12px; }
