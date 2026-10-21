@@ -49,3 +49,46 @@ export function freshRequestWaits(schedule, windowSecs = FRESH_REQUEST_SECS) {
   return (schedule.receive_requests || []).some((r) => r.state === 'waiting' && r.owner !== 'restored'
     && typeof r.asked_at === 'number' && schedule.now - r.asked_at < windowSecs);
 }
+
+// What the wallet does by itself, in either mode, is the library's `care`: after a sync,
+// at most every CARE_EVERY_MS and once after the leaf wallet opens. It takes up every
+// open claim named for one of the wallet's receive keys, cancels each refresh plan whose
+// coin has moved, plans each coin whose refresh step could run within ten days, and asks
+// a refresh in a round for a coin no round made (a board, a coin received or claimed out
+// of round), so that a later `care` can plan the new one. The web wallet's leaves.js
+// holds the same rules.
+export const CARE_EVERY_MS = 10 * 60_000;
+
+// Whether `care` runs now: at the first chance after the wallet opens, then at most every
+// `every` ms. `last` is when it last ran (ms), or null.
+export function careDue(last, nowMs, every = CARE_EVERY_MS) {
+  return last == null || nowMs - last >= every;
+}
+
+// How many receive keys `care` looks for claims under: the kit wallet's next receive
+// index and 20 more, so a claim named by any address the kit handed out is found (the
+// leaf wallet's own index counter is its own).
+export function claimScan(nextIndex) {
+  const n = Number(nextIndex);
+  return (Number.isInteger(n) && n > 0 ? n : 0) + 20;
+}
+
+// What a `care` answer did, counted: claims taken up (a leaf id came back), plans made,
+// plans cancelled, coins sent to a round's refresh. Anything at all means the balance may
+// have moved.
+export function careSummary(answer) {
+  const a = answer || {};
+  const claims = Array.isArray(a.claims) ? a.claims : [];
+  const planned = Array.isArray(a.planned) ? a.planned : [];
+  const cancelled = Array.isArray(a.cancelled) ? a.cancelled : [];
+  const refreshing = Array.isArray(a.refreshing) ? a.refreshing : [];
+  return {
+    taken: claims.filter((c) => c && c.taken_up && !c.error).length,
+    held: claims.filter((c) => c && c.leaf_id && (c.held || c.error)).length,
+    planned: planned.filter((p) => p && p.plan_id).length,
+    unplanned: planned.filter((p) => p && p.error).length,
+    cancelled: cancelled.filter((p) => p && p.state === 'cancelled').length,
+    refreshing: refreshing.filter((r) => r && r.participation && !r.error).length,
+    later: Number(a.not_yet_planned || 0),
+  };
+}

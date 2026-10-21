@@ -423,6 +423,24 @@ since its coins have dates to keep, and their value counts in each asset's
 figure and in the headline (`getBalances` is unchanged: it answers the
 on-chain and Lightning rails).
 
+What the wallet does by itself, in either mode and with no window: once after
+the leaf wallet opens, and after a sync at most every ten minutes, it runs the
+library's `care`. That takes up every open claim of a distribution named for one
+of the wallet's receive keys (the main wallet's addresses handed out so far, and
+20 more), so the asset counts in its figure with no click; cancels each refresh
+plan whose coin has moved; signs a refresh plan for each coin whose refresh step
+could run within ten days, so a wallet closed across that coin's expiry keeps
+it; and sends a coin no round made (a board, a coin received or claimed out of
+round) into a round's refresh, so that a later run can plan the new one. A
+plan's fee is taken from the coin in the coin's own asset, never another; a
+coin the operator will not plan stays unplanned and is refreshed by `sync`
+while the wallet is open. A coin younger than that stays free to pay; a wallet
+closed within a coin's first two weeks or so and kept closed through its step
+window can lose the coin to the operator's sweep, as any absent holder can.
+A coin a plan names pays nothing until it is refreshed in a round: the popup's
+developer mode lists the plans with Cancel and Release (cancel, then refresh in
+the next round), and none of this shows in user mode.
+
 The wallet runs the operator's wallet library, compiled to wasm, in a worker of
 its offscreen document (`leaves/`). Every script, record, check, fee and
 refusal is the library's; the extension shows what it answers and refuses in its
@@ -599,7 +617,9 @@ Delivered to connected sites only, and only in developer mode:
 
 - `leafArrived` — `{ leaf_id, asset, value, kind }` for each coin a sync
   accepted from the mailbox (`value` in atoms). It fires once per coin, from
-  the sync that accepted it, whoever asked for that sync.
+  the sync that accepted it, whoever asked for that sync. A claim of a
+  distribution, which the wallet takes up by itself (see below), arrives with
+  `kind: 'claim'`, `leaf_id` the coin it was paid on to.
 - `leafSyncDue` — `{ now, next_sync_at, why? }` when the library's schedule
   falls due, just before the wallet runs the sync it asks for. `why` is the
   library's reason when something holds the time (a waiting receive request).

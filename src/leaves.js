@@ -17,6 +17,7 @@ import { ensureOffscreen, offscreenUp } from './offscreen-doc.js';
 import { stGet, stSet, stDel } from './util.js';
 import { sessionMnemonic } from './vault.js';
 import { mode, setMode, walletTag } from './mode.js';
+import { claimScan } from './leaf-schedule.js';
 
 export { mode, setMode };
 
@@ -113,26 +114,37 @@ export async function join(cfg) {
   if (!mnemonic) throw new Error('the wallet is locked');
   if (!cfg || !cfg.server || !cfg.node_url) throw new Error('name the operator’s server and the node');
   const clean = {};
-  for (const k of ['server', 'node_url', 'node_user', 'node_password', 'exit_delay_units', 'min_exit_delay_units', 'max_exit_delay_units', 'tick_ms']) {
+  for (const k of ['server', 'node_url', 'node_user', 'node_password', 'exit_delay_units', 'min_exit_delay_units', 'max_exit_delay_units', 'tick_ms', 'care_ms']) {
     if (cfg[k] !== undefined && cfg[k] !== null && cfg[k] !== '') clean[k] = cfg[k];
   }
-  const v = await host('start', { mnemonic, config: clean, nodePassword: clean.node_password, tickMs: clean.tick_ms });
+  const v = await host('start', { mnemonic, config: clean, nodePassword: clean.node_password, tickMs: clean.tick_ms, careMs: clean.care_ms, scan: scanNow() });
   // A wallet created now answers its `info` as every command answers, { result, start }.
   const info = (v.info && v.info.result) || (await host('run', { command: 'info' })).result;
   await setConfig({ ...clean, operator: info && info.operator, joinedAt: Date.now() });
   return info;
 }
 
+// The kit wallet's next receive index, which the service worker knows and the host does
+// not: `care` looks for claims under it and 20 more keys (`claimScan`).
+let receiveIndex = () => null;
+export function setReceiveIndexSource(fn) { receiveIndex = fn; }
+const scanNow = () => { try { return claimScan(receiveIndex()); } catch { return claimScan(null); } };
+
 // Opens the leaf wallet in the offscreen host when this wallet joined an operator and is
-// unlocked, in either mode; a no-op when it is already open. Answers whether it is open.
+// unlocked, in either mode; when it is already open, tells it the receive keys `care`
+// scans. Answers whether it is open.
 export async function ensureRunning() {
   const cfg = await config();
   if (!cfg) return false;
   const mnemonic = await sessionMnemonic();
   if (!mnemonic) return false;
   const st = await host('status');
-  if (st.open) return true;
-  await host('start', { mnemonic, nodePassword: cfg.node_password, tickMs: cfg.tick_ms });
+  if (st.open) {
+    const scan = scanNow();
+    if (st.scan !== scan) await host('scan', { scan });
+    return true;
+  }
+  await host('start', { mnemonic, nodePassword: cfg.node_password, tickMs: cfg.tick_ms, careMs: cfg.care_ms, scan: scanNow() });
   return true;
 }
 
@@ -178,6 +190,11 @@ export async function hostOp(op, args = {}) {
 export async function status() {
   if (!(await offscreenUp())) return { open: false };
   return await host('status');
+}
+// `care` now, whenever it last ran (developer mode's Run now).
+export async function careNow() {
+  await requireLeaves();
+  return await host('care');
 }
 export async function syncNow() {
   await requireLeaves();

@@ -281,7 +281,7 @@ chrome.runtime.onMessage.addListener((msg) => {
     if (msg.event === 'leaves-changed' && OV) rpc('overview', { withLn: false }).then((v) => { OV = v; renderOverview(); }).catch(() => {});
   }
   // A leaf sync finished (on the schedule, or asked): show what it changed.
-  if (msg && msg.scope === 'leaf-event' && msg.event === 'leafSynced' && !$('leafCard').classList.contains('hide')) {
+  if (msg && msg.scope === 'leaf-event' && (msg.event === 'leafSynced' || msg.event === 'leafCared') && !$('leafCard').classList.contains('hide')) {
     renderLeaves().catch(() => {});
   }
 });
@@ -580,11 +580,74 @@ async function renderLeaves() {
     row.appendChild(el('span', 'v', total.toString() + ' atoms (' + parts.join(', ') + ')'));
     box.appendChild(row);
   }
+  renderCare(st);
   const sc = st.schedule || {};
   const last = st.status && st.status.lastSync;
   $('leafSchedule').textContent = (sc.next_sync_at ? 'Next sync the schedule asks for: ' + new Date(sc.next_sync_at * 1000).toISOString() : 'Nothing held off the chain, nothing awaited.')
     + (last ? ' · Last sync ' + new Date(last.at).toISOString() + ' (' + last.by + ')' : '');
 }
+// Developer mode's view of what the wallet does by itself: the last `care` and the plans.
+const short = (x) => (x ? String(x).slice(0, 12) + '…' : '');
+const isoOf = (secs) => (typeof secs === 'number' ? new Date(secs * 1000).toISOString().replace('T', ' ').replace(/\.\d+Z$/, ' UTC') : '?');
+function renderCare(st) {
+  const lc = st.status && st.status.lastCare;
+  const box = $('leafCareLast'); box.innerHTML = '';
+  if (!lc) box.textContent = 'Not run yet since the wallet opened.';
+  else if (lc.error) { box.className = 'status err'; box.textContent = 'Last run ' + new Date(lc.at).toISOString() + ': ' + lc.error.message; }
+  else {
+    box.className = 'sub';
+    const s = lc.summary || {};
+    box.dataset.taken = String(s.taken || 0); box.dataset.planned = String(s.planned || 0); box.dataset.cancelled = String(s.cancelled || 0);
+    box.appendChild(el('div', null, 'Last run ' + new Date(lc.at).toISOString() + ': ' + (s.taken || 0) + ' claim(s) taken up'
+      + (s.held ? ', ' + s.held + ' held for a later run' : '') + ' · ' + (s.planned || 0) + ' plan(s) signed'
+      + (s.unplanned ? ', ' + s.unplanned + ' refused by the operator' : '') + ' · ' + (s.cancelled || 0) + ' cancelled (their leaf moved) · '
+      + (s.refreshing || 0) + ' leaf(s) sent to a round, to be planned · ' + (s.later || 0) + ' not yet near their refresh'));
+    const v = lc.value || {};
+    for (const p of v.planned || []) if (p && p.error) box.appendChild(el('div', 'status err', short(p.coin) + ': ' + p.error));
+    for (const r of v.refreshing || []) if (r && r.error) box.appendChild(el('div', 'status err', short(r.coin) + ': ' + r.error));
+    for (const c of (Array.isArray(v.claims) ? v.claims : [])) if (c && (c.refused || c.error)) box.appendChild(el('div', 'status err', 'claim ' + c.claim + ': ' + (c.refused || c.error)));
+    if (v.claims && !Array.isArray(v.claims) && v.claims.error) box.appendChild(el('div', 'status err', 'claims: ' + v.claims.error));
+  }
+  const list = $('leafPlans'); list.innerHTML = '';
+  const plans = st.plans || [];
+  if (!plans.length) list.appendChild(el('div', 'sub', 'No refresh plans.'));
+  for (const p of plans) {
+    const row = el('div', 'kv leaf-plan'); row.dataset.plan = p.plan_id; row.dataset.state = p.state;
+    const mid = el('div', 'grow');
+    mid.appendChild(el('div', 'mono', 'Plan ' + short(p.plan_id) + ' · ' + p.state + ' · leaf ' + short(p.coin) + ' · ' + p.value + ' of ' + short(p.asset)));
+    mid.appendChild(el('div', 'sub', 'covers it until ' + isoOf(p.covered_until) + ' at the earliest; sync by ' + isoOf(p.sync_by)
+      + '; steps: ' + (p.steps || []).map((x) => x.state || 'waiting').join(', ')));
+    row.appendChild(mid);
+    if (p.state === 'open') {
+      const acts = el('div', 'bal-acts');
+      const c = el('button', 'ghost tiny', 'Cancel'); c.onclick = () => leafAct('Cancelling the plan…', () => rpc('leaves.planCancel', { plan: p.plan_id }));
+      const current = ((p.steps || []).filter((x) => x.leaf_id).map((x) => x.leaf_id).pop()) || p.coin;
+      const r = el('button', 'ghost tiny', 'Release'); r.onclick = () => releasePlan(p.plan_id, current);
+      acts.appendChild(c); acts.appendChild(r); row.appendChild(acts);
+    }
+    list.appendChild(row);
+  }
+}
+async function leafAct(what, fn) {
+  $('leafStatus').className = 'status'; $('leafStatus').textContent = what;
+  try { const v = await fn(); $('leafStatus').textContent = ''; await renderLeaves(); return v; }
+  catch (e) { $('leafStatus').className = 'status err'; $('leafStatus').textContent = e.message; await renderLeaves().catch(() => {}); return null; }
+}
+// Release: the plan cancelled and its leaf's refresh in a round quoted; confirmed here,
+// the leaf joins the next round on exactly the fees shown, and comes out free to pay.
+async function releasePlan(plan, leaf) {
+  const r = await leafAct('Cancelling the plan and quoting the refresh…', () => rpc('leaves.releaseQuote', { plan, leaf }));
+  const box = $('leafRelease'); box.innerHTML = '';
+  if (!r) return;
+  const coins = (r.quote && r.quote.coins) || [];
+  box.appendChild(el('div', 'sub', 'Plan cancelled. Refresh of leaf ' + short(leaf) + ' in the next round: '
+    + coins.map((c) => short(c.leaf_id || c.coin || '') + ' fee ' + (c.fee ?? '?')).join(', ')));
+  const ok = el('button', 'primary tiny', 'Refresh on these fees'); ok.id = 'btnLeafReleaseGo';
+  ok.onclick = async () => { box.innerHTML = ''; await leafAct('Joining the round…', () => rpc('leaves.participate', { leaves: r.leaves, shown: coins })); };
+  box.appendChild(ok);
+}
+$('btnLeafCare').onclick = () => leafAct('Running…', () => rpc('leaves.care'));
+
 $('setMode').onchange = async () => {
   try { await rpc('setMode', { mode: $('setMode').value }); await renderLeaves(); if (OV) { OV = await rpc('overview', { withLn: false }); renderOverview(); } }
   catch (e) { $('settingsStatus').className = 'status err'; $('settingsStatus').textContent = e.message; }

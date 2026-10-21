@@ -6,6 +6,9 @@
 // long as the offscreen document lives, so the service worker never waits on a sync:
 // it asks, and the answer comes back as a message.
 //
+// When a wallet opens it syncs once, whatever the schedule says (a planned coin's step
+// is taken up only by a sync), then runs `care`.
+//
 // While a wallet is open it syncs on the library's own schedule (`schedule`: when a
 // coin's refresh window opens, while a receive request waits; when it falls due, and
 // when the time it first gave after the last sync arrives, whatever `due` says), and
@@ -18,6 +21,15 @@
 // After every sync and every command that can change a balance, it reports the library's
 // `balance` as `leafBalance`, which the service worker keeps for the popup.
 //
+// What the wallet does by itself, in either mode, is the library's `care`, run once after
+// the wallet opens and after a sync or a tick of the schedule at most every ten minutes
+// (`careDue`): it takes up every open claim named for one of the wallet's receive keys
+// (`scan`: the kit wallet's next receive index and 20 more, which the service worker
+// keeps current), cancels each refresh plan whose coin has moved, plans each coin whose
+// refresh step could run within ten days, and asks a round's refresh for a coin no round
+// made. A claim taken up counts in the balance like any leaf. Each run is reported as
+// `leafCared` and kept for developer mode (`status`).
+//
 // Messages (scope 'leaf'), answered { ok, value } or { ok: false, error: { kind, message } }:
 //   'status'                                -> { open, lastSync, lastError, schedule }
 //   'start' { mnemonic, config?, nodePassword? } -> opens the wallet of that mnemonic
@@ -26,10 +38,12 @@
 //   'sync'                                  -> runs sync now (events as on the schedule)
 //   'watch' { takes, tickMs? }              -> the takes to sync for every tickMs while
 //        their forfeits wait on the wallet; each change of one is sent as `leafTake`
+//   'scan'  { scan }                        -> the receive keys `care` looks for claims under
+//   'care'                                  -> runs `care` now, whenever it last ran
 //   'stop'                                  -> closes the wallet and stops the schedule
 // The mnemonic is handed to the worker and not kept here.
 
-import { inFlight, nextAskMs, freshRequestWaits, syncDecision } from './src/leaf-schedule.js';
+import { inFlight, nextAskMs, freshRequestWaits, syncDecision, careDue, careSummary, CARE_EVERY_MS } from './src/leaf-schedule.js';
 
 const TICK_MS = 60_000;
 let worker = null;
@@ -37,7 +51,7 @@ let next = 1;
 const pending = new Map();
 let failed = null;
 const S = { open: false, fp: null, timer: null, heldFor: null, schedule: null, coins: [], participations: [], lastSync: null, lastError: null, tickMs: TICK_MS,
-  watch: new Set(), watchMs: 3000, seen: new Map() };
+  watch: new Set(), watchMs: 3000, seen: new Map(), scan: null, careAt: null, careMs: CARE_EVERY_MS, lastCare: null };
 
 function errorOf(e) {
   if (e && typeof e === 'object' && e.message) return { kind: e.kind || 'error', message: e.message, code: e.code, status: e.status };
@@ -91,7 +105,7 @@ async function reportBalance() {
 }
 const SCAN_BUSY = /Scan already in progress/;
 const READS = new Set(['info', 'address', 'balance', 'coins', 'record', 'boards', 'participations', 'schedule', 'refusals', 'quote', 'board_quote', 'exit_quote',
-  'take_quote', 'order_quote', 'orders']);
+  'take_quote', 'order_quote', 'orders', 'plans', 'claims', 'distributions']);
 
 // The takes the service worker asked the host to watch (`watch`): while one waits on
 // the wallet (its forfeits not yet handed over), the host syncs every `watchMs`, so
@@ -135,6 +149,38 @@ async function sync(by) {
   return v;
 }
 
+// `care`, when it is due (or `force`d): the wallet's own upkeep, with no prompt.
+async function careIfDue(force = false) {
+  if (!S.open || (!force && !careDue(S.careAt, Date.now(), S.careMs))) return null;
+  S.careAt = Date.now();
+  const args = {};
+  if (S.scan) args.scan = S.scan;
+  try {
+    const v = (await call('run', { command: 'care', args })).result;
+    const sum = careSummary(v);
+    S.lastCare = { at: Date.now(), value: v, summary: sum };
+    console.info(`[leaves] care: ${sum.taken} claim(s) taken up, ${sum.planned} plan(s) signed, ${sum.cancelled} cancelled, ${sum.refreshing} sent to a round, ${sum.later} not yet near`);
+    if (sum.taken || sum.planned || sum.cancelled || sum.refreshing) {
+      try {
+        S.coins = (await call('run', { command: 'coins' })).result || [];
+        S.participations = (await call('run', { command: 'participations' })).result || [];
+      } catch { /* the next sync reads them */ }
+      await reportBalance();
+    }
+    // A claim taken up arrives as any coin does: the asset is its coin's.
+    for (const c of (v && Array.isArray(v.claims) ? v.claims : [])) {
+      if (!c || !c.taken_up || c.error) continue;
+      const coin = S.coins.find((x) => x.leaf_id === c.leaf_id);
+      emit('leafArrived', { leaf_id: c.leaf_id, asset: coin ? coin.asset : null, value: String(c.value ?? ''), kind: 'claim' });
+    }
+  } catch (e) {
+    S.lastCare = { at: Date.now(), error: errorOf(e) };
+    console.warn('[leaves] care failed:', S.lastCare.error.message);
+  }
+  emit('leafCared', S.lastCare);
+  return S.lastCare;
+}
+
 function plan(ms) {
   clearTimeout(S.timer);
   if (!S.open) return;
@@ -156,9 +202,18 @@ async function tick() {
     // A take the service worker asked to watch, and the host has not synced since:
     // sync now, whatever the schedule says (its forfeits may be due within minutes).
     if (!d.sync && S.watchPending) d = { sync: true, why: 'take' };
+    // Once when the wallet opens, whatever the schedule says: the schedule wakes a
+    // planned coin only at its plan's sync_by, and a wallet back after an expiry must
+    // take up the coin the plan's step made before it shows its balance.
+    if (!d.sync && S.syncOnOpen) d = { sync: true, why: 'open' };
     if (d.sync) {
       S.watchPending = false;
       await sync(d.why);
+      S.syncOnOpen = false;
+      await careIfDue();
+      S.schedule = (await call('run', { command: 'schedule' })).result;
+    } else if (careDue(S.careAt, Date.now(), S.careMs)) {
+      await careIfDue();
       S.schedule = (await call('run', { command: 'schedule' })).result;
     } else if (freshRequestWaits(s)) {
       // A request just handed out: read the mailbox, not the whole sync.
@@ -185,6 +240,8 @@ let starting = Promise.resolve();
 async function start(args) {
   if (!args.mnemonic) throw { kind: 'refused', message: 'the wallet is locked' };
   if (args.tickMs) S.tickMs = Number(args.tickMs);
+  if (args.careMs) S.careMs = Math.max(1000, Number(args.careMs));
+  if (args.scan) S.scan = Number(args.scan);
   // Two callers may ask at once (an unlock, and a site's request): the wallet of
   // this mnemonic, already open, is left as it is. Only a digest of the mnemonic
   // is kept to tell.
@@ -200,6 +257,8 @@ async function start(args) {
   }
   S.open = true;
   S.fp = fp;
+  S.careAt = null;      // care once after the wallet opens,
+  S.syncOnOpen = true;  // after one sync
   console.info(`[leaves] the leaf wallet is open (${has ? 'from its store' : 'created'}); it syncs on its schedule`);
   await reportBalance();
   plan(0);
@@ -214,7 +273,13 @@ async function handle(op, args) {
   }
   switch (op) {
     case 'status':
-      return { open: S.open, lastSync: S.lastSync, lastError: S.lastError, schedule: S.schedule };
+      return { open: S.open, lastSync: S.lastSync, lastError: S.lastError, schedule: S.schedule, lastCare: S.lastCare, scan: S.scan };
+    case 'scan':
+      if (args.scan) S.scan = Number(args.scan);
+      return { scan: S.scan };
+    case 'care':
+      if (!S.open) throw { kind: 'refused', message: 'the leaf wallet is not open' };
+      return await careIfDue(true);
     case 'run': {
       if (!S.open) throw { kind: 'refused', message: 'the leaf wallet is not open' };
       const command = String(args.command);

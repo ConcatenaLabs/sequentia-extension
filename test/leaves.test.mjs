@@ -83,3 +83,30 @@ test('the host syncs when the time the schedule first gave arrives, though the s
   assert.deepEqual(syncDecision({ now: 1, next_sync_at: 9, due: true }, 5, false), { sync: true, why: 'schedule', held: null });
   assert.deepEqual(syncDecision({ now: 1, next_sync_at: 9, due: false }, null, true), { sync: true, why: 'moving', held: null });
 });
+
+test('care runs at the first chance, then at most every ten minutes', async () => {
+  const { careDue, CARE_EVERY_MS } = await import('../src/leaf-schedule.js');
+  assert.equal(CARE_EVERY_MS, 600_000);
+  assert.equal(careDue(null, 5), true);
+  assert.equal(careDue(1_000, 1_000 + 599_999), false);
+  assert.equal(careDue(1_000, 1_000 + 600_000), true);
+});
+
+test('care looks for claims under the kit\'s next receive index and 20 more', async () => {
+  const { claimScan } = await import('../src/leaf-schedule.js');
+  assert.equal(claimScan(27), 47);
+  assert.equal(claimScan(null), 20);
+  assert.equal(claimScan(-3), 20);
+});
+
+test('what care did, counted', async () => {
+  const { careSummary } = await import('../src/leaf-schedule.js');
+  const v = { claims: [{ claim: 'd:0', leaf_id: 'l1', value: '5', taken_up: {} }, { claim: 'd:1', state: 'pending', note: 'not open' },
+    { claim: 'd:2', leaf_id: 'l2', held: true, error: 'unreachable' }],
+  planned: [{ coin: 'c1', plan_id: 'p1', fee: '0' }, { coin: 'c2', error: 'out_of_bounds' }],
+  cancelled: [{ plan_id: 'p0', state: 'cancelled' }], refreshing: [{ coin: 'c3', participation: 'q1' }, { coin: 'c4', error: 'no round' }],
+  not_yet_planned: 3 };
+  assert.deepEqual(careSummary(v), { taken: 1, held: 1, planned: 1, unplanned: 1, cancelled: 1, refreshing: 1, later: 3 });
+  assert.deepEqual(careSummary(null), { taken: 0, held: 0, planned: 0, unplanned: 0, cancelled: 0, refreshing: 0, later: 0 });
+  assert.deepEqual(careSummary({ claims: { error: 'the operator is unreachable' } }).taken, 0);
+});

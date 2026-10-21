@@ -298,6 +298,10 @@ function unifiedNextUnused() {
 function persistAddrIndex() {
   try { stSet('local', 'ext.addrIndex', { desc: wollet.descriptor().toString(), index: addrIndex }).catch(() => {}); } catch {}
 }
+// The receive index the wallet hands out next (null before the first sync of a wallet
+// with nothing kept): what the leaf wallet's `care` scans claims up to, and 20 more.
+export function receiveIndex() { return addrIndex; }
+
 export function currentAddress(confidential = false) {
   if (!wollet) throw new Error('wallet is locked');
   const r = wollet.address(addrIndex == null ? undefined : addrIndex);

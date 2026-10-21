@@ -214,6 +214,9 @@ try {
   });
 } catch { /* alarms unavailable in this context */ }
 
+// The leaf wallet's `care` looks for claims under the kit wallet's receive keys.
+leaves.setReceiveIndexSource(() => engine.receiveIndex());
+
 // ---- overview composition for the popup ----
 async function overview({ withLn = false } = {}) {
   await engine.ensureOpen();
@@ -536,11 +539,23 @@ const uiMethods = {
       out.status = await leaves.status();
       out.balance = await leaves.run('balance');
       out.schedule = await leaves.run('schedule');
+      out.plans = ((await leaves.run('plans')) || {}).plans || [];
     } catch (e) { out.error = String((e && e.message) ?? e); }
     return out;
   },
   'leaves.join': async (cfg) => ({ info: await leaves.join(cfg || {}) }),
   'leaves.sync': async () => ({ result: await leaves.syncNow() }),
+  // What the wallet does by itself, shown and steered in developer mode: `care` now, a
+  // plan cancelled, and Release (the plan cancelled, then its coin's refresh in a round
+  // quoted and, once the quote is confirmed, joined).
+  'leaves.care': async () => ({ care: await leaves.careNow() }),
+  'leaves.planCancel': async ({ plan }) => ({ result: await leaves.run('plan_cancel', { plan }) }),
+  'leaves.releaseQuote': async ({ plan, leaf }) => {
+    const cancelled = await leaves.run('plan_cancel', { plan });
+    const quote = await leaves.run('quote', { leaves: [leaf] });
+    return { cancelled, quote, leaves: [leaf] };
+  },
+  'leaves.participate': async ({ leaves: ids, shown }) => ({ result: await leaves.run('participate', { leaves: ids, shown }) }),
   'getSettings': async () => ((await stGet('local', 'ext.settings')) || {}),
   'setSettings': async (p) => {
     const s = (await stGet('local', 'ext.settings')) || {};
