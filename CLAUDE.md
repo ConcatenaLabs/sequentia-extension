@@ -42,7 +42,11 @@ wasm. Read this before changing anything.
   the headline count leaves in both modes. The mode and the operator joined are
   kept for each wallet, by the descriptor's tag (`src/mode.js`, the web wallet's
   tag). The mode's words are the same in the web wallet and Ambra: change them in
-  all three together. Mode and leaf events reach
+  all three together. A take of an on-chain order and an order placed from leaves
+  (`src/leaf-trade.js`, records in `src/leaf-orders.js`) are carried on with no window
+  open: the host syncs every few seconds while a take waits on its forfeits, and the
+  service worker lists an order on the relay once the library says it rests. Both run in
+  either mode once started; only what a site sees follows the mode. Mode and leaf events reach
   pages through `chrome.tabs.sendMessage` to the content script, not the
   service worker's ports, which die when it sleeps.
 - **BigInt never crosses the message boundary** — all RPC amounts are strings.
@@ -54,7 +58,7 @@ wasm. Read this before changing anything.
 ## Provenance / sync obligations
 
 - `vendor/btc.js`, `vendor/seqln.js`, `vendor/seqln-keys.js`,
-  `vendor/seqob.js`, `vendor/covenant.js`, `vendor/covenant-order.js`,
+  `vendor/seqob.js`, `vendor/covenant.js`, `vendor/covenant-order.js`, `vendor/covenant-flow.js`,
   `vendor/covenant-fill-host.js`, `vendor/noble-ciphers.js`, `vendor/contracts.js`, `vendor/bolt11.js`,
   `vendor/lnupgrade.js` and
   `vendor/lightning/` are copied from `sequentia-web-wallet` — fix bugs THERE
@@ -114,6 +118,11 @@ token (already public in sequentia-web-wallet) — not a secret.
   `CHROME=… ARCA_OPERATOR_CONTROL=… ARCA_CLI=… node test/leaves/drive.mjs
   <evidence-dir> <work-dir>` (README, Development). Start the operator harness
   fresh for each run: the drive moves the chain's median time.
+- The SeqDEX site's leaves room, end to end in headless Chromium with two profiles:
+  `CHROME=… ARCA_OPERATOR_CONTROL=… SEQOBD=… SEQDEX_WEB=… node test/leaf-room/drive.mjs
+  <evidence-dir> <work-dir>` (README, Development). It reaches every endpoint at
+  https://sequentiatestnet.com through a stand-in box (`test/leaf-room/box.mjs`), so
+  `src/config.js` is not touched.
 - Icons: `node scripts/gen-icons.mjs`
 
 ## Known limitations (candidates for future work)

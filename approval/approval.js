@@ -31,6 +31,8 @@ const TITLES = {
   sendLeaves: 'Pay from your leaves?',
   boardLeaves: 'Board a coin into your leaves?',
   exitLeaf: 'Take a leaf home on-chain?',
+  takeOrder: 'Fill an on-chain order from your leaves?',
+  placeOrderFromLeaves: 'Place an order on the chain from your leaves?',
 };
 
 function fmtAtoms(atoms, d) {

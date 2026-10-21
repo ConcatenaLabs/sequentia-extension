@@ -51,7 +51,7 @@ Returns provider metadata; safe to call before connecting.
 ```js
 { provider: 'sequentia-wallet-extension', version, network: 'sequentia-testnet',
   methods: [...], features: [...],
-  events: ['accountsChanged', 'disconnect', 'modeChanged', 'leafArrived', 'leafSyncDue'] }
+  events: ['accountsChanged', 'disconnect', 'modeChanged', 'leafArrived', 'leafSyncDue', 'leafTake'] }
 ```
 
 ### `getNetwork()` — silent
@@ -608,6 +608,140 @@ Delivered to connected sites only, and only in developer mode:
 section (`getLeafBalances`, `getLeafAddress`, `requestLeafReceive`,
 `sendLeaves`, `boardLeaves`, `exitLeaf`), and `events` lists `modeChanged`, `leafArrived` and `leafSyncDue`.
 
+## On-chain orders filled from leaves and placed from them (developer mode)
+
+A site's on-chain room (the SeqDEX site's leaves room first) uses these to fill an
+ordinary on-chain order, a SeqDEX covenant order resting on the chain, with the
+wallet's leaves, and to place such an order from leaves. They are leaf methods: in
+user mode each refuses with the developer-mode error above, and `leafTake` reaches no
+site. Every check, price, fee and refusal is the leaf wallet library's; the wallet
+takes nothing on the site's or the relay's word.
+
+### `getLeafOperator()` — silent, requires connection and developer mode
+The operator this wallet joined, as a room names it:
+```js
+{ operator: '<x-only key hex>', server: '<url>', genesis_hash,
+  assets: [{ asset, min_leaf, fees: { refresh_ppm, refresh_base, offboard_ppm, offboard_base, … } }],
+  fills: { order_margin_seconds, forfeit_window_seconds, block_seconds },
+  forfeit_window_seconds }
+```
+A take pays the operator its offboard fee (`offboard_ppm`, `offboard_base`) in the asset
+it pays with. The operator takes an order only while its refund lies more than
+`order_margin_seconds` ahead.
+
+### `takeOrder({ order, amount?, max_fee_ppm? })` — approval per request
+Fills `amount` atoms of an on-chain order (all of what it holds when left out) from
+this wallet's leaves, through the operator's round: the round spends the order, pays
+its maker on the chain, and pays this wallet a leaf of what it fills. `order` is the
+relay's offer as its order book serves it (the covenant terms with the outpoint
+where the order rests). `max_fee_ppm` raises the wallet's bound on the operator's
+fee, in millionths of the price (the library's default otherwise).
+
+Before the window opens the library quotes the take (`take_quote`): it rebuilds the
+order's script from the terms, finds it on its own node at the outpoint, unspent,
+final and holding what the terms sell, and prices the fill by the covenant's own
+arithmetic. The window shows what is got (a leaf of the filled amount, once the round
+is final), what is given (the price and the operator's fee, in the asset the order is
+paid in), the price paid to the maker, the fee, what rests of the order after the
+fill, the operator, whether the wallet first pays itself a coin of exactly that much
+out of round, and the wallet's part: once the operator builds the round, the wallet
+hands over the forfeit of the coin it gives within the operator's forfeit window
+(`forfeit_window_seconds`). On approval the library takes only on the fill, price and
+fee shown (`refused: the take's fee changed since it was shown: it is now …` otherwise, and the same for its fill and price).
+Returns the library's answer:
+```js
+{ take: '<id>', state: 'pending', order: '<txid:vout>', filled, remainder, price, fee,
+  asset_a, asset_b, gives: ['<leaf id>'], wants: [{ nonce, asset, value }], paid_itself?, note }
+```
+The wallet then carries the take on by itself, with no window open: its offscreen
+document syncs every few seconds while the take waits on its forfeits, hands them over
+as soon as the round is built, and takes the new leaf once the round is final. The
+take, and the record the wallet keeps of it, survive the popup closing and a browser
+restart; after a restart the wallet must be unlocked again before the window runs
+out (the toolbar badge shows `!` while a take waits on a locked wallet). A take whose
+forfeits do not come in time is voided by the operator, and its coins are the
+wallet's again.
+
+The fee is paid in the asset the order is paid in, as the operator's schedule for that
+asset asks; no other asset is chosen for it.
+
+Refusals before the window, besides the common ones: `order` not an object carrying
+covenant terms, `amount` or `max_fee_ppm` not a whole number, and the library's quote
+refusals, for example `refused: order <txid:vout> is confirmed: a round takes an order
+once its transaction is final`, `refused: order <txid:vout> is spent, in a block or in
+the node's mempool: it was filled or refunded`, `refused: … leaves 5000 resting, below
+the order's min_lot of 10000: …`, `refused: the operator's fee … is …, above the
+wallet's bound of … ppm of the price …`, `refused: order <txid:vout>: the terms do not
+make the script on the chain there: …`. After approval, the operator's refusals, for
+example `the server refused take_order (409 order_taken): …` for an order another take
+holds.
+
+### `getLeafTakes()` — silent, requires connection and developer mode
+The takes this site made, each as the wallet knows it now:
+```js
+{ takes: [{ take, stage, state, round, order, offer_id, pair, asset_a, asset_b,
+            filled, price, fee, remainder, leaf: { leaf_id, asset, value, state } | null,
+            forfeit_window_seconds, at }] }
+```
+`state` is the library's participation state; `stage` says it in a room's words:
+`submitted` (the operator holds the take; no round fills it yet), `handing-over` (the
+round is built; the wallet hands over its forfeits), `forfeits-in` (the round goes out
+once every take in it has handed its forfeits over), `released` (the round is final and
+the wallet holds the leaf), `void` (the take did not happen; its coins are the
+wallet's again). Whether the round is in a block, final or undone is the relay's fill
+record of `round` (`GET /v1/market/{base}/{quote}/fills`): a fill is final once its
+block is certified and its Bitcoin anchor buried, and a fill whose block leaves the
+chain is undone until the round is mined again.
+
+### `placeOrderFromLeaves({ sell, amount, want, rate_num, rate_den, min_lot?, expiry?, max_fee_ppm? })` — approval per request
+Places an ordinary on-chain order from this wallet's leaves: it sells `amount` atoms of
+`sell` for `want`, `rate_num` atoms of `want` for every `rate_den` atoms sold (each
+fill's price rounded up), in fills of at least `min_lot` atoms, refundable once the
+chain's median time passes `expiry` (unix seconds; a day ahead when left out). The
+operator's round pays exactly `amount` into the address the order's terms make; once
+that round is final and the payment unlocked into the address, the order rests there
+with its maker offline, and anyone fills it. It cannot be cancelled before `expiry`:
+what rests then is taken back by its refund. Its credits are paid to a key of the
+wallet's own, never to a leaf.
+
+Before the window opens the library quotes the placement (`order_quote`): the coins
+given up, the fee (each coin's refresh fee, the offboard's fee and the margin the
+offboard output keeps for its unlock), the change, and the order's full price. The
+window shows these, the refund time, and the relay it is listed at. The fee is paid in
+the asset sold, from the coins given up. On approval the library places the order only
+on the fee and the coins shown (`refused: the order's fee changed since it was shown: it
+is now …` otherwise). Returns the library's answer with the offer id the wallet lists it
+under:
+```js
+{ order: '<id>', state, terms, amount, fee, gives, change, offer_id, note }
+```
+Once the order rests, the wallet lists it on the on-chain relay by itself (after every
+sync of the leaf wallet): it reads the output at the order's outpoint from the explorer
+and posts the offer only when that output pays the terms' script, in the clear,
+holding exactly the order's amount, signed with a key derived for that order alone.
+It posts it again before the relay's listing runs out, for as long as the order rests.
+
+Refusals before the window, besides the common ones: an asset that is not a 64-hex id,
+the same asset sold and wanted, an amount, rate, lot, expiry or fee bound that is not a
+positive whole number, and the library's quote refusals, for example a refund too soon
+for the operator's order margin, or too few live leaves of the asset sold.
+
+### `getLeafOrders()` — silent, requires connection and developer mode
+The orders this site placed from leaves, as the library reads them from the chain each
+time, and where the wallet listed them:
+```js
+{ orders: [{ order, offer_id, state, rests_at, holds, terms, fills, credits, refund_from, note,
+             posted: { at, outpoint, relay_expires, maker_pubkey } | null, post_error }] }
+```
+`state` is the library's: `waiting` and `in_round` (its round), `unlocking`, `resting`,
+`filled`, `refunded`, `spent`, or `not_placed`.
+
+### `leafTake` event
+`{ take, stage, state, round, … }` as `getLeafTakes` answers a take, to the site that
+made it, each time the take changes; in developer mode only.
+
+`getCapabilities().features` carries `leaf-orders` on builds that serve this section.
+
 ## Events
 
 Subscribe with `window.sequentia.on(event, handler)` and unsubscribe with
@@ -619,6 +753,8 @@ Subscribe with `window.sequentia.on(event, handler)` and unsubscribe with
 - `modeChanged` — `{ mode }` fires on every page when the user changes the
   wallet's mode (see "The wallet's mode").
 - `leafArrived`, `leafSyncDue` — connected sites only (see "Leaf events").
+- `leafTake` — the site that made a take, in developer mode (see "On-chain orders
+  filled from leaves and placed from them").
 
 The mode and leaf events reach a page through its tab, so a page that
 subscribed keeps hearing them after the wallet's service worker has slept.

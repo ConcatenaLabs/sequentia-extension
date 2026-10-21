@@ -159,6 +159,22 @@ export async function run(command, args = {}) {
   await requireLeaves();
   return (await host('run', { command, args })).result;
 }
+// One command of the library in either mode, for the work the wallet carries on by
+// itself (a take's forfeits, an order's listing): what was started in developer mode
+// must finish whatever the mode is now. Nothing reaches a site through it.
+export async function runAny(command, args = {}) {
+  if (!(await config())) throw new Error(NOT_JOINED);
+  if (!(await sessionMnemonic())) throw new Error('the wallet is locked');
+  await ensureRunning();
+  return (await host('run', { command, args })).result;
+}
+
+// An operation of the offscreen host itself (`watch`: the takes to sync for).
+export async function hostOp(op, args = {}) {
+  if (!(await ensureRunning())) return null;
+  return await host(op, args);
+}
+
 export async function status() {
   if (!(await offscreenUp())) return { open: false };
   return await host('status');
