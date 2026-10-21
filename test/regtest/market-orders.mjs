@@ -222,6 +222,29 @@ try {
   assert.equal(mine.orders.find((o) => o.order === p2.order).state, 'withdrawn');
   say(`taken back by ${back.txid}: +${bal(X) - x1} GOLD atoms`);
   await refused('taking it back twice', 'cancelOrder', { order: p2.order }, /taken back already/);
+
+  // ---- the room's fill of an order that rests again after a partial fill ----
+  // (`dexFillOnchain`, the on-chain room's path): the relay lists the order at its new
+  // outpoint with the amount it was signed with; the fill must take what the chain says
+  // it holds.
+  const p3 = await approve('placeOrder', { type: 'limit', base: X, quote: Y, side: 'sell', amount: String(COIN / 5n), price: String(4146n * COIN) }, [/sell 0\.2 GOLD/]);
+  await chain.mine(1); await market.progressOrders();
+  await use(TAKER);
+  await approve('placeOrder', { type: 'market', base: X, quote: Y, side: 'buy', amount: String(COIN / 20n) }, [/Buy 0\.05 GOLD/]);
+  await chain.mine(1);
+  let moved = null;
+  for (let i = 0; i < 30 && !moved; i++) {
+    const b = await (await fetch(`${chain.relay}/v1/market/${X}/${Y}/orderbook`)).json();
+    moved = (b.offers || []).find((o) => o.offer_id === p3.order && o.covenant.covenant_vout === 1) || null;
+    if (!moved) await sleep(1000);
+  }
+  assert.ok(moved, 'the relay lists the order at its new outpoint');
+  say(`the relay lists the re-rested order at ${moved.covenant.covenant_txid}:${moved.covenant.covenant_vout} with offer_amount ${moved.offer_amount} (the chain holds ${COIN / 5n - COIN / 20n})`);
+  const x2 = bal(X);
+  const room = await approve('dexFillOnchain', { base: X, quote: Y, offerId: p3.order, takeBase: String(COIN / 20n) }, []);
+  await chain.mine(1); await engine.sync();
+  assert.equal(bal(X) - x2, COIN / 20n, 'the room fill took 0.05 GOLD');
+  say(`the room's fill of the re-rested order: ${room.txid}, +${bal(X) - x2} GOLD atoms`);
 } catch (e) {
   failed = true; console.error(e);
 } finally {
