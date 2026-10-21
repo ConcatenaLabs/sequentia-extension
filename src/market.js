@@ -422,6 +422,32 @@ async function sweepCredits() {
   }
 }
 
+// The fills of one of the wallet's orders, read from the chain: from where it was
+// placed, each spend that pays its maker credit, to where it rests now. Stops at a spend
+// that is not a fill (the order taken back) or that cannot be read yet.
+async function chainSpends(rec) {
+  if (!rec.txid || rec.vout == null) return [];
+  const payout = makerPayout(engine.getSigner(), engine.getNetwork(), rec.maker_index);
+  const ids = { orderSpk: rec.spk, makerSpk: payout.spkHex };
+  const out = [];
+  let at = { txid: rec.txid, vout: rec.vout }, held = big(rec.sell_atoms);
+  for (let i = 0; i < 200 && at; i++) {
+    const sp = await fetch(`${ESPLORA}/tx/${at.txid}/outspend/${at.vout}`).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+    if (!sp || !sp.spent || !sp.txid) break;
+    const tx = await fetch(`${ESPLORA}/tx/${sp.txid}`).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+    if (!tx) break;
+    const f = P.fillOfSpend({ ...tx, txid: sp.txid }, Number(sp.vin), held, ids);
+    if (!f) break;
+    out.push({ ...f, confirmed: !!(sp.status && sp.status.confirmed) });
+    held = f.remainder; at = f.next;
+  }
+  return out;
+}
+async function progressOf(rec, relayFills) {
+  try { return P.progressFromChain(rec, await chainSpends(rec), relayFills); }
+  catch { return P.orderProgress(rec, relayFills); }
+}
+
 // ---- what a site sees ----
 
 function answerTrade(t, plan) {
@@ -451,7 +477,7 @@ export async function ordersFor(origin) {
 
   const outOrders = [];
   for (const rec of orders) {
-    const prog = P.orderProgress(rec, rec.txid ? await fillsFor(rec.sell, rec.want) : []);
+    const prog = await progressOf(rec, rec.txid ? await fillsFor(rec.sell, rec.want) : []);
     const lock = lockState(rec.expiry, { medianTime });
     const total = big(rec.base_amount);
     // In base terms: a sell order sold the base; a buy order was paid the base.
@@ -512,7 +538,7 @@ export async function prepareCancel(origin, params) {
   if (!rec.txid) throw new Error('this order is still being placed');
   if (!(await engine.ensureOpen())) throw new Error('the wallet is locked');
   await engine.syncFresh();
-  const prog = P.orderProgress(rec, await fillsOf(rec.sell, rec.want));
+  const prog = await progressOf(rec, await fillsOf(rec.sell, rec.want));
   if (prog.holds <= 0n || !prog.restsAt) throw new Error('nothing is left of this order to take back');
   const lock = lockState(rec.expiry, { medianTime: await tipMedianTime() });
   if (!lock.open) {
