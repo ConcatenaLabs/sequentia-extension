@@ -822,6 +822,84 @@ subscribed keeps hearing them after the wallet's service worker has slept.
 The provider also carries `isSequentia: true` and `network:
 'sequentia-testnet'` as plain properties, readable without a request.
 
+## Market and limit orders the wallet settles its own way
+
+A site names a market, a side and an amount, and the wallet does the rest: it reads
+the book itself, chooses which orders to take and how the trade settles, shows one
+approval, and keeps the site's resting orders and trades. Nothing in these methods
+names a rail, and they work the same in either mode, so a site in user mode needs
+nothing else to trade. The wallet takes only orders it can settle in one step:
+
+- **Between two Sequentia assets**: the covenant orders on the on-chain book (both
+  ways round: an order selling the quote for the base, listed on the reversed
+  market, is a bid). Each order taken is one transaction that pays its maker on the
+  chain and this wallet in the same transaction, or does nothing; no maker has to be
+  online. What the order holds is read from the chain, not from the relay's listing.
+  What a limit order does not fill rests on the book as an order of the same kind,
+  funded from this wallet at the limit price and listed on the relay by the wallet
+  itself; it fills with the wallet closed, its maker credits count in the asset's
+  figure and are moved into the wallet's own coins, and what is left of it can be
+  taken back once its time has run out (a day after it is placed, by the chain's
+  median time). Every fee is paid in the asset the wallet gives, never in another.
+- **Against BTC** (`quote: 'BTC'`): the quotes of makers who settle instantly over
+  Lightning, through this wallet's own channels. Such a trade does not rest: a limit
+  order against BTC trades what the book offers at the price or better, and the rest
+  is not placed. A trade the wallet's channels cannot carry is refused before any
+  approval, with what they hold.
+
+### `placeOrder({ type, base, quote, side, amount, price? })` — approval per request
+
+- `type`: `'market'` or `'limit'`.
+- `base`: 32-byte hex asset id. `quote`: 32-byte hex asset id, or `'BTC'`.
+- `side`: `'buy'` or `'sell'` of the base asset. `amount`: base atoms (decimal string).
+- `price` (limit only): quote atoms per one whole base unit (10^precision base atoms),
+  a decimal string; the limit order trades at that price or better and rests the
+  rest exactly at it.
+
+A market order goes no further than 5% past the best order on the book and takes at
+most six orders; what the book does not reach near the best price is not traded, and
+the approval says so. The approval lists what is given, what is got (now, and later
+as others fill a resting order), the fees, and the resting order with when it can be
+taken back, each amount also in the reference currency. Returns
+`{ trade, filled, failed, order, order_error, gave, got }`: `filled` is how many orders
+were taken (an order taken by someone else first is skipped, its error in `failed`, and
+nothing of the wallet moves for it), `order` the id of the order left resting or
+`null`. Refused before any approval: an unknown or unpriced asset, a market with
+nothing to take, a limit order with no price, an amount and price too large to rest
+together, a balance short of the trade and its fees, and a trade against BTC the
+wallet's channels cannot carry.
+
+### `getOrders()` — silent, requires connection
+
+This site's resting orders and trades, and where each stands, read each time from the
+relay's records of the chain:
+
+```js
+{ orders: [{ order, market: { base, quote }, side, price, at, amount, filled, holds, sell,
+             state,            // 'placing' | 'open' | 'filling' | 'filled' | 'withdrawn'
+             settled,          // every fill of it final
+             take_back_from, take_back_from_text, can_take_back,
+             fills: [{ txid, filled, credit, state, standing }], note }],
+  trades: [{ trade, at, market, side, type, kind, order,
+             state,            // 'sent' | 'settled' (| 'failed' for a trade against BTC)
+             fills: [{ txid, base, quote, state }] }] }
+```
+
+`amount` and `filled` are in base atoms. A fill is `'settled'` only once the relay
+calls it final (its block certified and its Bitcoin anchor buried); until then it is
+`'sent'`, and a fill whose block leaves the chain is `'sent'` again. A trade against BTC
+is `'settled'` when its swaps have. The wallet also lists, on each call, any order
+whose funding has reached a block.
+
+### `cancelOrder({ order })` — approval per request
+
+Takes back what is left of one of this site's resting orders, once its time has run
+out: the order leaves the book and its coins return to the wallet, the fee paid in
+the asset it holds. Before then an order cannot be taken back by anyone, since the
+chain lets only a taker paying its price spend it: the call is refused with the words
+`this order can be taken back from <time> UTC; until then it stays on the book for anyone
+to fill at your price`. Returns `{ order, txid }`.
+
 ## Design notes for the DEX
 
 - Match rail-blind, settle by rail: the provider deliberately exposes both the

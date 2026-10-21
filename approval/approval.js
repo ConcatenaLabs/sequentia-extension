@@ -22,6 +22,8 @@ const TITLES = {
   lnRequestInbound: 'Request inbound Lightning capacity?',
   dexFillOnchain: 'Fill this order on-chain?',
   dexSwapLn: 'Swap over Lightning?',
+  placeOrder: 'Make this trade?',
+  cancelOrder: 'Take back your order?',
   openampSignTagged: 'Sign a statement?',
   openampSignSpend: 'Co-sign a restricted-asset spend?',
   openampSignSupervision: 'Authorize this as the asset\u2019s issuer?',

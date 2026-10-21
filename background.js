@@ -24,6 +24,7 @@ import * as perms from './src/permissions.js';
 import * as router from './src/provider-router.js';
 import * as leaves from './src/leaves.js';
 import * as leafTrade from './src/leaf-trade.js';
+import * as market from './src/market.js';
 import { takeRecords, updateTake } from './src/leaf-orders.js';
 import { MODE_WORDS } from './src/mode.js';
 import {
@@ -131,6 +132,7 @@ async function afterUnlock() {
     await Promise.allSettled([A.loadRegistry(), A.loadPrices(), A.fetchFeeRates()]);
     await Promise.allSettled([openamp.oampInit()]);
     await Promise.allSettled([openamp.refreshBalances(), engine.sync()]);
+    market.progressOrders().catch(() => {});
     ln.resumePendingMove().catch(() => {});
     // The leaf wallet (developer mode, an operator joined): opened in the offscreen
     // document, which syncs it on the library's schedule from here on.
@@ -189,6 +191,18 @@ function badgeTakes(on) {
     else chrome.action.setTitle({ title: chrome.runtime.getManifest().action?.default_title || 'Sequentia wallet' });
   } catch { /* no toolbar action in this context */ }
 }
+
+// A resting order a site placed is listed once its funding is in a block, and its
+// maker credits move into the wallet's own coins: once a minute while unlocked, with no
+// window open.
+try {
+  chrome.alarms.create('marketOrders', { periodInMinutes: 1 });
+  chrome.alarms.onAlarm.addListener((a) => {
+    if (a && a.name === 'marketOrders') {
+      engine.ensureOpen().then((up) => (up ? market.progressOrders() : null)).catch(() => {});
+    }
+  });
+} catch { /* alarms unavailable in this context */ }
 
 // The leaf wallet lives in the offscreen document, which a browser can close (a
 // crash, a memory purge). Once a minute, while the wallet is unlocked in developer
