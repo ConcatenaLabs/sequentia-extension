@@ -143,6 +143,10 @@ token (already public in sequentia-web-wallet) — not a secret.
   distribution's claim taken up with no click and shown in the popup's figure in
   user mode, a leaf planned within ten days of its step window, the user-mode
   screens checked against the developer words). Fresh operator harness each run.
+- One phrase's figures and headline beside the web wallet's: `CHROME=…
+  ARCA_OPERATOR_CONTROL=… TOTAL_PHRASE_FILE=… WEB_TOTALS=… node
+  test/leaves/total-drive.mjs <evidence-dir> <work-dir>` (read only; never put the
+  phrase in evidence or the repository).
 - The SeqDEX site's leaves room, end to end in headless Chromium with two profiles:
   `CHROME=… ARCA_OPERATOR_CONTROL=… SEQOBD=… SEQDEX_WEB=… node test/leaf-room/drive.mjs
   <evidence-dir> <work-dir>` (README, Development). It reaches every endpoint at

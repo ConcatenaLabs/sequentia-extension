@@ -225,6 +225,15 @@ committed, so no build step is needed to load the extension.
   refresh and sees it planned and listed in developer mode with Cancel and
   Release, and checks that the user-mode screens carry none of the developer
   words (`DEVELOPER_WORDS` in `src/balance-view.js`).
+- One phrase's whole balance, read where another wallet put it: `CHROME=…
+  ARCA_OPERATOR_CONTROL=… TOTAL_PHRASE_FILE=… [WEB_TOTALS=…/totals.json] node
+  test/leaves/total-drive.mjs <evidence-dir> <work-dir>` opens the phrase the web
+  wallet's `tooling/total-drive.mjs` funded (on-chain coins, leaves, a Lightning
+  channel, stakes under both locks), joins the same operator and restores its
+  leaves, and reads the popup's one figure per asset and its headline in user mode,
+  beside the web wallet's. It reads only, through a stand-in box at
+  https://sequentiatestnet.com (an esplora shim over the harness's node, prices,
+  fee rates, the registry, and the LSP's `/status` with one channel).
 - An in-tree swap through the provider, end to end:
   `HEADLESS=1 CHROME=/path/to/chrome ARCA_OPERATOR_CONTROL=127.0.0.1:18640
   ARCA_CLI=/path/to/arca node test/leaves/swap-drive.mjs <evidence-dir> <work-dir>`,
