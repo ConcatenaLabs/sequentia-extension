@@ -74,10 +74,10 @@ export function sameChainQuote(o, takeBase) {
 }
 
 // Open-fee-market fee for the swap tx: the native policy fee converted into
-// the chosen fee asset at its published rate. Prefer paying the fee in the
-// asset being paid, else the asset received, else tSEQ; only priced assets.
+// the chosen fee asset at its published rate. The fee is paid in the asset being
+// paid, else the asset received; never in an asset the trade does not move.
 function pickFee(payAsset, recvAsset) {
-  const candidates = [payAsset, recvAsset, A.policyHex()];
+  const candidates = [payAsset, recvAsset];
   for (const a of candidates) {
     try {
       const rate = A.feeRateFor(a);
@@ -172,9 +172,11 @@ export async function prepareOnchainFill({ mount = 'chain', base, quote, offerId
 // on-chain scriptPubKey by covenant-order.js before anything is signed.
 async function prepareCovenantFill(o, takeBase) {
   const q = sameChainQuote(o, takeBase);   // recvAsset = the covenant's asset A
-  // Fee must not be the covenant's sold asset A; prefer the credit asset B.
+  // The fee is paid in the credit asset B, the asset this wallet pays: never the
+  // covenant's sold asset A (the leaf reads its amounts exactly), and never an asset
+  // the trade does not move.
   const fee = (() => {
-    for (const a of [q.payAsset, A.policyHex()]) {
+    for (const a of [q.payAsset]) {
       if (a === q.recvAsset) continue;
       try {
         const rate = A.feeRateFor(a);
@@ -377,8 +379,10 @@ export async function prepareLnSwap({ base, quote, offerId, takeAtoms }) {
 // engine walks the opposing resting orders best-first (the wallet plans the
 // slices here from the relay book — the site names only side + amount). A
 // slice that fails is skipped, never retried blind; the walk stops 5% past
-// the best price so a thin book cannot fill at cliff prices.
-export async function prepareLnMarketOrder({ base, quote, side, baseAtoms }) {
+// the best price so a thin book cannot fill at cliff prices. With `limitQuoteAtoms`
+// (the quote total for the whole amount) the walk is bounded by that price instead:
+// it takes only what the book offers at the price or better, and rests nothing.
+export async function prepareLnMarketOrder({ base, quote, side, baseAtoms, limitQuoteAtoms }) {
   if (!(await engine.ensureOpen())) throw new Error('the wallet is locked');
   if (side !== 'buy' && side !== 'sell') throw new Error("side must be 'buy' or 'sell'");
   const want = big(baseAtoms);
@@ -405,12 +409,18 @@ export async function prepareLnMarketOrder({ base, quote, side, baseAtoms }) {
   opposing.sort((a, b) => (side === 'buy' ? priceOf(a) - priceOf(b) : priceOf(b) - priceOf(a)));
   if (!opposing.length) throw new Error('no opposing resting orders on the pure-Lightning book');
   const best = priceOf(opposing[0]);
+  const limitQ = limitQuoteAtoms != null ? big(limitQuoteAtoms) : null;
+  const crosses = (o) => {
+    const oq = big(o.trade_dir === 'TRADE_DIR_BUY' ? o.offer_amount : o.want_amount);
+    const ob = big(o.base_amount);
+    return ob > 0n && (side === 'buy' ? oq * want <= limitQ * ob : oq * want >= limitQ * ob);
+  };
   const slices = [];
   let remaining = want, totalQuote = 0n;
   for (const o of opposing) {
     if (remaining <= 0n) break;
     const p = priceOf(o);
-    if (side === 'buy' ? p > best * 1.05 : p < best * 0.95) break;
+    if (limitQ != null ? !crosses(o) : (side === 'buy' ? p > best * 1.05 : p < best * 0.95)) break;
     const sq = plnSliceQuote(side, remaining < big(o.base_amount) ? remaining : big(o.base_amount),
       o.base_amount, o.trade_dir === 'TRADE_DIR_BUY' ? o.offer_amount : o.want_amount);
     if (!sq || sq.dust) continue;
@@ -421,7 +431,7 @@ export async function prepareLnMarketOrder({ base, quote, side, baseAtoms }) {
     });
     remaining -= sq.takeAtoms; totalQuote += sq.quoteAtoms;
   }
-  if (!slices.length) throw new Error('nothing fillable within the slippage bound');
+  if (!slices.length) throw new Error(limitQ != null ? 'nothing on the book reaches this price right now' : 'nothing fillable within the slippage bound');
   const filled = want - remaining;
   const bm = A.assetMeta(base);
   const qm = q === 'BTC' ? { ticker: 'BTC', precision: 8 } : A.assetMeta(q);
@@ -457,7 +467,7 @@ export async function prepareLnMarketOrder({ base, quote, side, baseAtoms }) {
     });
     return { jobId: job, pending: true, slices: slices.length };
   };
-  return { display, exec };
+  return { display, exec, plan: { baseAtoms: filled, quoteAtoms: totalQuote, baseLeft: remaining, slices: slices.length } };
 }
 
 

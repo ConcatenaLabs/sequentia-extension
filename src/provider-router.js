@@ -10,6 +10,7 @@ import * as perms from './permissions.js';
 import * as openamp from './openamp.js';
 import * as ln from './ln.js';
 import * as dex from './dex.js';
+import * as market from './market.js';
 import * as A from './assets.js';
 import { sessionMnemonic } from './vault.js';
 import { checkSigningRequest } from './tagpolicy.js';
@@ -135,7 +136,7 @@ export async function handleDappRequest(origin, method, params = {}) {
         methods: ['connect', 'getAccounts', 'getNetwork', 'getBalances', 'getAddress',
           'signPset', 'signMessage', 'signStakerMessage', 'getStakerPublicKey',
           'broadcast', 'createInvoice', 'payInvoice',
-          'getUtxos', 'lnChannels', 'lnRequestInbound', 'dexFillOnchain', 'dexSwapLn', 'dexJobResult', 'dexMarketOrder', 'dexPlaceLimit', 'getBtcPublicKey', 'getBtcAddress', 'signBtcTaproot', 'prepareBtcSend',
+          'getUtxos', 'lnChannels', 'lnRequestInbound', 'dexFillOnchain', 'dexSwapLn', 'dexJobResult', 'dexMarketOrder', 'dexPlaceLimit', 'placeOrder', 'getOrders', 'cancelOrder', 'getBtcPublicKey', 'getBtcAddress', 'signBtcTaproot', 'prepareBtcSend',
           'openampGetIdentity', 'openampSignTagged', 'openampSignSpend', 'openampSignSupervision',
           'signContractSpend', 'getContractKey', 'signContractStatement', 'getWalletMode', 'getLeafBalances', 'getLeafAddress', 'requestLeafReceive', 'sendLeaves',
           'boardLeaves', 'exitLeaf', 'getLeafOperator', 'takeOrder', 'getLeafTakes', 'placeOrderFromLeaves', 'getLeafOrders',
@@ -152,7 +153,9 @@ export async function handleDappRequest(origin, method, params = {}) {
         // getLeafTakes, placeOrderFromLeaves, getLeafOrders) and the leafTake event;
         // 'leaf-swaps' the in-tree swap between two wallets holding leaves
         // (leafSwapOffer, leafSwapAccept, leafSwapComplete, getLeafSwaps, leafSwapCancel).
-        features: ['pset-site-built', 'contract-spend', 'leaves', 'leaf-orders', 'leaf-swaps'],
+        // 'orders' means the market and limit orders the wallet settles its own way
+        // (placeOrder, getOrders, cancelOrder), in either mode.
+        features: ['pset-site-built', 'contract-spend', 'leaves', 'leaf-orders', 'leaf-swaps', 'orders'],
         events: ['accountsChanged', 'disconnect', 'modeChanged', 'leafArrived', 'leafSyncDue', 'leafTake'],
       };
 
@@ -254,6 +257,25 @@ export async function handleDappRequest(origin, method, params = {}) {
       if (!/^[0-9a-f]{64}$/i.test(String(base || ''))) throw new Error('base must be a 32-byte hex asset id');
       const prep = await dex.prepareLnLimitOrder({ base: String(base).toLowerCase(), quote, side, baseAtoms, limitQuoteAtoms });
       return requestApproval(origin, 'dexPlaceLimit', { ...prep.display, text: origin + ' · ' + prep.display.text }, prep.exec);
+    }
+    case 'placeOrder': {
+      // A market or limit order on one market; the wallet reads the book, chooses how
+      // the trade settles and shows one approval (src/market.js). Either mode.
+      await requireConnected(origin);
+      if (!(await sessionMnemonic())) throw new Error('the wallet is locked; open the wallet popup and unlock first');
+      const prep = await market.prepareOrder(origin, params || {});
+      return requestApproval(origin, 'placeOrder', prep.display, prep.exec);
+    }
+    case 'getOrders': {
+      // Silent: this site's resting orders and trades, and where each stands.
+      await requireUnlockedAndConnected(origin);
+      return await market.ordersFor(origin);
+    }
+    case 'cancelOrder': {
+      await requireConnected(origin);
+      if (!(await sessionMnemonic())) throw new Error('the wallet is locked; open the wallet popup and unlock first');
+      const prep = await market.prepareCancel(origin, params || {});
+      return requestApproval(origin, 'cancelOrder', prep.display, prep.exec);
     }
     case 'dexSwapLn': {
       // LNDEX taker swap: both legs over the user's own Lightning channels.

@@ -128,6 +128,17 @@ token (already public in sequentia-web-wallet) — not a secret.
   <evidence-dir> <work-dir>` (README, Development). It reaches every endpoint at
   https://sequentiatestnet.com through a stand-in box (`test/leaf-room/box.mjs`), so
   `src/config.js` is not touched.
+- A site's market and limit orders on a private chain: `SEQUENTIAD=… SEQOBD=… node
+  test/regtest/market-orders.mjs`, and through the SeqDEX site's default view in
+  headless Chromium: `CHROME=… SEQUENTIAD=… SEQOBD=… SEQDEX_WEB=… node
+  test/market/drive.mjs <evidence-dir> <work-dir>` (README, Development). The orders
+  (`src/market.js`, planned by `src/market-plan.js`, records in `src/market-orders.js`)
+  read what a covenant order holds from the chain, never from the relay's listing,
+  and build every spend after a scan begun after the wallet's own last broadcast
+  (`engine.syncFresh`). Maker credits arrive at BIP86 payouts the main wollet does not
+  track: a second wollet over `covenantMakerDescriptor` watches them once the wallet
+  has placed an order, counts them in each asset's figure, and the minute alarm moves
+  them into the wallet's own coins.
 - Icons: `node scripts/gen-icons.mjs`
 
 ## Known limitations (candidates for future work)

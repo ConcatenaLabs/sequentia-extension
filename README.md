@@ -26,8 +26,10 @@ confidential `tsqb1…` addresses are an explicit opt-in).
   move-to-Lightning / move-to-chain channel management.
 - **Website connections** — injects `window.sequentia` so sites (the SeqDEX
   site at https://sequentiatestnet.com/dex/ among them) can connect, read
-  balances, request signatures, and take or place DEX orders
-  (`dexFillOnchain`, `dexSwapLn`, `dexMarketOrder`, `dexPlaceLimit`), behind
+  balances, request signatures, and trade: a market or limit order the wallet
+  settles its own way (`placeOrder`, with the site's resting orders and trades in
+  `getOrders` and a resting order taken back by `cancelOrder`), or an order of one
+  room taken by hand (`dexFillOnchain`, `dexSwapLn`, `dexMarketOrder`, `dexPlaceLimit`), behind
   per-origin permissions and per-request approval windows. A site can also work
   against the wallet's own OpenAMP account (`openampGetIdentity`,
   `openampSignTagged`, `openampSignSpend`, `openampSignSupervision`), so an
@@ -153,6 +155,19 @@ committed, so no build step is needed to load the extension.
   loads the unpacked extension in a headless Chromium twice and fails on any
   exception or console error the worker raises. Run it after any change to a
   module or to `pkg/`.
+- A site's market and limit orders (`placeOrder`, `getOrders`, `cancelOrder`) on a
+  private chain anchored to a regtest parent, with a local on-chain relay
+  (`seqobd` from the `seqdex` repository) watching it:
+  `SEQUENTIAD=/path/to/sequentiad SEQOBD=/path/to/seqobd node
+  test/regtest/market-orders.mjs [evidence-dir]` runs them through the provider
+  router with the approvals decided as the approval page decides them (a resting
+  order, a market order filling part of it, a limit order filling the rest, the
+  maker's credits, an order taken back after its time, and the refusals);
+  `CHROME=/path/to/chrome SEQUENTIAD=… SEQOBD=… SEQDEX_WEB=/path/to/seqdex-web node
+  test/market/drive.mjs <evidence-dir> <work-dir>` drives the same through the SeqDEX
+  site's default view in headless Chromium, two profiles, the extension copied into
+  the work directory with its engine on the private chain's network, every endpoint
+  served at https://sequentiatestnet.com by a stand-in box (`test/market/box.mjs`).
 - A site using the leaf methods, end to end in a headed Chromium:
   `CHROME=/path/to/chrome ARCA_OPERATOR_CONTROL=127.0.0.1:18640
   ARCA_CLI=/path/to/arca node test/leaves/drive.mjs <evidence-dir> <work-dir>`

@@ -29,6 +29,10 @@ import { reapplyUnseen } from '../vendor/own-txs.js';
 let wasmReady = null;
 let network = null, client = null, POLICY_HEX = '';
 let signer = null, wollet = null, btcW = null, mnemonic = null;
+// The maker credits of the wallet's resting orders arrive at taproot payouts its main
+// (wpkh) wollet does not track; a second wollet over the signer's BIP86 descriptor
+// watches them, once the wallet has placed an order (src/market.js).
+let creditW = null, creditsOn = false;
 let addrIndex = null;
 let btcScanState = { balanceSats: 0n, externalNext: 0, changeNext: 0 };
 let scannedOnce = false;
@@ -189,6 +193,7 @@ export async function randomMnemonic(words = 12) {
 
 export function closeWallet() {
   signer = null; wollet = null; btcW = null; mnemonic = null;
+  creditW = null; creditsOn = false;
   addrIndex = null; scannedOnce = false;
   _ownTxRing.length = 0;
 }
@@ -204,6 +209,13 @@ export async function sync() {
       if (upd) {
         await withWollet(async () => { wollet.applyUpdate(upd); reapplyOwnTxs(); });
       }
+      if (creditsOn) {
+        try {
+          const cw = creditWollet();
+          const cu = await withWollet(() => client.fullScan(cw));
+          if (cu) await withWollet(async () => { cw.applyUpdate(cu); });
+        } catch (e) { console.warn('[engine] maker credits not scanned:', (e && e.message) || e); }
+      }
       try { btcScanState = await btcScanRaw(); } catch {}
       refreshScanCacheBase();   // off-path; no-op once a base exists
       scannedOnce = true;
@@ -216,6 +228,14 @@ export async function sync() {
     }
   })();
   return _syncing;
+}
+
+// A sync whose scan starts now: one already running began before whatever the caller
+// just broadcast, so it is let finish first. A spend built after this sees every coin the
+// wallet's own last transactions spent.
+export async function syncFresh() {
+  if (_syncing) { try { await _syncing; } catch {} }
+  return sync();
 }
 
 export async function syncIfStale(maxAgeMs = 120000) {
@@ -234,8 +254,18 @@ async function btcScanRaw() {
 }
 
 // ---- balances ----
-function balObj() {
+function mainBal() {
   try { return wollet.balance().toJSON(); } catch { return {}; }
+}
+// One figure per asset: the wallet's coins and the maker credits it has been paid.
+function balObj() {
+  const b = { ...mainBal() };
+  if (creditW) {
+    try {
+      for (const [h, v] of Object.entries(creditW.balance().toJSON())) b[h] = (BigInt(b[h] || 0) + BigInt(v)).toString();
+    } catch {}
+  }
+  return b;
 }
 function serializeBalances() {
   const seq = {};
@@ -253,7 +283,7 @@ export async function balances() {
 }
 export function availableFor(hex) {
   if (hex === 'BTC') return btcScanState.balanceSats;
-  const b = balObj();
+  const b = mainBal();
   return BigInt(b[hex] || 0n);
 }
 
@@ -416,6 +446,32 @@ export async function sendToAddress({ chain, asset, amount, address }) {
     const signed = signer.sign(pset);
     const finalized = wollet.finalize(signed);
     const txid = await client.broadcast(finalized);
+    try { wollet.applyTransaction(finalized); } catch {}
+    noteOwnTx(finalized);
+    return { txid: txid.toString() };
+  });
+}
+
+// ---- maker credits ----
+export function watchCredits(on) { creditsOn = !!on; }
+export function creditWollet() {
+  if (!creditW && signer) creditW = new Wollet(network, signer.covenantMakerDescriptor());
+  return creditW;
+}
+// Moves `amount` of `asset` from the maker credits to the wallet's own transparent
+// address, the fee paid in that asset from the credits.
+export async function sweepCredit(asset, amount) {
+  const cw = creditWollet();
+  if (!cw) throw new Error('wallet is locked');
+  const to = rawAddress(false);
+  let b = network.txBuilder().addExplicitRecipient(to, BigInt(amount), new AssetId(asset));
+  b = applyFee(b, asset);
+  return withWollet(async () => {
+    const pset = b.finish(cw);
+    const signed = signer.sign(pset);
+    const finalized = cw.finalize(signed);
+    const txid = await client.broadcast(finalized);
+    try { cw.applyTransaction(finalized); } catch {}
     try { wollet.applyTransaction(finalized); } catch {}
     noteOwnTx(finalized);
     return { txid: txid.toString() };
