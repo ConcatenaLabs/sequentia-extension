@@ -871,7 +871,9 @@ wallet's channels cannot carry.
 
 ### `getOrders()` — silent, requires connection
 
-This site's resting orders and trades, and where each stands, read each time from the
+This site's resting orders and trades, and where each stands, read each time: how much
+of an order has filled from the chain (the order followed from where it was placed,
+through each spend that pays its maker), and whether each fill is final from the
 relay's records of the chain:
 
 ```js
