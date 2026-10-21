@@ -32,6 +32,17 @@
 //   genesisHash,                // optional () -> Promise<hexString>; defaults to esplora /block-height/0
 //   onStatus,                   // optional progress callback
 // }
+// Which derivation chain a wallet coin sits on: 1 for internal (change), 0 for external. The kit's
+// extInt() answers the Chain enum's number (0 External, 1 Internal); this read it as text and looked
+// for "internal", which a number never contains, so every change coin was signed with the external
+// key at its index and the fill was refused ("p2wpkh(key) != its scriptPubKey — wrong derivation").
+// A covenant fill could never spend change. Accepts the number or a name.
+export function chainOf(u){
+  if (!u || typeof u.extInt !== 'function') return 0;
+  const c = u.extInt();
+  return (c === 1 || String(c).toLowerCase().includes('internal')) ? 1 : 0;
+}
+
 export function makeCovenantHooks(ctx){
   const receive = () => (ctx.receiveAddress ? ctx.receiveAddress() : ctx.wollet.address(undefined).address().toString());
   const change  = () => (ctx.changeAddress ? ctx.changeAddress() : receive());
@@ -131,7 +142,7 @@ export function makeCovenantHooks(ctx){
             value: String(u.unblinded().value()),
             asset,
             spkHex: (spk.toString ? spk.toString() : bytesHex(spk.bytes())),
-            chain: (u.extInt && String(u.extInt()).toLowerCase().includes('internal')) ? 1 : 0,
+            chain: chainOf(u),
             index: u.wildcardIndex(),
           });
           sum += BigInt(u.unblinded().value());
@@ -199,7 +210,7 @@ export function makeCovenantHooks(ctx){
             txid: op.txid().toString(), vout: op.vout(),
             value: String(u.unblinded().value()), asset: feeAsset,
             spkHex: (spk.toString ? spk.toString() : bytesHex(spk.bytes())),
-            chain: (u.extInt && String(u.extInt()).toLowerCase().includes('internal')) ? 1 : 0,
+            chain: chainOf(u),
             index: u.wildcardIndex(),
           });
           sum += BigInt(u.unblinded().value());

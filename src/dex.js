@@ -187,10 +187,22 @@ async function prepareCovenantFill(o, takeBase) {
     throw new Error('no fee-priced asset available for the fill fee');
   })();
 
+  // What the order holds now, from the chain: after a partial fill it rests again at a
+  // new outpoint holding less, and the relay keeps listing it with the amount it was
+  // signed with. A fill built on the listing's amount does not balance.
+  const ct0 = o.covenant || o.Covenant;
+  const held = await fetch(`${ESPLORA}/tx/${ct0.covenant_txid || ct0.covenantTxid}`).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+  const heldOut = held && held.vout && held.vout[Number(ct0.covenant_vout ?? ct0.covenantVout ?? 0)];
+  if (!heldOut || heldOut.value == null) throw new Error('that order is not on the chain any more; refresh and pick another');
+  const locked = BigInt(heldOut.value);
+  if (q.recvAtoms > locked) {
+    const am = A.assetMeta(q.recvAsset);
+    throw new Error('that order now holds ' + fmtAtoms(locked, am.precision || 0) + ' ' + am.ticker + '; take at most that');
+  }
   const synth = {
     resting_is_covenant: true,
-    covenant: o.covenant || o.Covenant,
-    covenant_locked: String(BigInt(o.offer_amount)),
+    covenant: ct0,
+    covenant_locked: String(locked),
     fill_base_amount: q.recvAtoms.toString(),
     offer_id: o.offer_id,
     pair: o.pair,
