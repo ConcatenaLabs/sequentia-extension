@@ -25,9 +25,11 @@ wasm. Read this before changing anything.
   re-entrant `&mut` use; every scan and build→broadcast must go through the
   queue. The message-driven service worker has MORE concurrency than the web
   wallet page had, not less.
-- **Own-tx ring**: after every `applyUpdate`, recent own broadcasts are
-  re-applied (a stale backend Update otherwise reverts them and later builds
-  re-select spent inputs).
+- **Own-tx ring**: after every `applyUpdate`, recent own broadcasts the scan
+  did not return are re-applied (a stale backend Update otherwise reverts them
+  and later builds re-select spent inputs). Never one the wollet already holds:
+  the kit would make spendable again a change output spent since by the leaf
+  wallet or another device (`vendor/own-txs.js`).
 - **Scan cache**: IndexedDB persists exactly ONE kind of Update — one computed
   against an EMPTY wollet (from a throwaway scan), aged out weekly. Never
   persist a mid-session incremental update.
@@ -60,7 +62,7 @@ wasm. Read this before changing anything.
 - `vendor/btc.js`, `vendor/seqln.js`, `vendor/seqln-keys.js`,
   `vendor/seqob.js`, `vendor/covenant.js`, `vendor/covenant-order.js`, `vendor/covenant-flow.js`,
   `vendor/covenant-fill-host.js`, `vendor/noble-ciphers.js`, `vendor/contracts.js`, `vendor/bolt11.js`,
-  `vendor/lnupgrade.js` and
+  `vendor/lnupgrade.js`, `vendor/own-txs.js` and
   `vendor/lightning/` are copied from `sequentia-web-wallet` — fix bugs THERE
   and re-copy, don't fork them silently.
 - `leaves/worker.js` is copied from `sequentia-web-wallet/leaves/worker.js`

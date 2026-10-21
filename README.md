@@ -206,7 +206,7 @@ vendor/                modules copied from sequentia-web-wallet (btc.js,
                        seqln.js, seqln-keys.js, seqob.js, covenant.js,
                        covenant-order.js, covenant-fill-host.js,
                        noble-ciphers.js, contracts.js, bolt11.js,
-                       lnupgrade.js, lightning/ signer SDK)
+                       lnupgrade.js, own-txs.js, lightning/ signer SDK)
 pkg/                   SWK lwk_wasm build (committed)
 doc/PROVIDER.md        the website provider protocol
 ```

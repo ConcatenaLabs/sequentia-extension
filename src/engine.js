@@ -23,6 +23,7 @@ import { pignusSecret, xOnlyPubkey, signSchnorr } from './btcsign.js';
 import { ESPLORA, T4_API, DEFAULT_FEERATE, BTC_FEERATE } from './config.js';
 import { parseAtoms, fmtAtoms, stGet, stSet } from './util.js';
 import { describeTransparent, stripBip32 } from './psetbytes.js';
+import { reapplyUnseen } from '../vendor/own-txs.js';
 
 // ---- module state (rebuilt lazily after a service-worker restart) ----
 let wasmReady = null;
@@ -51,11 +52,10 @@ function noteOwnTx(finalized) {
     while (_ownTxRing.length > 32) _ownTxRing.shift();
   } catch {}
 }
-function reapplyOwnTxs() {
-  const cutoff = Date.now() - 60 * 60_000;
-  for (let i = _ownTxRing.length - 1; i >= 0; i--) if (_ownTxRing[i].at < cutoff) _ownTxRing.splice(i, 1);
-  for (const e of _ownTxRing) { try { wollet.applyTransaction(new Transaction(e.hex)); } catch {} }
-}
+// Only those the scan has not returned: given a transaction the wollet already holds, the kit
+// makes spendable again a change output the leaf wallet or another device spent since
+// (vendor/own-txs.js).
+function reapplyOwnTxs() { reapplyUnseen(wollet, _ownTxRing, (hex) => new Transaction(hex)); }
 
 // ---- IndexedDB scan-state cache (instant cold start) ----
 const IDB_NAME = 'swk-wallet', IDB_STORE = 'scan';
