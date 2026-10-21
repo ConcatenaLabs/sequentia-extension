@@ -58,7 +58,8 @@ confidential `tsqb1…` addresses are an explicit opt-in).
   Developer mode: every rail by name, side by side (on-chain, leaves and
   Lightning), each with its balance and its manual controls, and the developer
   tools. Sites read it (`getWalletMode`, the `modeChanged` event) and follow it.
-  In developer mode the wallet can join an operator and hold Sequentia assets as
+  In developer mode the wallet can join an operator (joining restores what the
+  operator holds of this phrase's leaves, wherever they were made) and hold Sequentia assets as
   leaves of the operator's tree, paid and received off the chain: a site reads
   the leaf balances (`getLeafBalances`) and the leaf wallet's address
   (`getLeafAddress`), asks for a receive request (`requestLeafReceive`), a

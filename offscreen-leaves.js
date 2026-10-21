@@ -254,6 +254,9 @@ async function start(args) {
   } else {
     if (!args.config) throw { kind: 'refused', message: 'this wallet has not joined a leaf operator: join one in the wallet’s Settings' };
     info = await call('create', { mnemonic: args.mnemonic, config: args.config });
+    // A phrase that already holds leaves with this operator (another browser, Ambra, the web
+    // wallet) finds them under its mailbox key: restore once, as Ambra's join does.
+    try { await call('run', { command: 'restore', args: {} }); } catch (e) { console.warn('[leaves] restore after joining:', e && e.message); }
   }
   S.open = true;
   S.fp = fp;
