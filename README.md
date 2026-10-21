@@ -14,7 +14,15 @@ confidential `tsqb1…` addresses are an explicit opt-in).
 - **Balances** — BTC (parent chain, always shown) plus every held Sequentia
   asset and OpenAMP restricted asset, one uniform row each, with a portfolio
   headline in a user-chosen reference currency. No asset is privileged; the
-  Sequence token (tSEQ) is one row among equals.
+  Sequence token (tSEQ) is one row among equals. Each asset's figure counts
+  everything of it the wallet holds, in both modes: on-chain, leaves, Lightning
+  (the wallet's share of its own channels, reserve included) and, for tSEQ,
+  what is staked (each stake of the wallet's key under either lock, each
+  unbonding output not yet withdrawn, and the delegation record); the headline
+  is the sum of every figure. User mode shows that one figure per asset, and a
+  tap on a row opens its parts in plain words (On-chain, Off-chain, Lightning,
+  Staked); developer mode names every rail under the row, with the controls that
+  move an asset to and from Lightning.
 - **Send / receive** — on-chain sends on both chains with any-asset fees
   (fee rates in the fee asset's own units per vByte), OpenAMP transfers with
   local sighash verification (never blind-signs), QR receive with the bare

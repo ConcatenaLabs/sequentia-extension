@@ -41,7 +41,11 @@ wasm. Read this before changing anything.
   an operator, in either mode (its coins have dates to keep); locking closes it.
   User mode shows nothing of leaves and no provider method or leaf event reaches
   them; the host reports the balance (`leafBalance`) so each asset's figure and
-  the headline count leaves in both modes. The mode and the operator joined are
+  the headline count leaves in both modes. Each figure is on-chain + leaves +
+  Lightning (`ln.balanceFor`: `balance_units`, else `spendable_units`) + staked
+  (the Sequence token only, `staking.stakedSum`), in both modes
+  (`src/balance-view.js`); user mode shows it with no rail controls, its parts a
+  tap away in plain words that carry none of `DEVELOPER_WORDS`. The mode and the operator joined are
   kept for each wallet, by the descriptor's tag (`src/mode.js`, the web wallet's
   tag). The mode's words are the same in the web wallet and Ambra: change them in
   all three together. A take of an on-chain order and an order placed from leaves
