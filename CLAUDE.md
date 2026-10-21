@@ -58,6 +58,13 @@ wasm. Read this before changing anything.
   other wallet completes it, so its mailbox is read. Mode and leaf events reach
   pages through `chrome.tabs.sendMessage` to the content script, not the
   service worker's ports, which die when it sleeps.
+- **Care is the library's, run by the host.** The offscreen host runs `care` once
+  after the leaf wallet opens and after a sync at most every ten minutes
+  (`careDue`, `src/leaf-schedule.js`, the web wallet's rules), in either mode,
+  with `scan` = the kit wallet's next receive index + 20 (`claimScan`; the
+  service worker tells the host through `ensureRunning`). Which claim to take,
+  which coin to plan, its fee and every refusal are the library's; never decide
+  one in JavaScript.
 - **BigInt never crosses the message boundary** — all RPC amounts are strings.
 - **No bundler, no framework, plain ES modules** (matches the web wallet).
   Content scripts: inpage.js runs in the MAIN world, content.js relays.
@@ -131,6 +138,11 @@ token (already public in sequentia-web-wallet) — not a secret.
   `CHROME=… ARCA_OPERATOR_CONTROL=… ARCA_CLI=… node test/leaves/drive.mjs
   <evidence-dir> <work-dir>` (README, Development). Start the operator harness
   fresh for each run: the drive moves the chain's median time.
+- What the wallet does by itself with leaves: `CHROME=… ARCA_OPERATOR_CONTROL=…
+  ARCA_CLI=… node test/leaves/care-drive.mjs <evidence-dir> <work-dir>` (a
+  distribution's claim taken up with no click and shown in the popup's figure in
+  user mode, a leaf planned within ten days of its step window, the user-mode
+  screens checked against the developer words). Fresh operator harness each run.
 - The SeqDEX site's leaves room, end to end in headless Chromium with two profiles:
   `CHROME=… ARCA_OPERATOR_CONTROL=… SEQOBD=… SEQDEX_WEB=… node test/leaf-room/drive.mjs
   <evidence-dir> <work-dir>` (README, Development). It reaches every endpoint at

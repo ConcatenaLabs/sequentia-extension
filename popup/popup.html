@@ -251,6 +251,14 @@
           <div id="leafBalances"></div>
           <div id="leafSchedule" class="sub"></div>
           <button id="btnLeafSync" class="ghost tiny" style="margin-top:8px">Sync now</button>
+          <div id="leafCare" style="margin-top:12px">
+            <h2>Kept by itself: claims and refresh plans</h2>
+            <p class="sub">After a sync, at most every ten minutes and once when the wallet opens, in either mode, the wallet takes up every claim named for one of its addresses, signs a refresh plan for each leaf whose refresh could run within ten days (so a closed wallet keeps it across its expiry), cancels the plan of a leaf that moved, and sends a leaf no round made into a round's refresh. A younger leaf stays unplanned and free to pay; a wallet closed in a leaf's first two weeks or so and kept closed through its refresh can lose it to the operator's sweep. A planned leaf pays nothing until it is refreshed in a round: Release cancels its plan and quotes that refresh.</p>
+            <div id="leafCareLast" class="sub"></div>
+            <div id="leafPlans"></div>
+            <div id="leafRelease"></div>
+            <button id="btnLeafCare" class="ghost tiny" style="margin-top:8px">Run now</button>
+          </div>
         </div>
         <div id="leafStatus" class="status"></div>
       </div>
