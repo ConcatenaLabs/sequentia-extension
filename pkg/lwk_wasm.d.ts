@@ -3229,8 +3229,10 @@ export class Wollet {
    *
    * - `asset_p` / `amount_p`: the asset and amount the taker sends (fee-exclusive).
    * - `asset_r` / `amount_r`: the asset and amount the taker receives.
-   * - `receive_address`: the taker's own confidential address that receives
-   *   `asset_r` and any `asset_p` change.
+   * - `receive_address`: the taker's own address that receives `asset_r` and any
+   *   `asset_p` change. Its unconfidential form (`address.toUnconfidential()`)
+   *   receives explicitly and spends explicit coins only; its confidential form
+   *   receives blinded.
    * - `fee_asset` / `fee_amount` / `fee_rate`: the open-fee-market network fee.
    *   `fee_amount == 0` ⇒ maker-funds the fee in `asset_r` (default). Otherwise
    *   the taker funds the fee in `fee_asset` (any held, fee-eligible asset
@@ -4159,11 +4161,11 @@ export interface InitOutput {
   readonly __externref_table_dealloc: (a: number) => void;
   readonly __wbindgen_free: (a: number, b: number, c: number) => void;
   readonly __externref_drop_slice: (a: number, b: number) => void;
-  readonly wasm_bindgen__convert__closures_____invoke__he4358746220713bc: (a: number, b: number) => void;
   readonly closure2113_externref_shim: (a: number, b: number, c: any) => void;
-  readonly closure2918_externref_shim: (a: number, b: number, c: any) => void;
+  readonly wasm_bindgen__convert__closures_____invoke__he4358746220713bc: (a: number, b: number) => void;
   readonly wasm_bindgen__convert__closures_____invoke__h3c25c7484968f562: (a: number, b: number) => void;
-  readonly closure3765_externref_shim: (a: number, b: number, c: any, d: any) => void;
+  readonly closure2915_externref_shim: (a: number, b: number, c: any) => void;
+  readonly closure3762_externref_shim: (a: number, b: number, c: any, d: any) => void;
   readonly __wbindgen_start: () => void;
 }
 

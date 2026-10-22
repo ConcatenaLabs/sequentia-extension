@@ -20,6 +20,14 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 export const freePort = () => new Promise((resolve) => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => resolve(p)); }); });
 const COIN = 100000000;
 
+// A node answers -28 (loading, verifying blocks) while it warms up, and may do so again
+// after its first answer: such a call is asked again, for up to a minute.
+async function warm(ask) {
+  for (let i = 0; ; i++) {
+    try { return await ask(); } catch (e) { if (e.code !== -28 || i >= 300) throw e; await sleep(200); }
+  }
+}
+
 export async function startChain({ sequentiad, seqobd, work, log = () => {}, nodeArgs = [] }) {
   fs.mkdirSync(path.join(work, 'parent'), { recursive: true });
   fs.mkdirSync(path.join(work, 'node'), { recursive: true });
@@ -28,7 +36,7 @@ export async function startChain({ sequentiad, seqobd, work, log = () => {}, nod
   const parent = spawn(sequentiad, [`-datadir=${path.join(work, 'parent')}`, '-chain=regtest', `-rpcport=${parentPort}`, `-port=${await freePort()}`, '-listen=0', '-server',
     '-printtoconsole=0', '-rpcuser=u', '-rpcpassword=p', '-disablewallet'], { stdio: 'ignore' });
   procs.push(parent);
-  const pcall = (m, p = []) => rpcCall({ url: `http://127.0.0.1:${parentPort}/`, auth: 'u:p' }, m, p);
+  const pcall = (m, p = []) => warm(() => rpcCall({ url: `http://127.0.0.1:${parentPort}/`, auth: 'u:p' }, m, p));
   for (let i = 0; ; i++) { try { await pcall('getblockcount'); break; } catch (e) { if (i > 300) throw e; await sleep(200); } }
   const burn = (await pcall('getdescriptorinfo', ['raw(51)'])).descriptor;
   await pcall('generatetodescriptor', [5, burn]);
@@ -41,8 +49,8 @@ export async function startChain({ sequentiad, seqobd, work, log = () => {}, nod
     '-con_any_asset_fees=1', '-fallbackfee=0.0001', '-maxtxfee=100', ...nodeArgs], { stdio: 'ignore' });
   procs.push(node);
   const rpc = { url: `http://127.0.0.1:${rpcPort}/`, auth: 'u:p' };
-  const call = (m, p = []) => rpcCall(rpc, m, p);
-  const wcall = (m, p = []) => rpcCall({ ...rpc, url: rpc.url + 'wallet/bank' }, m, p);
+  const call = (m, p = []) => warm(() => rpcCall(rpc, m, p));
+  const wcall = (m, p = []) => warm(() => rpcCall({ ...rpc, url: rpc.url + 'wallet/bank' }, m, p));
   for (let i = 0; ; i++) { try { await call('getblockcount'); break; } catch (e) { if (i > 300) throw e; await sleep(200); } }
   await sleep(2000);   // the anchor watcher's first look at the parent
   await call('createwallet', ['bank']);

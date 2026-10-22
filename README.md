@@ -257,7 +257,9 @@ committed, so no build step is needed to load the extension.
   offer and co-signing the lift over the relay's courier (`test/market/maker.mjs`):
   `SEQUENTIAD=… SEQOBD=… OCEAND=… SEQOB_MAKER=… SEQOB_OCTL=… node
   test/regtest/interactive-maker.mjs honest [evidence-dir]` settles a fill and checks
-  both sides' balances. `shortpay` and `blind` run it against a maker built to pay one
+  that every output paying the wallet is at its usual address in the clear and both
+  sides' balances; `blinded-coins` funds the wallet only at its blinded address and
+  checks the fill is refused before any approval. `shortpay` and `blind` run it against a maker built to pay one
   atom less, or to blind the output that pays the wallet to its own key
   (`seqob-maker` built from a `seqdex` checkout with `test/market/hostile-maker.patch`
   applied; the drive sets `SEQOB_HOSTILE` to the mode), and check that the wallet

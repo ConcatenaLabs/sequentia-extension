@@ -5,7 +5,8 @@
 //    half with Wollet.seqdexSwapRequest, the maker co-signs over the SeqOB
 //    relay courier (vendor/seqob.js), the taker checks the maker's answer
 //    against its own half (Wollet.seqdexVerifyAccept), then signs +
-//    self-broadcasts.
+//    self-broadcasts. On the on-chain book it receives at the transparent
+//    address, spending explicit coins; on the confidential book, blinded.
 //  - Pure-Lightning swap (swap.js plnSwapBody path): the LSP drives the swap
 //    on the user's OWN hosted nodes; both device signers co-sign; instant and
 //    final when settled.
@@ -109,8 +110,21 @@ export async function prepareOnchainFill({ mount = 'chain', base, quote, offerId
   const pm = A.assetMeta(q.payAsset), rm = A.assetMeta(q.recvAsset), fm = A.assetMeta(fee.feeAsset);
 
   const have = engine.availableFor(q.payAsset);
-  if (have < q.payAtoms + (fee.feeAsset === q.payAsset ? fee.feeAmount : 0n)) {
+  const need = q.payAtoms + (fee.feeAsset === q.payAsset ? fee.feeAmount : 0n);
+  if (have < need) {
     throw new Error('not enough ' + pm.ticker + ' to fill this: it costs ' + fmtAtoms(q.payAtoms, pm.precision) + ' plus the network fee');
+  }
+  // A transparent fill spends explicit coins only (a blinded coin's blinding
+  // factors can only be absorbed by a blinded output): said before the approval,
+  // not after it.
+  if (!confidential) {
+    const clear = explicitHeld(q.payAsset);
+    if (clear < need) {
+      throw new Error('this fill receives at your usual address and so spends coins held in the clear, and '
+        + fmtAtoms(have - clear, pm.precision) + ' of your ' + pm.ticker + ' is held at a blinded address: '
+        + fmtAtoms(clear, pm.precision) + ' ' + pm.ticker + ' in the clear of the ' + fmtAtoms(need, pm.precision)
+        + ' needed. Send it to your usual address first');
+    }
   }
 
   const display = {
@@ -121,18 +135,18 @@ export async function prepareOnchainFill({ mount = 'chain', base, quote, offerId
     ],
     detail: (q.capped ? 'Fills the whole offer. ' : 'Partial fill at the offer’s exact ratio. ')
       + 'Network fee ≈ ' + fmtAtoms(fee.feeAmount, fm.precision || 0) + ' ' + fm.ticker
-      + (confidential ? ' · settles as a blinded transaction' : '')
+      + (confidential ? ' · settles as a blinded transaction' : ' · you receive at your usual address, in the clear')
       + ' · atomic: one transaction moves both sides or nothing moves.',
   };
 
   const exec = async () => {
     seqob.setSeqobBase(MOUNTS[mount]);
     const wollet = engine.getWollet(), signer = engine.getSigner(), client = engine.getClient();
-    // The receive address is ALWAYS the confidential form: seqdexSwapRequest
-    // requires a blinding pubkey (the maker's stateless blinder blinds the
-    // taker's receive output to it; change goes there too). This settlement
-    // variant has no transparent-receive mode.
-    const receiveAddr = engine.rawAddress(true);
+    // Transparent by default: on the on-chain book the swap receives at the
+    // usual (unconfidential) address and every output of this wallet's half is
+    // explicit; the confidential book receives at the blinded form, which the
+    // maker blinds to.
+    const receiveAddr = engine.rawAddress(confidential);
     let sreq = null;
     const buildRequest = async () => engine.withWollet(async () => {
       sreq = wollet.seqdexSwapRequest(
@@ -171,6 +185,20 @@ export async function prepareOnchainFill({ mount = 'chain', base, quote, offerId
   };
 
   return { display, exec };
+}
+
+// What of `asset` this wallet holds in the clear (explicit coins).
+function explicitHeld(asset) {
+  let sum = 0n;
+  try {
+    for (const u of engine.getWollet().utxos()) {
+      const sec = u.unblinded();
+      if (sec.asset().toString() !== asset) continue;
+      if (sec.isExplicit && !sec.isExplicit()) continue;
+      sum += BigInt(sec.value());
+    }
+  } catch { /* unreadable: the kit refuses on its own */ }
+  return sum;
 }
 
 // ---- covenant fill ----------------------------------------------------------
