@@ -102,3 +102,5 @@ a.link { color: var(--gold); text-decoration: none; cursor: pointer; }
 #reqDetail .kv .v { word-break: normal; overflow-wrap: anywhere; }
 /* Developer mode's plans: each plan's text, and its Cancel and Release beside it. */
 .leaf-plan .bal-acts { align-self: flex-start; margin-top: 0; }
+/* A holding its issuer has frozen for this wallet: said under its figure, in both modes. */
+.frozen-line { color: var(--amber2); margin-top: 4px; }

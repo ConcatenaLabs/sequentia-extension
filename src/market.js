@@ -41,6 +41,7 @@ import { fmtAtoms } from './util.js';
 import { sessionMnemonic } from './vault.js';
 import * as leaves from './leaves.js';
 import * as leafResting from './leaf-resting.js';
+import { supervisedAssets } from './leaf-profiles.js';
 
 export const RELAY = BASE + '/seqob';
 // How long a resting order rests before what is left of it can be taken back.
@@ -290,12 +291,20 @@ async function prepareChain(origin, { type, base, quote, side, amount, price }) 
 // A trade filled from one order resting in the joined operator's tree, when that is
 // where the best price is (src/market-plan.js planResting); null otherwise, and always
 // in user mode. The library quotes the fill from the operator's own view of the order.
+// The operator serves no resting order in a supervised asset (one its issuer can freeze),
+// so a market with one is never filled from the tree.
 async function prepareResting(origin, { type, base, quote, side, amount, price, all, covs, receive, payAsset }) {
   if ((await leaves.mode().catch(() => null)) !== 'developer' || !(await leaves.config().catch(() => null))) return null;
   const restingAll = all.filter((o) => o.resting_leaf);
   if (!restingAll.length) return null;
   let op;
-  try { await leaves.requireLeaves(); op = (await leaves.run('info')).operator; } catch { return null; }
+  try {
+    await leaves.requireLeaves();
+    const info = await leaves.run('info');
+    op = info.operator;
+    const sup = supervisedAssets(info);
+    if (sup.includes(base) || sup.includes(quote)) return null;
+  } catch { return null; }
   const resting = restingAll.map((o) => P.restingQuote(o, receive, payAsset, op)).filter(Boolean);
   // Each covenant order at its signed size: what decides is its price, which a fill
   // does not change.

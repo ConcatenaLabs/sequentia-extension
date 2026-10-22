@@ -19,7 +19,11 @@
 // which relays them to connected sites.
 //
 // After every sync and every command that can change a balance, it reports the library's
-// `balance` as `leafBalance`, which the service worker keeps for the popup.
+// `balance` as `leafBalance`, which the service worker keeps for the popup, with what of
+// each asset its issuer has frozen for this wallet (`frozen`: held leaves of a supervised
+// asset whose landing the node shows frozen or the asset paused, and the on-chain coins the
+// library counts frozen). While it holds a leaf of a supervised asset it reads its coins on
+// every tick, so a freeze or a lift shows within a tick.
 //
 // What the wallet does by itself, in either mode, is the library's `care`, run once after
 // the wallet opens and after a sync or a tick of the schedule at most every ten minutes
@@ -53,6 +57,7 @@
 // The mnemonic is handed to the worker and not kept here.
 
 import { inFlight, nextAskMs, freshRequestWaits, syncDecision, careDue, careSummary, careArgs, payThrough, CARE_EVERY_MS } from './src/leaf-schedule.js';
+import { frozenAtoms } from './src/leaf-profiles.js';
 
 const TICK_MS = 60_000;
 let worker = null;
@@ -111,12 +116,22 @@ function emit(event, data) {
 }
 
 // The leaf wallet's balance, reported to the service worker after anything that can
-// change it, which keeps it for the popup's figures and headline (`leafBalance`).
+// change it, which keeps it for the popup's figures and headline (`leafBalance`), with
+// what of each asset is frozen by its issuer (both modes show it under the figure).
 async function reportBalance() {
   try {
     const b = (await call('run', { command: 'balance' })).result;
-    emit('leafBalance', { balance: b });
+    const frozen = {};
+    for (const [a, v] of frozenAtoms(S.coins, b)) frozen[a] = v.toString();
+    S.frozenShown = Object.keys(frozen).length > 0;
+    emit('leafBalance', { balance: b, frozen });
   } catch { /* the next change reports it again */ }
+}
+// Whether the wallet holds a leaf of a supervised asset (one that lands at its key), or
+// shows something frozen (a landed coin stays frozen on the chain until a lift).
+const SUPERVISED_HELD = new Set(['pending', 'live', 'offered', 'sending', 'given', 'forfeited', 'exiting']);
+function holdsSupervised() {
+  return !!S.frozenShown || S.coins.some((c) => c.landing && SUPERVISED_HELD.has(c.state));
 }
 const SCAN_BUSY = /Scan already in progress/;
 const READS = new Set(['info', 'address', 'balance', 'coins', 'record', 'boards', 'participations', 'schedule', 'refusals', 'quote', 'board_quote', 'exit_quote',
@@ -236,6 +251,12 @@ async function tick() {
       if (mb && mb.accepted && mb.accepted.length) await reportBalance();
       S.schedule = (await call('run', { command: 'schedule' })).result;
     }
+    // A freeze or a lift is read from the node at each coin's landing by `coins`: while
+    // the wallet holds a leaf of a supervised asset, read them on every tick.
+    if (!d.sync && holdsSupervised()) {
+      S.coins = (await call('run', { command: 'coins' })).result || [];
+      await reportBalance();
+    }
     S.lastError = null;
     wait = inFlight(S.coins, S.participations) ? Math.min(S.tickMs, 30_000) : nextAskMs(S.schedule, S.tickMs);
     if (takeWaits()) wait = Math.min(wait, S.watchMs);
@@ -261,7 +282,6 @@ async function runCommand(command, cargs) {
     }
   } finally {
     if (!READS.has(command)) {
-      await reportBalance();
       // A command that moves coins (a take, an order, a board, a send) changes what
       // the schedule follows: read the coins and participations again now, so the
       // next tick syncs for what moves instead of waiting for the next sync to see it.
@@ -269,6 +289,7 @@ async function runCommand(command, cargs) {
         S.coins = (await call('run', { command: 'coins' })).result || [];
         S.participations = (await call('run', { command: 'participations' })).result || [];
       } catch { /* the next sync reads them */ }
+      await reportBalance();
       if (inFlight(S.coins, S.participations)) plan(1000);
     }
   }

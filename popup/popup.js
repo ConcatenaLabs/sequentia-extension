@@ -3,6 +3,7 @@
 import { lnInvoiceKind } from '../src/util.js';
 import { userSplit, developerSplit } from '../src/balance-view.js';
 import { plannedCoins } from '../src/leaf-schedule.js';
+import { frozenSentence, plainRefusal } from '../src/leaf-profiles.js';
 
 const $ = (id) => document.getElementById(id);
 const el = (t, c, txt) => { const e = document.createElement(t); if (c) e.className = c; if (txt != null) e.textContent = txt; return e; };
@@ -147,6 +148,9 @@ function renderOverview() {
     if (r.refStr) amt.appendChild(el('div', 'sub', r.refStr));
     head.appendChild(amt);
     row.appendChild(head);
+    // A holding its issuer has frozen for this wallet: one plain sentence, in both modes,
+    // never hidden.
+    if (BigInt(r.frozen || 0) > 0n) row.appendChild(el('div', 'sub frozen-line', frozenSentence(fmtAtoms(r.frozen, r.precision), r.ticker)));
 
     if (r.restricted && r.legend) {
       const meta = el('div', 'ln-meta'); meta.appendChild(el('div', null, r.legend)); row.appendChild(meta);
@@ -335,6 +339,8 @@ function updateSendUi() {
   }
 }
 $('sendTo').addEventListener('input', updateSendUi);
+// A refusal as the mode shows it: in user mode a coin its issuer froze is said plainly.
+const refusalShown = (e) => (OV && OV.mode === 'developer' ? e.message : plainRefusal(e).message);
 
 $('btnReview').onclick = async () => {
   $('sendErr').className = 'status'; $('sendErr').textContent = '';
@@ -347,7 +353,7 @@ $('btnReview').onclick = async () => {
       feeRate: $('feeRate').value.trim() || undefined,
     });
     reviewModal(prep);
-  } catch (e) { $('sendErr').className = 'status err'; $('sendErr').textContent = e.message; }
+  } catch (e) { $('sendErr').className = 'status err'; $('sendErr').textContent = refusalShown(e); }
   finally { $('btnReview').disabled = false; }
 };
 
@@ -387,7 +393,7 @@ function reviewModal(prep) {
       toast('Broadcast: ' + (res.txid || '').slice(0, 20) + '…');
       $('sendAmt').value = ''; $('sendTo').value = '';
       refreshOverview();
-    } catch (e) { st.className = 'status err'; st.textContent = 'Failed: ' + e.message; ok.disabled = no.disabled = false; }
+    } catch (e) { st.className = 'status err'; st.textContent = 'Failed: ' + refusalShown(e); ok.disabled = no.disabled = false; }
   };
 }
 
@@ -654,6 +660,15 @@ function renderCoins(st) {
     if (c.exit_by != null) mid.appendChild(el('div', 'sub', 'refresh from ' + isoOf(c.refresh_from) + ' · exit by ' + isoOf(c.exit_by)));
     const plan = planned.get(c.leaf_id);
     if (plan) { d.dataset.planned = plan.plan_id; mid.appendChild(el('div', 'sub', 'Planned: plan ' + short(plan.plan_id) + ', ' + plan.state + '; paid out of round only once released into the next round')); }
+    // A supervised asset's leaf: where it lands, and whether its issuer has frozen it.
+    if (c.landing) { d.dataset.landing = c.landing; mid.appendChild(el('div', 'sub', 'Lands at ' + c.landing + " (this wallet's landing key: a supervised asset's leaf leaves the tree only there)")); }
+    if (c.frozen) {
+      const fz = !!(c.frozen.frozen || c.frozen.paused);
+      d.dataset.frozen = String(fz);
+      mid.appendChild(el('div', 'sub', 'Frozen: ' + (fz ? (c.frozen.paused ? 'yes: the issuer paused the asset' : 'yes: the issuer froze this landing') : 'no')));
+      if (fz) mid.appendChild(el('div', 'sub frozen-line', frozenSentence(c.value, short(c.asset))));
+      if (c.frozen.note) mid.appendChild(el('div', 'sub', c.frozen.note));
+    }
     d.appendChild(mid);
     box.appendChild(d);
   }

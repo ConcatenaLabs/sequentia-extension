@@ -24,7 +24,7 @@ export { mode, setMode };
 const LEGACY_CONFIG_KEY = 'ext.leaves';
 const CONFIGS_KEY = 'ext.leaves.byWallet';   // { [walletTag]: the operator joined }
 const ADDRESS_KEY = 'ext.leaves.address';     // { [walletTag]: { address, script_pubkey } }
-const SUM_KEY = 'ext.leaves.sum';             // { [walletTag]: { at, perAsset: { asset: atoms } } }
+const SUM_KEY = 'ext.leaves.sum';             // { [walletTag]: { at, perAsset: { asset: atoms }, frozen: { asset: atoms } } }
 
 export const NOT_DEVELOPER = 'leaves are a developer-mode rail: turn developer mode on in the wallet’s Settings';
 export const NOT_JOINED = 'this wallet has not joined a leaf operator: join one in the wallet’s Settings';
@@ -67,13 +67,14 @@ async function setConfig(cfg) {
 }
 
 // The leaf wallet's value per asset, as the host last reported it (leaves of every
-// state the library counts), for the popup's figures and headline.
+// state the library counts), for the popup's figures and headline; and what of each asset
+// its issuer has frozen for this wallet (`frozen`), which both modes say under the figure.
 export async function leafSum() {
   const tag = await walletTag();
   const all = (await stGet('local', SUM_KEY)) || {};
   return (tag && all[tag]) || null;
 }
-export async function rememberLeafSum(balance) {
+export async function rememberLeafSum(balance, frozen) {
   const tag = await walletTag();
   if (!tag) return;
   const perAsset = {};
@@ -83,7 +84,9 @@ export async function rememberLeafSum(balance) {
     if (t > 0n) perAsset[a] = t.toString();
   }
   const all = (await stGet('local', SUM_KEY)) || {};
-  all[tag] = { at: Date.now(), perAsset };
+  const fz = {};
+  for (const [a, v] of Object.entries(frozen || {})) if (BigInt(v) > 0n) fz[a] = String(v);
+  all[tag] = { at: Date.now(), perAsset, frozen: fz };
   await stSet('local', SUM_KEY, all);
 }
 

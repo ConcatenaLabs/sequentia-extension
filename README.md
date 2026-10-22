@@ -83,6 +83,20 @@ confidential `tsqb1…` addresses are an explicit opt-in).
   while the browser runs and the wallet is unlocked, in either mode once an
   operator is joined; leaves count in each asset's figure and in the headline in
   both modes. BTC is never a leaf: it stays on its own chain and on Lightning.
+- **Supervised assets** — an asset whose issuer can freeze holdings by a rule of
+  the chain is held, received and paid like any other and counted in its one
+  figure. The leaf wallet holds it only as leaves whose way out of the tree pays
+  the wallet's own landing key (the phrase's first on-chain key), which the
+  library makes and checks by itself. When the issuer freezes that key or pauses
+  the asset, the frozen part shows under the asset's figure in either mode, as one
+  sentence ("… is frozen by its issuer: it can't be sent until the issuer lifts
+  the freeze"), never hidden; a send of it is refused, in user mode in plain
+  words ("This asset is frozen by its issuer for this wallet: nothing was sent.").
+  Developer mode shows each leaf's landing and whether it is frozen, with the
+  library's note; such a leaf leaves the tree only into the landing key, where the
+  coin stays frozen on the chain until the issuer lifts the freeze. The operator
+  serves no take, resting order or Lightning payment in such an asset, so a market
+  of one is never filled from the operator's tree.
 - **What the wallet does by itself** — once an operator is joined, in either
   mode and with no prompt: after a sync, at most every ten minutes and once when
   the leaf wallet opens, it takes up every claim of a distribution named for one

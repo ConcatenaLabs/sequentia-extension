@@ -74,6 +74,13 @@ wasm. Read this before changing anything.
   `plan_release` of the coins it names, syncs until that round has freed them,
   and asks again. The host carries that wait, so it outlives the service worker.
   Keep that one path; `runAny` (the work carried on by itself) does not take it.
+- **A supervised asset's freeze is said, never hidden** (`src/leaf-profiles.js`, the
+  web wallet's rules and words). The host reports, with each `leafBalance`, what of
+  each asset its issuer has frozen for this wallet (frozen or paused held leaves, and
+  the on-chain coins the library counts frozen), reading its coins on every tick while
+  it holds such a leaf; the popup says it under the asset's figure in both modes, and
+  user mode says a frozen refusal in the shared plain words. Which leaf lands where,
+  and whether it is frozen, is the library's.
 - **BigInt never crosses the message boundary** — all RPC amounts are strings.
 - **No bundler, no framework, plain ES modules** (matches the web wallet).
   Content scripts: inpage.js runs in the MAIN world, content.js relays.

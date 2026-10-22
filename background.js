@@ -253,7 +253,12 @@ async function overview({ withLn = false } = {}) {
   // mode also shows the split by rail. The figure is the leaf wallet's balance as its
   // host last reported it (every state the library counts).
   const walletMode = await leaves.mode();
-  const leafPer = ((await leaves.leafSum().catch(() => null)) || {}).perAsset || {};
+  const leafKept = (await leaves.leafSum().catch(() => null)) || {};
+  const leafPer = leafKept.perAsset || {};
+  // What of each asset its issuer has frozen for this wallet, as the leaf wallet reads it
+  // (a supervised asset's leaves and the coins they landed): said under the figure in
+  // both modes.
+  const frozenPer = leafKept.frozen || {};
   // The Sequence token at the wallet's staking key (each stake still the holder's, under
   // either lock, and the delegation record) counts in its figure and the headline, in
   // both modes. The fast first paint uses what was last read; the second pass reads the
@@ -278,6 +283,7 @@ async function overview({ withLn = false } = {}) {
       leaves: key === 'BTC' ? null : leafAtoms.toString(),
       staked: staked.toString(),
       total: total.toString(),
+      frozen: key === 'BTC' ? '0' : String(frozenPer[key] || '0'),
       refStr: A.refValueStr(key, total, ref),
       refVal: (() => { const rv = A.refValue(key, total, ref); return rv ? rv.v : null; })(),
       verified: A.assetVerified(key), registered: A.assetRegistered(key), domain: A.assetDomain(key),
@@ -589,7 +595,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // either mode.
   if (msg && msg.scope === 'leaf-event' && sender.id === chrome.runtime.id) {
     if (msg.event === 'leafBalance') {
-      leaves.rememberLeafSum(msg.data && msg.data.balance)
+      leaves.rememberLeafSum(msg.data && msg.data.balance, msg.data && msg.data.frozen)
         .then(() => chrome.runtime.sendMessage({ scope: 'ui-event', event: 'leaves-changed' }).catch(() => {}))
         .catch(() => {});
     } else if (msg.event === 'leafArrived' || msg.event === 'leafSyncDue') {
