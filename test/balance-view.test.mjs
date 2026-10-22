@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { figureParts, figureOf, userSplit, developerSplit, developerWordsIn, DEVELOPER_WORDS } from '../src/balance-view.js';
+import { figureParts, figureOf, userSplit, developerSplit, developerWordsIn, DEVELOPER_WORDS, leafPerAsset } from '../src/balance-view.js';
 
 const fmt = (v) => String(v);
 const row = { onchain: '100', leaves: '20', ln: '3', staked: '4000' };
@@ -37,4 +37,19 @@ test('the popup builds user mode rows with no rail controls', () => {
   assert.match(user, /userSplit\(r, fmt\)/);
   assert.match(user, /continue;/, 'a user-mode row ends before the developer parts');
   assert.ok(!/moveDialog|closeDialog|Lightning/.test(user), 'no Move, no Lightning line in user mode');
+});
+
+test('leaves count once in a figure: a leaf whose exit claim is out is the chain\'s, as the library counts it', () => {
+  const X = 'aa'.repeat(32), Z = 'cc'.repeat(32);
+  // Z: a 2,000,000 leaf exiting with its claim out (1,999,976 landed on the chain) and a
+  // 300,000 leaf; the library's held counts the claim once, as the on-chain coin.
+  const balance = {
+    arca: { [Z]: { live: '300000', exiting: '2000000' }, [X]: { live: '500', awaiting_preimage: '70' } },
+    sequentia_onchain: { [Z]: '1999976', [X]: '1000' },
+    held: { [Z]: '2299976', [X]: '1500' },
+  };
+  assert.deepEqual(leafPerAsset(balance), { [Z]: '300000', [X]: '500' });
+  // An older library with no `held`: its states summed.
+  assert.deepEqual(leafPerAsset({ arca: { [Z]: { live: '3', exiting: '4' } } }), { [Z]: '7' });
+  assert.deepEqual(leafPerAsset(null), {});
 });
