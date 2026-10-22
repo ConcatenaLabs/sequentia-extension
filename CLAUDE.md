@@ -170,6 +170,12 @@ token (already public in sequentia-web-wallet) — not a secret.
   user mode, the claimed leaf sent into a round once within ten days of its step
   window and the round's leaf planned at once, Release and Cancel, the user-mode
   screens checked against the developer words). Fresh operator harness each run.
+- What an operator's profiles ask of the wallet: `CHROME=… ARCA_OPERATOR_CONTROL=…
+  ARCA_CLI=… [SEQ_DRIVE_MNEMONIC_FILE=…] node test/leaves/profiles-drive.mjs
+  <evidence-dir> <work-dir>` (a payment through the next round, a supervised asset
+  frozen, landed and lifted, an issuer-operated asset's supply, the bond). The harness
+  started with `ARCA_OPERATOR_SUPERVISED` and `ARCA_OPERATOR_ISSUER`; the phrase file
+  is read when it exists, written (mode 600) when it does not, never put in evidence.
 - One phrase's figures and headline beside the web wallet's: `CHROME=…
   ARCA_OPERATOR_CONTROL=… TOTAL_PHRASE_FILE=… WEB_TOTALS=… node
   test/leaves/total-drive.mjs <evidence-dir> <work-dir>` (read only; never put the
