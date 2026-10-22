@@ -562,9 +562,14 @@ async function renderSettings() {
 }
 
 // ---- the mode, and leaves (developer mode) ----
-// Every figure and refusal here is the leaf wallet library's, shown in its words.
+// Every figure and refusal here is the leaf wallet library's, shown in its words. Renders
+// overlap (a tab opened, the mode changed, a leaf event): only the latest one draws, so a
+// developer-mode answer that arrives after a change to user mode never shows the card again.
+let leavesAsked = 0;
 async function renderLeaves() {
+  const asked = ++leavesAsked;
   const st = await rpc('leaves.state');
+  if (asked !== leavesAsked) return;
   $('setMode').value = st.mode;
   $('leafCard').classList.toggle('hide', st.mode !== 'developer');
   if (st.mode !== 'developer') return;
