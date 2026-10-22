@@ -18,6 +18,7 @@ import { stGet, stSet, stDel } from './util.js';
 import { sessionMnemonic } from './vault.js';
 import { mode, setMode, walletTag } from './mode.js';
 import { claimScan } from './leaf-schedule.js';
+import { leafPerAsset } from './balance-view.js';
 
 export { mode, setMode };
 
@@ -66,8 +67,8 @@ async function setConfig(cfg) {
   await stSet('local', CONFIGS_KEY, all);
 }
 
-// The leaf wallet's value per asset, as the host last reported it (leaves of every
-// state the library counts), for the popup's figures and headline; and what of each asset
+// The leaf wallet's value per asset, as the host last reported it (its leaves as the
+// library counts them, `leafPerAsset`), for the popup's figures and headline; and what of each asset
 // its issuer has frozen for this wallet (`frozen`), which both modes say under the figure.
 export async function leafSum() {
   const tag = await walletTag();
@@ -77,12 +78,7 @@ export async function leafSum() {
 export async function rememberLeafSum(balance, frozen) {
   const tag = await walletTag();
   if (!tag) return;
-  const perAsset = {};
-  for (const [a, states] of Object.entries((balance && balance.arca) || {})) {
-    let t = 0n;
-    for (const v of Object.values(states || {})) t += BigInt(v);
-    if (t > 0n) perAsset[a] = t.toString();
-  }
+  const perAsset = leafPerAsset(balance);
   const all = (await stGet('local', SUM_KEY)) || {};
   const fz = {};
   for (const [a, v] of Object.entries(frozen || {})) if (BigInt(v) > 0n) fz[a] = String(v);

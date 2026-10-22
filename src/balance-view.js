@@ -37,6 +37,31 @@ export function developerSplit(row, fmt) {
   return s;
 }
 
+/// What of each asset the wallet holds as leaves, for its figure, as the leaf wallet
+/// counts it (`balance.held`, leaves and its on-chain coins together, less
+/// `sequentia_onchain`): a leaf whose exit's claim is out is counted once, as the claim's
+/// output on the chain (which the main wallet's own scan counts), and a leaf received
+/// under a hash whose preimage the wallet does not hold yet is counted nowhere. A library
+/// that gives no `held` is read by its `arca` states. -> { asset: atoms string }
+export function leafPerAsset(balance) {
+  const out = {};
+  const held = balance && balance.held;
+  if (held && typeof held === 'object') {
+    const onchain = (balance && balance.sequentia_onchain) || {};
+    for (const [a, v] of Object.entries(held)) {
+      const leaves = big(v) - big(onchain[a]);
+      if (leaves > 0n) out[a] = leaves.toString();
+    }
+    return out;
+  }
+  for (const [a, states] of Object.entries((balance && balance.arca) || {})) {
+    let t = 0n;
+    for (const v of Object.values(states || {})) t += big(v);
+    if (t > 0n) out[a] = t.toString();
+  }
+  return out;
+}
+
 /// The words user mode never shows: how value is held and moved off the chain is
 /// developer mode's.
 export const DEVELOPER_WORDS = ['leaf', 'leaves', 'round', 'plan', 'claim', 'distribution', 'expiry', 'operator',
