@@ -275,6 +275,24 @@ committed, so no build step is needed to load the extension.
   Release, releases it into the next round and cancels the next plan, and checks
   that the user-mode screens carry none of the developer words
   (`DEVELOPER_WORDS` in `src/balance-view.js`).
+- What an operator's profiles ask of the wallet, the same way, headless:
+  `CHROME=/path/to/chrome ARCA_OPERATOR_CONTROL=127.0.0.1:18640
+  ARCA_CLI=/path/to/arca [SEQ_DRIVE_MNEMONIC_FILE=phrase.txt] [BOND_END=notice|drop]
+  node test/leaves/profiles-drive.mjs <evidence-dir> <work-dir>` needs the harness
+  started with `ARCA_OPERATOR_SUPERVISED` and `ARCA_OPERATOR_ISSUER` (and
+  `MINT_LIMITER`), and reaches https://sequentiatestnet.com through a stand-in box
+  as the total drive does. It posts a bond, boards X, a supervised asset Z and an
+  issuer-operated asset I from the test site, receives Z from the command-line
+  wallet, and lets the wallet's own upkeep refresh every leaf into a round. Then:
+  every X leaf planned by `care` and a site's payment larger than any free leaf made
+  through the next round with no further window; Z frozen at the landing key, said
+  under its figure in both modes and refused when paid, its leaf exited into the
+  landing key (frozen on the chain) and a user-mode send of it refused in plain
+  words, then lifted and paid again; I's batch profile and supply; the bond shown,
+  then in notice (or dropped) and a receive refused; and the user-mode screens free
+  of the developer words. With `SEQ_DRIVE_MNEMONIC_FILE` naming an existing file
+  it imports that phrase (another wallet's, on a shared harness); otherwise it
+  creates a wallet and writes its phrase there.
 - One phrase's whole balance, read where another wallet put it: `CHROME=…
   ARCA_OPERATOR_CONTROL=… TOTAL_PHRASE_FILE=… [WEB_TOTALS=…/totals.json] node
   test/leaves/total-drive.mjs <evidence-dir> <work-dir>` opens the phrase the web
