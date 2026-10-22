@@ -97,6 +97,21 @@ confidential `tsqb1…` addresses are an explicit opt-in).
   coin stays frozen on the chain until the issuer lifts the freeze. The operator
   serves no take, resting order or Lightning payment in such an asset, so a market
   of one is never filled from the operator's tree.
+- **The operator's bond** — the operator posts an equivocation bond: two
+  different messages its key signs under one coin's salt prove it signed twice,
+  and burn the bond whole. At the pace of the wallet's own upkeep (below), in
+  either mode, the leaf wallet reads the bond (once it has seen it bonded, it
+  requires it from then on) and runs the library's `watch_bond`, which checks the
+  wallet's own evidence against the chain and the mempool and sends the slash
+  itself should the operator key have signed twice. The library's gate does the
+  rest: a receive or a swap is refused while the bond is missing or in notice, or
+  when what the wallet would hold out of round is worth more than it. Nothing is
+  said while the bond stands; such a refusal reads, wherever user mode shows one,
+  "Not accepted: the security deposit that backs these instant payments is missing
+  or being withdrawn, so this wallet takes no payment that rests on it. Nothing was
+  signed." Developer mode shows the bond (its asset and value, state, coin, when it
+  can be withdrawn, whether this wallet requires it, whether it covers what the
+  wallet holds out of round) and the last watch, with **Watch now**.
 - **What the wallet does by itself** — once an operator is joined, in either
   mode and with no prompt: after a sync, at most every ten minutes and once when
   the leaf wallet opens, it takes up every claim of a distribution named for one

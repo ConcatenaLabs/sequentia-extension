@@ -81,6 +81,12 @@ wasm. Read this before changing anything.
   it holds such a leaf; the popup says it under the asset's figure in both modes, and
   user mode says a frozen refusal in the shared plain words. Which leaf lands where,
   and whether it is frozen, is the library's.
+- **The operator's bond is read and watched at care's pace, in either mode** (the
+  host's `watchBond`, after each `care`): `bond` engages the library's ratchet (a
+  bond once seen bonded is required from then on) and `watch_bond` burns it should
+  the operator key sign twice. The gate on a receive or a swap is the library's;
+  user mode's words for its refusal are `BOND_WORDS` (`src/leaf-profiles.js`),
+  shared with the web wallet and Ambra.
 - **BigInt never crosses the message boundary** — all RPC amounts are strings.
 - **No bundler, no framework, plain ES modules** (matches the web wallet).
   Content scripts: inpage.js runs in the MAIN world, content.js relays.

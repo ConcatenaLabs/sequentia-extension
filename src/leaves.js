@@ -205,6 +205,11 @@ export async function careNow() {
   await requireLeaves();
   return await host('care');
 }
+// The bond read and watched now (developer mode's Watch now).
+export async function watchBondNow() {
+  await requireLeaves();
+  return await host('watchBond');
+}
 export async function syncNow() {
   await requireLeaves();
   return (await host('sync')).result;

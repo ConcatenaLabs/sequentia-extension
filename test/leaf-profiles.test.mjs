@@ -2,7 +2,7 @@
 // rules and the words are the web wallet's, shared across the three wallets.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { supervisedAssets, frozenAtoms, frozenSentence, plainRefusal, frozenRefusal, FROZEN_REFUSAL } from '../src/leaf-profiles.js';
+import { supervisedAssets, frozenAtoms, frozenSentence, plainRefusal, frozenRefusal, FROZEN_REFUSAL, bondRefusal, BOND_WORDS } from '../src/leaf-profiles.js';
 import { developerWordsIn } from '../src/balance-view.js';
 
 const X = 'aa'.repeat(32);
@@ -47,4 +47,17 @@ test('user mode says a frozen refusal plainly, and leaves every other refusal as
   assert.equal(frozenRefusal(new Error('refused: the issuer has paused this asset')), true);
   const o = new Error('refused: no');
   assert.equal(plainRefusal(o), o);
+});
+
+test('a refusal of the bond reads plainly in user mode, in the words the three wallets share', () => {
+  for (const m of ['refused: the operator\'s bond is missing: it was seen bonded …', 'refused: the operator\'s bond is noticed …', 'refused: more than the bond\'s 5000000 …']) {
+    const e = new Error(m);
+    assert.equal(bondRefusal(e), true);
+    assert.equal(plainRefusal(e).message, BOND_WORDS.refused);
+  }
+  assert.equal(BOND_WORDS.refused, 'Not accepted: the security deposit that backs these instant payments is missing or being withdrawn, so this wallet takes no payment that rests on it. Nothing was signed.');
+  assert.equal(bondRefusal(new Error('refused: no')), false);
+  assert.equal(bondRefusal(new Error('refused: the bonded stake')), false, 'a whole word only');
+  assert.deepEqual(developerWordsIn(BOND_WORDS.refused), []);
+  for (const w of ['leaf', 'operator', 'round', 'tree', 'bond']) assert.ok(!new RegExp(`\\b${w}\\b`, 'i').test(BOND_WORDS.refused), w);
 });
