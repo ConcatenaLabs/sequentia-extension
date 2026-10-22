@@ -3,7 +3,9 @@
 // Two settlement families, both ported from the proven web-wallet paths:
 //  - Same-chain interactive fill (swap.js liftOffer): the taker builds its
 //    half with Wollet.seqdexSwapRequest, the maker co-signs over the SeqOB
-//    relay courier (vendor/seqob.js), and the taker signs + self-broadcasts.
+//    relay courier (vendor/seqob.js), the taker checks the maker's answer
+//    against its own half (Wollet.seqdexVerifyAccept), then signs +
+//    self-broadcasts.
 //  - Pure-Lightning swap (swap.js plnSwapBody path): the LSP drives the swap
 //    on the user's OWN hosted nodes; both device signers co-sign; instant and
 //    final when settled.
@@ -131,8 +133,9 @@ export async function prepareOnchainFill({ mount = 'chain', base, quote, offerId
     // taker's receive output to it; change goes there too). This settlement
     // variant has no transparent-receive mode.
     const receiveAddr = engine.rawAddress(true);
+    let sreq = null;
     const buildRequest = async () => engine.withWollet(async () => {
-      const sreq = wollet.seqdexSwapRequest(
+      sreq = wollet.seqdexSwapRequest(
         new AssetId(q.payAsset), q.payAtoms,
         new AssetId(q.recvAsset), q.recvAtoms,
         receiveAddr,
@@ -142,6 +145,12 @@ export async function prepareOnchainFill({ mount = 'chain', base, quote, offerId
     });
     const finalizeAccept = async (acc) => engine.withWollet(async () => {
       const pset = new Pset(acc.transaction);
+      // Nothing is signed until the maker's answer is the swap this wallet
+      // proposed: its inputs untouched, no other coin spent, every output of
+      // its half paying the amounts it asked for, in the form it asked for.
+      // A refusal names what the maker changed; nothing has been signed.
+      if (!sreq) throw new Error('no swap request to check the maker\'s answer against');
+      wollet.seqdexVerifyAccept(sreq, pset);
       pset.addDetails(wollet);
       const signed = signer.sign(pset);
       const strippedB64 = stripBip32(signed.toString());
@@ -151,10 +160,11 @@ export async function prepareOnchainFill({ mount = 'chain', base, quote, offerId
       engine.noteOwn(finalized);
       return { transaction: strippedB64, txid: txid.toString() };
     });
-    const res = await seqob.lift(o, q.take, fee.feeAsset, { buildRequest, finalizeAccept, onStatus: say });
+    // lift resolves to the settled txid.
+    const txid = await seqob.lift(o, q.take, fee.feeAsset, { buildRequest, finalizeAccept, onStatus: say });
     engine.sync().catch(() => {});
     return {
-      txid: (res && res.txid) || null,
+      txid: (typeof txid === 'string' ? txid : txid && txid.txid) || null,
       paid: { asset: q.payAsset, atoms: q.payAtoms.toString() },
       received: { asset: q.recvAsset, atoms: q.recvAtoms.toString() },
     };

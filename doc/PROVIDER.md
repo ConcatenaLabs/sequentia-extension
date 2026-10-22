@@ -268,7 +268,12 @@ wallet signs and broadcasts the atomic swap transaction). `takeBase` is the
 take size in base-asset atoms (partial fills settle at the offer's exact
 ratio). `mount: 'conf'` fills on the confidential book instead: the wallet
 receives to a blinded address and the trade settles as a blinded
-transaction. Returns `{ txid, paid: {asset, atoms}, received: {asset, atoms} }`.
+transaction. Before signing, the wallet checks the maker's co-signed transaction
+against its own half: the same inputs, no other coin of the wallet, signed over
+the whole transaction, and every output of its half paying the same script,
+asset and amount in the form it asked for. Otherwise it fails, naming what the
+maker changed, with nothing signed.
+Returns `{ txid, paid: {asset, atoms}, received: {asset, atoms} }`.
 
 ### `dexSwapLn({ base, quote, offerId, takeAtoms? })` — approval per request
 LNDEX taker swap: both legs travel over the user's OWN hosted Lightning

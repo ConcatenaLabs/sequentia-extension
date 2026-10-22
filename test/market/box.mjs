@@ -4,7 +4,8 @@
 // address, every endpoint at the path the box serves it at:
 //
 //   /api/…                       the explorer, from an esplora shim over a regtest node
-//   /seqob/…                     the on-chain relay (seqobd), local
+//   /seqob/…                     the on-chain relay (seqobd), local, its courier
+//                                websocket (/seqob/v1/ws) included
 //   /seqob-pln/…, /seqob-conf/…  books with no offers (no Lightning makers here)
 //   /feerates                    the node's fee exchange rates
 //   /prices                      the prices given (reference currency USD)
@@ -18,6 +19,7 @@
 // from the extension's own origin.
 import https from 'node:https';
 import http from 'node:http';
+import net from 'node:net';
 import { readFileSync, existsSync, statSync } from 'node:fs';
 import { join, normalize, extname } from 'node:path';
 
@@ -85,6 +87,20 @@ export function startBox({ tls = null, port = 0, esplora, relay, rpc, site, asse
     send(404, 'not served by the stand-in box', 'text/plain');
   };
   const srv = tls ? https.createServer(tls, handler) : http.createServer(handler);
+  // The relay's courier is a websocket: the upgrade is passed through to it byte for byte.
+  const sockets = new Set();
+  srv.on('upgrade', (req, socket, head) => {
+    const url = new URL(req.url, 'https://sequentiatestnet.com');
+    if (!relay || !url.pathname.startsWith('/seqob/')) { socket.destroy(); return; }
+    const r = new URL(relay);
+    const up = net.connect(Number(r.port), r.hostname, () => {
+      const hdrs = Object.entries(req.headers).filter(([k]) => k !== 'host').map(([k, v]) => `${k}: ${v}`);
+      up.write(`${req.method} ${url.pathname.slice('/seqob'.length)}${url.search} HTTP/1.1\r\nhost: ${r.host}\r\n${hdrs.join('\r\n')}\r\n\r\n`);
+      if (head && head.length) up.write(head);
+      socket.pipe(up).pipe(socket);
+    });
+    for (const s of [socket, up]) { sockets.add(s); s.on('close', () => sockets.delete(s)); s.on('error', () => { socket.destroy(); up.destroy(); }); }
+  });
   // The real box answers for sequentiatestnet.com only, so the request carries that name.
   async function passUp(req, res, up, url) {
     const b = req.method === 'GET' || req.method === 'HEAD' ? undefined : await body(req);
@@ -100,6 +116,6 @@ export function startBox({ tls = null, port = 0, esplora, relay, rpc, site, asse
   }
   return new Promise((ok) => srv.listen(port, '127.0.0.1', () => ok({
     server: srv, port: srv.address().port, url: `${tls ? 'https' : 'http'}://127.0.0.1:${srv.address().port}`, log,
-    close: () => new Promise((r) => { srv.closeAllConnections?.(); srv.close(() => r()); }),
+    close: () => new Promise((r) => { for (const s of sockets) s.destroy(); srv.closeAllConnections?.(); srv.close(() => r()); }),
   })));
 }

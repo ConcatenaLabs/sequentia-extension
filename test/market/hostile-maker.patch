@@ -1,0 +1,55 @@
+diff --git a/daemon/internal/core/application/wallet/service.go b/daemon/internal/core/application/wallet/service.go
+index 5c20ee1..e53334f 100644
+--- a/daemon/internal/core/application/wallet/service.go
++++ b/daemon/internal/core/application/wallet/service.go
+@@ -1,6 +1,7 @@
+ package wallet
+ 
+ import (
++	"os"
+ 	"context"
+ 	"encoding/hex"
+ 	"fmt"
+@@ -594,8 +595,41 @@ func (s *Service) CompleteSwap(
+ 		outputs = append(outputs, output{feeAssetNet, feeNetAmount, "", ""})
+ 	}
+ 
++	// A hostile maker, for the wallets' regtest drives only: SEQOB_HOSTILE=shortpay pays the taker one
++	// atom less and keeps it; SEQOB_HOSTILE=blind blinds the taker's first output to the maker's key.
++	reqTx := swapRequest.GetTransaction()
++	switch os.Getenv("SEQOB_HOSTILE") {
++	case "shortpay":
++		hp, herr := psetv2.NewPsetFromBase64(reqTx)
++		if herr != nil {
++			return "", nil, -1, herr
++		}
++		hp.Outputs[0].Value--
++		for i := range outputs {
++			o := outputs[i].(output)
++			if o.asset == swapRequest.GetAssetR() && o.script != "" {
++				outputs[i] = output{o.asset, o.amount + 1, o.script, o.blindKey}
++				break
++			}
++		}
++		if reqTx, herr = hp.ToBase64(); herr != nil {
++			return "", nil, -1, herr
++		}
++	case "blind":
++		hp, herr := psetv2.NewPsetFromBase64(reqTx)
++		if herr != nil {
++			return "", nil, -1, herr
++		}
++		key, _ := hex.DecodeString(makerOutKeys[0])
++		hp.Outputs[0].BlindingPubkey = key
++		hp.Outputs[0].BlinderIndex = uint32(len(existingInputs))
++		if reqTx, herr = hp.ToBase64(); herr != nil {
++			return "", nil, -1, herr
++		}
++		blind = true
++	}
+ 	pset, err := txManager.UpdatePset(
+-		ctx, swapRequest.GetTransaction(), inputs, outputs,
++		ctx, reqTx, inputs, outputs,
+ 	)
+ 	if err != nil {
+ 		return "", nil, -1, err
