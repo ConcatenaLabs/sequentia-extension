@@ -560,6 +560,8 @@ const uiMethods = {
   // that round is final.
   'leaves.care': async () => ({ care: await leaves.careNow() }),
   'leaves.planCancel': async ({ plan }) => ({ result: await leaves.run('plan_cancel', { plan }) }),
+  // The operator's bond, read and watched now (the host does both at care's pace).
+  'leaves.watchBond': async () => await leaves.watchBondNow(),
   'leaves.release': async ({ leaf }) => ({ result: await leaves.run('plan_release', { leaves: [String(leaf)] }) }),
   'getSettings': async () => ((await stGet('local', 'ext.settings')) || {}),
   'setSettings': async (p) => {

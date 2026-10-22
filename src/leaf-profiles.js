@@ -48,8 +48,20 @@ export function frozenRefusal(e) {
   return !!(e && e.code === 'frozen') || /\bfrozen\b|\bpaused\b/i.test(m);
 }
 
-// A refusal for user mode: a frozen coin said plainly; every other refusal as it is.
+// A refusal of the operator's equivocation bond (missing, in notice, or worth less than
+// what the wallet would hold out of round on it): the library's gate on a receive and a
+// swap, whose words always name the bond.
+export function bondRefusal(e) {
+  return /\bbond\b/i.test(String((e && e.message) || e || ''));
+}
+export const BOND_WORDS = Object.freeze({
+  refused: 'Not accepted: the security deposit that backs these instant payments is missing or being withdrawn, so this wallet takes no payment that rests on it. Nothing was signed.',
+});
+
+// A refusal for user mode: the bond's and a frozen coin's said plainly; every other
+// refusal as it is.
 export function plainRefusal(e) {
+  if (bondRefusal(e)) return withMessage(e, BOND_WORDS.refused);
   if (frozenRefusal(e)) return withMessage(e, FROZEN_REFUSAL);
   return e;
 }

@@ -25,6 +25,13 @@
 // library counts frozen). While it holds a leaf of a supervised asset it reads its coins on
 // every tick, so a freeze or a lift shows within a tick.
 //
+// At care's pace, in either mode, it reads the operator's equivocation bond (`bond`: once
+// the wallet has seen it bonded, the library requires it from then on, and refuses a
+// receive or a swap while it is missing or in notice) and runs `watch_bond`, which checks
+// the wallet's evidence against the chain and the mempool and sends the slash itself
+// should the operator key have signed twice under one salt. Both are kept for developer
+// mode (`status`: `bond`, `lastWatch`); nothing is said while the bond stands.
+//
 // What the wallet does by itself, in either mode, is the library's `care`, run once after
 // the wallet opens and after a sync or a tick of the schedule at most every ten minutes
 // (`careDue`): it takes up every open claim named for one of the wallet's receive keys
@@ -53,6 +60,7 @@
 //        their forfeits wait on the wallet; each change of one is sent as `leafTake`
 //   'scan'  { scan }                        -> the receive keys `care` looks for claims under
 //   'care'                                  -> runs `care` now, whenever it last ran
+//   'watchBond'                             -> reads the bond and runs `watch_bond` now
 //   'stop'                                  -> closes the wallet and stops the schedule
 // The mnemonic is handed to the worker and not kept here.
 
@@ -65,7 +73,7 @@ let next = 1;
 const pending = new Map();
 let failed = null;
 const S = { open: false, fp: null, timer: null, heldFor: null, schedule: null, coins: [], participations: [], lastSync: null, lastError: null, tickMs: TICK_MS,
-  watch: new Set(), watchMs: 3000, seen: new Map(), scan: null, careAt: null, careMs: CARE_EVERY_MS, lastCare: null, releasing: null };
+  watch: new Set(), watchMs: 3000, seen: new Map(), scan: null, careAt: null, careMs: CARE_EVERY_MS, lastCare: null, releasing: null, bond: null, lastWatch: null };
 
 function errorOf(e) {
   if (e && typeof e === 'object' && e.message) {
@@ -206,7 +214,18 @@ async function careIfDue(force = false) {
     console.warn('[leaves] care failed:', S.lastCare.error.message);
   }
   emit('leafCared', S.lastCare);
+  await watchBond();
   return S.lastCare;
+}
+
+// The operator's bond, read (which engages the library's ratchet) and watched.
+async function watchBond() {
+  try { S.bond = (await call('run', { command: 'bond' })).result; } catch (e) { S.bond = { error: errorOf(e) }; }
+  try { S.lastWatch = { at: Date.now(), value: (await call('run', { command: 'watch_bond', args: {} })).result }; }
+  catch (e) { S.lastWatch = { at: Date.now(), error: errorOf(e) }; }
+  const w = S.lastWatch.value || {};
+  console.info(`[leaves] bond: ${S.bond && (S.bond.state || (S.bond.error && S.bond.error.message))}; watch: ${(w.slashed || []).length} slash(es)${S.lastWatch.error ? ', ' + S.lastWatch.error.message : ''}`);
+  return { bond: S.bond, lastWatch: S.lastWatch };
 }
 
 function plan(ms) {
@@ -337,13 +356,17 @@ async function handle(op, args) {
   }
   switch (op) {
     case 'status':
-      return { open: S.open, lastSync: S.lastSync, lastError: S.lastError, schedule: S.schedule, lastCare: S.lastCare, scan: S.scan, releasing: S.releasing };
+      return { open: S.open, lastSync: S.lastSync, lastError: S.lastError, schedule: S.schedule, lastCare: S.lastCare, scan: S.scan, releasing: S.releasing,
+        bond: S.bond, lastWatch: S.lastWatch };
     case 'scan':
       if (args.scan) S.scan = Number(args.scan);
       return { scan: S.scan };
     case 'care':
       if (!S.open) throw { kind: 'refused', message: 'the leaf wallet is not open' };
       return await careIfDue(true);
+    case 'watchBond':
+      if (!S.open) throw { kind: 'refused', message: 'the leaf wallet is not open' };
+      return await watchBond();
     case 'run': {
       if (!S.open) throw { kind: 'refused', message: 'the leaf wallet is not open' };
       const command = String(args.command);

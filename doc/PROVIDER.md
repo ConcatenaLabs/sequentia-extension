@@ -473,6 +473,15 @@ freeze. The operator serves no take, no resting order, no distribution, no plan
 and no Lightning payment in such an asset. The popup says what is frozen under
 the asset's figure in either mode.
 
+The operator posts an equivocation bond, which two messages its key signed under
+one coin's salt burn whole. The wallet reads it and runs the library's
+`watch_bond` at the pace of `care`, in either mode, and sends the slash itself
+should the operator key sign twice. Once the wallet has seen the bond bonded, the
+library refuses `requestLeafReceive` and the swap methods while the bond is
+missing or in notice, or when what the wallet would hold out of round is worth
+more than it, in words that name the bond (`… bond is missing …`, `… bond is
+noticed …`, `… more than the bond's …`).
+
 Every asset is a leaf asset on equal terms; none is a default, so a send names
 its asset or pays a request that names one. Native BTC is not a leaf: a tree on
 Sequentia holds no BTC, which stays on its own chain and its own rail

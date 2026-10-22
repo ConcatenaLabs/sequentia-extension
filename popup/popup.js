@@ -588,6 +588,7 @@ async function renderLeaves() {
     box.appendChild(row);
   }
   renderCare(st);
+  renderBond(st);
   renderCoins(st);
   const rel = st.status && st.status.releasing;
   $('leafReleasing').classList.toggle('hide', !rel);
@@ -645,6 +646,35 @@ async function leafAct(what, fn) {
   try { const v = await fn(); $('leafStatus').textContent = ''; await renderLeaves(); return v; }
   catch (e) { $('leafStatus').className = 'status err'; $('leafStatus').textContent = e.message; await renderLeaves().catch(() => {}); return null; }
 }
+// Developer mode's view of the operator's bond: its asset, value and state, and the watch.
+const kvRow = (k, v) => { const d = el('div', 'kv'); d.appendChild(el('span', 'k', k)); d.appendChild(el('span', 'v', v == null ? '' : String(v))); return d; };
+function renderBond(st) {
+  const card = $('leafBond');
+  const box = $('leafBondShown'); box.innerHTML = '';
+  const b = st.status && st.status.bond;
+  card.dataset.state = (b && b.state) || '';
+  if (!b) box.appendChild(el('div', 'sub', 'Not read yet since the wallet opened.'));
+  else if (b.error) box.appendChild(el('div', 'status err', b.error.message));
+  else {
+    box.appendChild(kvRow('State', b.state));
+    if (b.asset) box.appendChild(kvRow('Bond', b.value + ' of ' + short(b.asset)));
+    if (b.coin) box.appendChild(kvRow('Coin', b.coin));
+    if (b.withdrawable_at != null) box.appendChild(kvRow('Withdrawable', isoOf(b.withdrawable_at)));
+    box.appendChild(kvRow('Required by this wallet', b.required ? 'yes: seen bonded' : 'no: never seen bonded'));
+    box.appendChild(kvRow('Covers what this wallet holds out of round', b.covers === true ? 'yes' : (b.covers || 'no')));
+    if (b.why) box.appendChild(el('div', 'sub', b.why));
+  }
+  const w = st.status && st.status.lastWatch;
+  const wl = $('leafWatchShown'); wl.innerHTML = ''; wl.className = 'sub';
+  if (w && w.error) { wl.className = 'status err'; wl.textContent = 'Last watch ' + new Date(w.at).toISOString() + ': ' + w.error.message; }
+  else if (w) {
+    const v = w.value || {}; const ev = v.evidence || {};
+    card.dataset.slashed = String((v.slashed || []).length);
+    wl.textContent = 'Last watch ' + new Date(w.at).toISOString() + ': ' + (ev.lines ?? 0) + ' evidence line(s), ' + (ev.salts ?? 0) + ' salt(s), ' + (v.slashed || []).length + ' slash(es) sent';
+  }
+}
+$('btnLeafWatchBond').onclick = () => leafAct('Watching the bond…', () => rpc('leaves.watchBond'));
+
 // Developer mode's leaves, each with its state and dates, a planned one marked: a planned
 // leaf is paid out of round only once released into the next round.
 const HELD = new Set(['live', 'pending', 'offered', 'sending', 'given', 'forfeited', 'exiting']);
