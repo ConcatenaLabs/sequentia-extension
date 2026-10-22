@@ -178,3 +178,58 @@ test('a resting order of the joined operator is one more order of the market, at
   const bid = restingQuote({ ...offer(), offer_asset: B, want_asset: A, resting_leaf: { operator_key: OP, rate_num: '1', rate_den: '4', min_lot: '1', value: '800000' }, _active: '800000' }, B, A, OP);
   assert.deepEqual(planResting({ resting: [bid], side: 'sell', amount: '100000', basePrecision: 0 }), { q: bid, filled: 400000n, pays: 100000n });
 });
+
+// An interactive maker's same-chain offer: `side` 'sell' gives the base (the signed offer gives
+// `give` of the base for `get` of the quote, base_amount = give); 'buy' gives the quote for the base
+// (base_amount = get).
+function live(side, give, get) {
+  n++;
+  const sell = side === 'sell';
+  return {
+    offer_id: 'i' + n, trade_dir: sell ? 1 : 2, offer_asset: sell ? G : U, want_asset: sell ? U : G,
+    offer_amount: String(give), want_amount: String(get), base_amount: String(sell ? give : get),
+    pair: { base_asset: G, quote_asset: U }, expires_at_unix: '0', same_chain: { maker_recv_address: 'tb1q-maker' },
+  };
+}
+
+test('interactive offers are read only when asked for, at the daemon\'s proRata', () => {
+  const ask = live('sell', 1000, 370);   // 0.37 U per G
+  const off = planTrade({ offers: [ask], base: G, quote: U, side: 'buy', amount: 100, basePrecision: 8 });
+  assert.equal(off.slices.length, 0, 'not taken unless asked for');
+  const p = planTrade({ offers: [ask], base: G, quote: U, side: 'buy', amount: 100, basePrecision: 8, interactive: true });
+  assert.deepEqual(p.slices.map((s) => [s.take, s.filled, s.pays, s.interactive]), [[100n, 100n, 37n, true]]);
+  // ceil on the pay side, as the daemon's proRata: 3 G cost ceil(370*3/1000) = 2 U.
+  const q = planTrade({ offers: [ask], base: G, quote: U, side: 'buy', amount: 3, basePrecision: 8, interactive: true });
+  assert.deepEqual(q.slices.map((s) => [s.take, s.filled, s.pays]), [[3n, 3n, 2n]]);
+});
+
+test('covenant and interactive asks are walked together, cheapest first', () => {
+  const c = cov(G, U, 50, 38, 100), i = live('sell', 1000, 370);
+  const p = planTrade({ offers: [c, i], base: G, quote: U, side: 'buy', amount: 100, basePrecision: 8, interactive: true });
+  assert.deepEqual(p.slices.map((s) => s.offerId), [i.offer_id]);
+  const c2 = cov(G, U, 50, 36, 100);
+  const p2 = planTrade({ offers: [c2, i], base: G, quote: U, side: 'buy', amount: 100, basePrecision: 8, interactive: true });
+  assert.deepEqual(p2.slices.map((s) => [s.offerId, s.filled]), [[c2.offer_id, 50n], [i.offer_id, 50n]]);
+  assert.equal(p2.got, 100n);
+});
+
+test('a sell takes an interactive bid in base atoms, never paying more than it gives', () => {
+  const bid = live('buy', 3700, 10000);   // gives 3700 U for 10000 G
+  const p = planTrade({ offers: [bid], base: G, quote: U, side: 'sell', amount: 1000, basePrecision: 8, interactive: true });
+  assert.equal(p.slices.length, 1);
+  const s = p.slices[0];
+  assert.ok(s.pays <= 1000n && s.take === s.pays, JSON.stringify(s, (k, v) => typeof v === 'bigint' ? String(v) : v));
+  assert.equal(s.filled, (3700n * s.take) / 10000n);
+});
+
+test('a covenant, a leaf order, a cross offer and a confidential one are not interactive', async () => {
+  const { interactiveQuote } = await import('../src/market-plan.js');
+  const i = live('sell', 1000, 370);
+  assert.ok(interactiveQuote(i, G, U));
+  assert.equal(interactiveQuote({ ...i, covenant: {} }, G, U), null);
+  assert.equal(interactiveQuote({ ...i, resting_leaf: {} }, G, U), null);
+  assert.equal(interactiveQuote({ ...i, cross_chain: {} }, G, U), null);
+  assert.equal(interactiveQuote({ ...i, confidential: true }, G, U), null);
+  assert.equal(interactiveQuote({ ...i, same_chain: undefined }, G, U), null);
+  assert.equal(interactiveQuote(i, U, G), null);
+});

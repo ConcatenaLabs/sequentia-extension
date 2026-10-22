@@ -259,7 +259,9 @@ committed, so no build step is needed to load the extension.
   test/regtest/interactive-maker.mjs honest [evidence-dir]` settles a fill and checks
   that every output paying the wallet is at its usual address in the clear and both
   sides' balances; `blinded-coins` funds the wallet only at its blinded address and
-  checks the fill is refused before any approval. `shortpay` and `blind` run it against a maker built to pay one
+  checks the fill is refused before any approval; `market` buys through the site's
+  `placeOrder` market order, which takes the maker's offer from the book, and checks the
+  trade reads "sent", then "settled" once the relay calls the fill final. `shortpay` and `blind` run it against a maker built to pay one
   atom less, or to blind the output that pays the wallet to its own key
   (`seqob-maker` built from a `seqdex` checkout with `test/market/hostile-maker.patch`
   applied; the drive sets `SEQOB_HOSTILE` to the mode), and check that the wallet

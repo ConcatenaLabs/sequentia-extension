@@ -9,6 +9,11 @@
 //             showed, at its usual address and in the clear (every output paying the
 //             wallet explicit), the maker exactly what its offer asked, and each side's
 //             balance moves by that and its fee;
+//   market    the site's market order (`placeOrder`, the SeqDEX site's default view)
+//             buys 100 tSEQ: the wallet plans it from the book, takes the interactive
+//             maker's ask (no covenant order rests here), shows one approval with what
+//             is given, got and paid, and fills it in the clear; the trade is listed
+//             "sent", then "settled" once the relay calls the fill final;
 //   blinded-coins  the wallet holds its USDX only at its blinded address: a fill that
 //             receives at the usual address spends coins in the clear only, so it is
 //             refused before any approval, saying why;
@@ -36,7 +41,7 @@ import { startInteractiveMaker } from '../market/maker.mjs';
 const { SEQUENTIAD, SEQOBD, OCEAND, SEQOB_MAKER, SEQOB_OCTL } = process.env;
 if (!SEQUENTIAD || !SEQOBD || !OCEAND || !SEQOB_MAKER || !SEQOB_OCTL) { console.log('SKIP: set SEQUENTIAD, SEQOBD, OCEAND, SEQOB_MAKER and SEQOB_OCTL'); process.exit(0); }
 const MODE = process.argv[2] || 'honest';
-if (!['honest', 'shortpay', 'blind', 'blinded-coins'].includes(MODE)) throw new Error('mode: honest | shortpay | blind | blinded-coins');
+if (!['honest', 'market', 'shortpay', 'blind', 'blinded-coins'].includes(MODE)) throw new Error('mode: honest | market | shortpay | blind | blinded-coins');
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const EVIDENCE = process.argv[3] || null;
 if (EVIDENCE) fs.mkdirSync(EVIDENCE, { recursive: true });
@@ -99,6 +104,52 @@ try {
     });
     assert.equal(opened.length, before, 'no approval opened');
     assert.equal(bal(SEQ) - s0, 0n); assert.equal(y0 - bal(Y), 0n);
+    throw Object.assign(new Error('done'), { done: true });
+  }
+
+  if (MODE === 'market') {
+    const market = await import(pathToFileURL(path.join(ROOT, 'src/market.js')).href);
+    const before = opened.length;
+    const pending = ask('placeOrder', { type: 'market', base: SEQ, quote: Y, side: 'buy', amount: String(take) });
+    for (let i = 0; i < 600 && opened.length === before; i++) await sleep(50);
+    assert.ok(opened.length > before, 'an approval opened');
+    const id = new URL(opened.at(-1)).searchParams.get('id');
+    const { approval } = await ui('approval.get', { id });
+    const flat = [approval.display.text, ...(approval.display.rows || []).map(([k, v]) => k + ': ' + v), approval.display.detail].join('\n');
+    say('approval:\n    ' + flat.replace(/\n/g, '\n    '));
+    assert.match(flat, /Buy 100 tSEQ at the best prices on the book/);
+    assert.match(flat, /You give: 37 USDX/);
+    assert.match(flat, /You get: 100 tSEQ/);
+    assert.match(flat, /Fees: 0\.00003 USDX/);
+    await ui('approval.decide', { id, approve: true });
+    const res = await pending;
+    say('result: ' + JSON.stringify(res));
+    assert.equal(res.filled, 1, 'one order taken');
+    let mine = await ask('getOrders', {});
+    const tr = mine.trades.find((t) => t.trade === res.trade);
+    const fillTx = tr.fills[0].txid;
+    say(`trade ${tr.trade}: ${tr.state}, fill ${fillTx}`);
+    assert.equal(tr.state, 'sent');
+    await chain.mine(1); await engine.sync();
+    const tx = await chain.call('getrawtransaction', [fillTx, true]);
+    for (const o of tx.vout) say(`  out ${o.n}: ${o.value != null ? o.value + ' ' + String(o.asset).slice(0, 8) + ' explicit' : 'blinded'} -> ${o.scriptPubKey.address || o.scriptPubKey.type || 'fee'}`);
+    assert.ok(tx.vout.every((o) => o.value != null), 'every output of the fill is explicit');
+    assert.equal(bal(SEQ) - s0, take, 'the wallet got 100 tSEQ');
+    const dY = y0 - bal(Y);
+    assert.ok(dY > 37n * COIN && dY < 37n * COIN + COIN / 100n, 'paid 37 USDX and its fee: ' + dY);
+    say(`taker: +${bal(SEQ) - s0} tSEQ atoms, -${dY} USDX atoms`);
+    let settled = null;
+    for (let i = 0; i < 20 && !settled; i++) {
+      await chain.bury(1);
+      mine = await ask('getOrders', {});
+      const t2 = mine.trades.find((t) => t.trade === res.trade);
+      if (t2.state === 'settled') settled = t2;
+    }
+    say(settled ? `trade settled: ${JSON.stringify(settled)}` : 'trade not called settled by the relay: ' + JSON.stringify(mine.trades.find((t) => t.trade === res.trade)));
+    say('the relay\'s fills: ' + JSON.stringify((await (await fetch(`${chain.relay}/v1/market/${SEQ}/${Y}/fills`)).json()).fills));
+    if (EVIDENCE) fs.copyFileSync(path.join(WORK, 'seqobd.log'), path.join(EVIDENCE, 'extension-interactive-market-seqobd.log'));
+    assert.ok(settled, 'the relay calls the fill final');
+    if (EVIDENCE) fs.writeFileSync(path.join(EVIDENCE, 'extension-interactive-market-tx.json'), JSON.stringify(tx, null, 1));
     throw Object.assign(new Error('done'), { done: true });
   }
 
