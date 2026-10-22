@@ -233,3 +233,19 @@ test('a covenant, a leaf order, a cross offer and a confidential one are not int
   assert.equal(interactiveQuote({ ...i, same_chain: undefined }, G, U), null);
   assert.equal(interactiveQuote(i, U, G), null);
 });
+
+test('a part-filled interactive offer is planned at what the relay says it has left, both ways', () => {
+  // asks: 1000 G for 370 U, of which a lift took 600: the relay's active_amount is 400
+  const ask = { ...live('sell', 1000, 370), _active: '400' };
+  const p = planTrade({ offers: [ask], base: G, quote: U, side: 'buy', amount: 700, basePrecision: 8, interactive: true });
+  assert.deepEqual(p.slices.map((s) => [s.take, s.filled]), [[400n, 400n]], 'never past the 400 left');
+  // bids: 3700 U for 10000 G, 6000 G of it taken: 4000 G left, so at most 1480 U
+  const bid = { ...live('buy', 3700, 10000), _active: '4000' };
+  const q = planTrade({ offers: [bid], base: G, quote: U, side: 'sell', amount: 9000, basePrecision: 8, interactive: true });
+  assert.equal(q.slices.length, 1);
+  assert.ok(q.slices[0].take <= 4000n, 'take ' + q.slices[0].take);
+  assert.ok(q.slices[0].filled <= 1480n, 'filled ' + q.slices[0].filled);
+  // a fully taken one is not planned at all
+  const gone = { ...live('sell', 1000, 370), _active: '0' };
+  assert.equal(planTrade({ offers: [gone], base: G, quote: U, side: 'buy', amount: 10, basePrecision: 8, interactive: true }).slices.length, 0);
+});
