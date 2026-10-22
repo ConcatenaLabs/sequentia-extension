@@ -2,8 +2,11 @@
 // regtest parent (both run by one sequentiad binary), two issued assets the node takes
 // fees in, an esplora shim over the node, and the on-chain relay (seqobd) watching it.
 //
-//   const c = await startChain({ sequentiad, seqobd, work, log });
+//   const c = await startChain({ sequentiad, seqobd, work, log, nodeArgs });
 //   ... c.call(method, params), c.mine(n), c.bury(n), c.fund(address, asset, amount), c.stop()
+//
+// `nodeArgs` are added to the chain node's command line (an interactive maker's wallet
+// daemon, maker.mjs, reads blocks through the node's block filter index).
 //
 // Every process is a child of the caller, stopped by its PID in `stop()`; every file
 // lives under `work`.
@@ -17,7 +20,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 export const freePort = () => new Promise((resolve) => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => resolve(p)); }); });
 const COIN = 100000000;
 
-export async function startChain({ sequentiad, seqobd, work, log = () => {} }) {
+export async function startChain({ sequentiad, seqobd, work, log = () => {}, nodeArgs = [] }) {
   fs.mkdirSync(path.join(work, 'parent'), { recursive: true });
   fs.mkdirSync(path.join(work, 'node'), { recursive: true });
   const procs = [];
@@ -35,7 +38,7 @@ export async function startChain({ sequentiad, seqobd, work, log = () => {} }) {
     '-anchorpollinterval=1', '-anchorminconf=1', `-rpcport=${rpcPort}`, `-port=${await freePort()}`, '-listen=0', '-server',
     '-printtoconsole=0', '-rpcuser=u', '-rpcpassword=p', '-txindex=1', '-par=1', '-evbparams=simplicity:-1:::', '-initialfreecoins=2100000000000000',
     '-anyonecanspendaremine=1', '-blindedaddresses=0', '-con_default_blinded_addresses=0', '-validatepegin=0', '-con_parent_chain_signblockscript=51',
-    '-con_any_asset_fees=1', '-fallbackfee=0.0001', '-maxtxfee=100'], { stdio: 'ignore' });
+    '-con_any_asset_fees=1', '-fallbackfee=0.0001', '-maxtxfee=100', ...nodeArgs], { stdio: 'ignore' });
   procs.push(node);
   const rpc = { url: `http://127.0.0.1:${rpcPort}/`, auth: 'u:p' };
   const call = (m, p = []) => rpcCall(rpc, m, p);

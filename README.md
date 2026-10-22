@@ -251,6 +251,17 @@ committed, so no build step is needed to load the extension.
   site's default view in headless Chromium, two profiles, the extension copied into
   the work directory with its engine on the private chain's network, every endpoint
   served at https://sequentiatestnet.com by a stand-in box (`test/market/box.mjs`).
+- A site's fill of an interactive maker's order (`dexFillOnchain`) on the same
+  private chain, against a live maker: SeqDEX's wallet daemon and order-book maker
+  (`oceand`, `seqob-maker`, `seqob-octl` from the `seqdex` repository) resting an
+  offer and co-signing the lift over the relay's courier (`test/market/maker.mjs`):
+  `SEQUENTIAD=… SEQOBD=… OCEAND=… SEQOB_MAKER=… SEQOB_OCTL=… node
+  test/regtest/interactive-maker.mjs honest [evidence-dir]` settles a fill and checks
+  both sides' balances. `shortpay` and `blind` run it against a maker built to pay one
+  atom less, or to blind the output that pays the wallet to its own key
+  (`seqob-maker` built from a `seqdex` checkout with `test/market/hostile-maker.patch`
+  applied; the drive sets `SEQOB_HOSTILE` to the mode), and check that the wallet
+  refuses before signing and nothing moves.
 - A site using the leaf methods, end to end in a headed Chromium:
   `CHROME=/path/to/chrome ARCA_OPERATOR_CONTROL=127.0.0.1:18640
   ARCA_CLI=/path/to/arca node test/leaves/drive.mjs <evidence-dir> <work-dir>`

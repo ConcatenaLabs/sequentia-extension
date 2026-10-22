@@ -185,6 +185,11 @@ token (already public in sequentia-web-wallet) — not a secret.
   <evidence-dir> <work-dir>` (README, Development). It reaches every endpoint at
   https://sequentiatestnet.com through a stand-in box (`test/leaf-room/box.mjs`), so
   `src/config.js` is not touched.
+- A site's fill of an interactive maker's order on a private chain, against a live
+  SeqDEX maker, honest and hostile: `test/regtest/interactive-maker.mjs` (README,
+  Development). The wallet checks the maker's co-signed swap against its own half
+  (`Wollet.seqdexVerifyAccept`) before signing it; never sign a maker's answer
+  unchecked.
 - A site's market and limit orders on a private chain: `SEQUENTIAD=… SEQOBD=… node
   test/regtest/market-orders.mjs`, and through the SeqDEX site's default view in
   headless Chromium: `CHROME=… SEQUENTIAD=… SEQOBD=… SEQDEX_WEB=… node
