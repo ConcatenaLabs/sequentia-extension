@@ -56,8 +56,17 @@ export function interactiveQuote(o, receive, pay, nowSec = Math.floor(Date.now()
   const offer = big(o.offer_amount), want = big(o.want_amount), baseAmt = big(o.base_amount);
   if (offer <= 0n || want <= 0n || baseAmt <= 0n) return null;
   const baseAsset = String((o.pair && o.pair.base_asset) || '').toLowerCase();
-  return { offer: o, offerId: o.offer_id, num: want, den: offer, minLot: 1n, locked: offer, interactive: true,
-    baseAmt, baseIsReceive: baseAsset === receive };
+  const baseIsReceive = baseAsset === receive;
+  // What the offer can still be filled for, in base atoms: the relay's active_amount (the book's
+  // statuses), which a part fill lowers while the signed amounts stay as they were. A take past
+  // it is refused by the relay.
+  let active = o._active != null ? big(o._active) : baseAmt;
+  if (active > baseAmt) active = baseAmt;
+  if (active <= 0n) return null;
+  const locked = baseIsReceive ? active : (offer * active) / baseAmt;
+  if (locked <= 0n) return null;
+  return { offer: o, offerId: o.offer_id, num: want, den: offer, minLot: 1n, locked, interactive: true,
+    baseAmt, active, baseIsReceive };
 }
 
 // An interactive fill near `filled` receive atoms, in the maker's own terms: the base
@@ -65,7 +74,8 @@ export function interactiveQuote(o, receive, pay, nowSec = Math.floor(Date.now()
 // base, the take is what is received; paying it, the least take that receives `filled`.
 export function interactiveSlice(q, filled) {
   let take = q.baseIsReceive ? filled : (filled * q.num + q.den - 1n) / q.den;
-  if (take > q.baseAmt) take = q.baseAmt;
+  const most = q.active ?? q.baseAmt;
+  if (take > most) take = most;
   const recv = (q.den * take) / q.baseAmt;
   const pays = (q.num * take + q.baseAmt - 1n) / q.baseAmt;
   return { take, filled: recv, pays };
