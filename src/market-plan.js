@@ -41,6 +41,44 @@ export function covenantQuote(o, receive, pay, nowSec = Math.floor(Date.now() / 
   return { offer: o, offerId: o.offer_id, num, den, minLot: minLot > 0n ? minLot : 1n, locked };
 }
 
+// The terms of an order resting in an operator's tree (`resting_leaf`) selling
+// `receive` for `pay`, as numbers, held at what its coin holds now (the relay's
+// locator; the relay moves it at every fill), when it is one of `operatorKey`'s.
+// null for anything else.
+export function restingQuote(o, receive, pay, operatorKey, nowSec = Math.floor(Date.now() / 1000)) {
+  const t = o && (o.resting_leaf || o.restingLeaf);
+  if (!t) return null;
+  if (String(o.offer_asset || '').toLowerCase() !== receive || String(o.want_asset || '').toLowerCase() !== pay) return null;
+  if (Number(o.expires_at_unix || 0) > 0 && Number(o.expires_at_unix) <= nowSec) return null;
+  if (!operatorKey || String(t.operator_key || '').toLowerCase() !== String(operatorKey).toLowerCase()) return null;
+  const num = big(t.rate_num), den = big(t.rate_den), minLot = big(t.min_lot);
+  const locked = big(o._active ?? t.value);
+  if (num <= 0n || den <= 0n || locked <= 0n) return null;
+  return { offer: o, offerId: o.offer_id, num, den, minLot: minLot > 0n ? minLot : 1n, locked, resting: true };
+}
+
+// The one resting order a trade fills whole, when the best one of them prices at least
+// as well as every covenant order and holds the whole trade: side 'buy' receives
+// `amount` base atoms, side 'sell' pays `amount` base atoms. Returns { q, filled
+// (receive atoms), pays (pay atoms, the price) } or null; a limit `price` (quote atoms
+// per whole base unit) bounds it.
+export function planResting({ resting, covenants = [], side, amount, price = null, basePrecision }) {
+  const best = (list) => list.reduce((b, q) => (!b || rateLess(q, b) ? q : b), null);
+  const r = best(resting || []), c = best(covenants || []);
+  if (!r || (c && rateLess(c, r))) return null;
+  const a = big(amount), unit = 10n ** BigInt(basePrecision || 0);
+  // Buying, the order sells the base: it fills `amount`. Selling, the order sells the
+  // quote for the base: the wallet's `amount` base buys as much as it pays for.
+  const filled = side === 'buy' ? a : (a * r.den) / r.num;
+  if (filled <= 0n || filled > r.locked || lotFit(r, filled) !== filled) return null;
+  const pays = (filled * r.num + r.den - 1n) / r.den;
+  if (price != null) {
+    const p = big(price);
+    if (side === 'buy' ? pays * unit > p * filled : filled * unit < p * pays) return null;
+  }
+  return { q: r, filled, pays };
+}
+
 // a/b < c/d, exactly.
 const rateLess = (a, b) => a.num * b.den < b.num * a.den;
 

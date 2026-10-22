@@ -24,6 +24,7 @@ import * as perms from './src/permissions.js';
 import * as router from './src/provider-router.js';
 import * as leaves from './src/leaves.js';
 import * as leafTrade from './src/leaf-trade.js';
+import * as leafResting from './src/leaf-resting.js';
 import * as market from './src/market.js';
 import { takeRecords, updateTake } from './src/leaf-orders.js';
 import { MODE_WORDS } from './src/mode.js';
@@ -175,6 +176,7 @@ async function resumeLeafTrades() {
   badgeTakes(false);
   await leafTrade.watchTakes().catch((e) => console.warn('[leaves] takes not watched:', (e && e.message) ?? e));
   await leafTrade.progressOrders().catch(() => {});
+  await leafResting.progressResting().catch(() => {});
 }
 
 // A take whose forfeits the wallet has not handed over needs the wallet unlocked within
@@ -609,6 +611,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       })().catch(() => {});
     } else if (msg.event === 'leafSynced') {
       leafTrade.progressOrders().catch(() => {});
+      leafResting.progressResting().catch(() => {});
     }
     return false;
   }

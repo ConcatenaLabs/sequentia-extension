@@ -12,6 +12,11 @@
 //    on the book as an order of the same kind, funded from this wallet and listed by it;
 //    it fills with this wallet offline, and what is left can be taken back once its
 //    time runs out. Every fee is paid in the asset the wallet gives.
+//  - In developer mode, with an operator joined, an order resting in that operator's
+//    tree (src/leaf-resting.js) is one more order of the market: when the best one
+//    prices at least as well as every covenant order and holds the whole trade, the
+//    trade fills it in the tree from this wallet's leaves, one transfer the operator
+//    co-signs (in user mode such an order is not taken).
 //  - Against BTC, from the quotes of makers who settle instantly over Lightning, through
 //    this wallet's own channels (src/dex.js). Such a trade does not rest: a limit order
 //    against BTC trades what the book reaches at the price, and the rest is not placed.
@@ -34,6 +39,8 @@ import * as R from './market-orders.js';
 import { BASE, ESPLORA, DEFAULT_FEERATE, EXCHANGE_RATE_SCALE } from './config.js';
 import { fmtAtoms } from './util.js';
 import { sessionMnemonic } from './vault.js';
+import * as leaves from './leaves.js';
+import * as leafResting from './leaf-resting.js';
 
 export const RELAY = BASE + '/seqob';
 // How long a resting order rests before what is left of it can be taken back.
@@ -74,7 +81,13 @@ async function bookOf(base, quote) {
   if (r.status === 404) return [];
   if (!r.ok) throw new Error('the order book is unreachable right now (HTTP ' + r.status + ')');
   const j = await r.json();
-  return (j.offers || []).map((o) => seqob.normRelayOffer(o));
+  // statuses[i] is offers[i]'s live state: what it can be filled for now.
+  return (j.offers || []).map((o, i) => {
+    const st = (j.statuses || [])[i];
+    const n = seqob.normRelayOffer(o);
+    if (st && st.active_amount != null) n._active = String(st.active_amount);
+    return n;
+  });
 }
 // Both ways round: an order selling the quote for the base is listed on the reversed
 // market.
@@ -181,11 +194,17 @@ export async function prepareOrder(origin, params) {
 }
 
 async function prepareChain(origin, { type, base, quote, side, amount, price }) {
+  const receive = side === 'buy' ? base : quote, payAsset = side === 'buy' ? quote : base;
+  const all = await marketOffers(base, quote);
+  const covs = all.filter((o) => P.covenantQuote(o, receive, payAsset));
+  // An order resting in the joined operator's tree, when it is where the best price
+  // is, is filled from leaves: no on-chain coin moves.
+  const leaf = await prepareResting(origin, { type, base, quote, side, amount, price, all, covs, receive, payAsset });
+  if (leaf) return leaf;
   // Coins are chosen from a scan begun now: one begun before the wallet's last trade
   // landed can still show a coin that trade spent.
   await engine.syncFresh();
-  const receive = side === 'buy' ? base : quote, payAsset = side === 'buy' ? quote : base;
-  const offers = await withChainAmounts((await marketOffers(base, quote)).filter((o) => P.covenantQuote(o, receive, payAsset)));
+  const offers = await withChainAmounts(covs);
   const plan = P.planTrade({ offers, base, quote, side, amount, price, basePrecision: prec(base) });
   const rest = type === 'limit' ? P.restTerms({ base, quote, side, baseLeft: plan.baseLeft, price, basePrecision: prec(base) }) : null;
   if (!plan.slices.length && !rest) {
@@ -264,6 +283,51 @@ async function prepareChain(origin, { type, base, quote, side, amount, price }) 
       throw new Error((trade.order_error || (trade.fills[0] && trade.fills[0].error) || 'nothing was traded') + '; nothing of yours moved');
     }
     return answerTrade(trade, plan);
+  };
+  return { display, exec };
+}
+
+// A trade filled from one order resting in the joined operator's tree, when that is
+// where the best price is (src/market-plan.js planResting); null otherwise, and always
+// in user mode. The library quotes the fill from the operator's own view of the order.
+async function prepareResting(origin, { type, base, quote, side, amount, price, all, covs, receive, payAsset }) {
+  if ((await leaves.mode().catch(() => null)) !== 'developer' || !(await leaves.config().catch(() => null))) return null;
+  const restingAll = all.filter((o) => o.resting_leaf);
+  if (!restingAll.length) return null;
+  let op;
+  try { await leaves.requireLeaves(); op = (await leaves.run('info')).operator; } catch { return null; }
+  const resting = restingAll.map((o) => P.restingQuote(o, receive, payAsset, op)).filter(Boolean);
+  // Each covenant order at its signed size: what decides is its price, which a fill
+  // does not change.
+  const covenants = covs.map((o) => P.covenantQuote(o, receive, payAsset)).filter(Boolean);
+  const plan = P.planResting({ resting, covenants, side, amount, price: type === 'limit' ? price : null, basePrecision: prec(base) });
+  if (!plan) return null;
+  const served = leafResting.servedOrder(plan.q.offer);
+  const quote2 = await leafResting.fillQuote(served, plan.filled.toString());
+  if (big(quote2.filled) !== plan.filled || big(quote2.paid) !== plan.pays) {
+    throw new Error('the order the book showed has changed at its operator; try again');
+  }
+  const fee = big(quote2.fee.amount);
+  const rows = [
+    ['You give', amountLine(payAsset, plan.pays + fee)],
+    ['You get', amountLine(receive, plan.filled)],
+    ['Fees', amountLine(payAsset, fee)],
+  ];
+  const baseDone = side === 'buy' ? plan.filled : plan.pays;
+  const display = {
+    text: (side === 'buy' ? 'Buy ' : 'Sell ') + fmtAtoms(baseDone, prec(base)) + ' ' + tick(base) + ' from an order resting in the operator’s tree, at its price.',
+    rows,
+    detail: 'The order is filled in one transfer in the tree that pays its maker and this wallet together, co-signed by the operator. Every fee is paid in ' + tick(payAsset) + '.',
+  };
+  const exec = async () => {
+    const r = await leafResting.fill(served, plan.filled.toString(), quote2);
+    const tid = r.answer && r.answer.transfer_id;
+    const trade = { id: seqob.randHex(16), origin, at: Date.now(), kind: 'leaf', type, side, market: { base, quote }, pay: payAsset, receive,
+      fills: [{ ok: true, txid: tid || null, offer_id: plan.q.offerId, pair: plan.q.offer.pair, filled: plan.filled.toString(), pays: plan.pays.toString(),
+        order: served.order, coin: r.coin, ...(r.moved_from ? { moved_from: r.moved_from } : {}) }], order: null };
+    await R.rememberTrade(trade);
+    return { ...answerTrade(trade, null), gave: (plan.pays + fee).toString(), got: plan.filled.toString(), transfer_id: tid || null,
+      ...(r.moved_from ? { moved_from: r.moved_from } : {}) };
   };
   return { display, exec };
 }
