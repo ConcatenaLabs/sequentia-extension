@@ -74,7 +74,12 @@ confidential `tsqb1…` addresses are an explicit opt-in).
   leaves swap two assets in one reassignment in the tree: one offers
   (`leafSwapOffer`), the other accepts (`leafSwapAccept`) and the first completes
   (`leafSwapComplete`), each window showing what is given, got and paid before
-  anything is signed (`getLeafSwaps`, `leafSwapCancel`). The leaf wallet runs in the offscreen document and syncs on its own schedule
+  anything is signed (`getLeafSwaps`, `leafSwapCancel`). An order rests as a leaf
+  in the operator's tree (`restOrder`): the wallet hands its forfeits over, lists it on
+  the relay once the operator holds it, and may then close while takers fill it in the
+  tree (`fillRestingOrder`, or the default view's `placeOrder`, which takes such an
+  order in developer mode when it holds the best price); its maker cancels it
+  (`cancelRestingOrder`) and reads it back with its credits (`getRestingOrders`). The leaf wallet runs in the offscreen document and syncs on its own schedule
   while the browser runs and the wallet is unlocked, in either mode once an
   operator is joined; leaves count in each asset's figure and in the headline in
   both modes. BTC is never a leaf: it stays on its own chain and on Lightning.
@@ -259,6 +264,19 @@ committed, so no build step is needed to load the extension.
   rollback undoes it, and it is final again once mined again; a full fill of the rest
   is not offered while it is not final. Every state is a DOM assertion and a
   screenshot, and the service worker's console is read after every start.
+- Orders resting in the operator's tree, end to end in headless Chromium: `CHROME=…
+  ARCA_OPERATOR_CONTROL=127.0.0.1:18640 SEQOBD=/path/to/seqobd
+  SEQDEX_WEB=/path/to/seqdex-web node test/resting/drive.mjs <evidence-dir>
+  <work-dir>`, with the same harness, relay binary and stand-in box as the leaves room's
+  drive, and three profiles. The maker rests three orders through the leaves room and
+  closes its browser once the relay lists them; a taker buys part of one from the
+  site's default view, where it is one more order of the market; a second taker's fill
+  is shown, the first fills the order again before it is approved, and the operator's
+  `order_moved` is answered by a fill where the order rests now; the default view takes
+  the rest. The relay's refusals are posted to it directly (a locator the operator does
+  not report, a value above what the leaf holds, a filled order, an order past its delist
+  time, a cancelled order); the maker's wallet, opened again, holds every credit and
+  cancels the last order; user mode refuses every method before any window.
 - Icons: `node scripts/gen-icons.mjs`
 - Rebuild the SWK wasm (needs the SWK checkout + clang):
   ```sh

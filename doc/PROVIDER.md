@@ -822,6 +822,92 @@ or that the coins are already spent by the maker completing the swap.
 
 `getCapabilities().features` carries `leaf-swaps` on builds that serve this section.
 
+## Orders resting as leaves in the operator's tree (developer mode)
+
+An order can rest as a leaf of the operator's tree: its maker rests it and leaves, and
+takers fill it there, each fill one transfer in the tree that the operator co-signs and
+the leaf's own program holds to the order's terms: the maker is paid at least its
+price, in a leaf under one of four keys of the maker's wallet, and what a part fill
+leaves rests again at a new coin under the same terms. The maker cancels it with the
+operator. The relay lists such an order (offer member `resting_leaf`) only while the
+operator's state view says it rests at the coin the listing names, holding what the
+listing says, and follows it from coin to coin. These methods are refused in user mode,
+and to a wallet that has joined no operator, with the same words as the other leaf
+methods. BTC is never a leaf: both assets are Sequentia assets.
+
+### `restOrder({ sell, amount, want, rate_num, rate_den, min_lot?, expiry?, max_fee_ppm? })` — approval per request
+Rests an order selling `amount` atoms of `sell` for `want`, `rate_num` atoms of `want`
+for every `rate_den` atoms sold (each fill's price rounded up), in fills of at least
+`min_lot` atoms (the whole amount when left out). `amount × rate_num / rate_den` must be
+a whole number of atoms: the listing states the order's whole price. `expiry` (unix
+seconds, a median time; a week ahead of the chain's when left out) is when the order,
+if its leaf is ever taken on the chain and lands as an on-chain order for the same
+terms, may be refunded; the operator co-signs no fill within its order margin (six
+hours) of it.
+
+Before the window opens the library quotes the rest (`order_rest_quote`): the coins
+given up, the fee (their refresh fee, in the asset sold) and the change. The window
+shows what is given, what is got if filled whole, the smallest fill, the fee, the
+change, the operator and the relay it is listed at; on approval the library rests the
+order only on the fee and the coins shown. Returns the library's answer with the offer
+id the wallet lists it under:
+```js
+{ order: '<participation id>', state, terms, amount, fee, gives, change, landed_pays, offer_id, note }
+```
+The next round makes the order's leaf. While its participation waits, the wallet syncs
+every few seconds, so its forfeits go in as soon as the round is built; once the round
+is final the library publishes the order to the operator, and the wallet lists it on
+the on-chain relay by itself (after every sync), at the coin it rests at and what that
+coin holds, signed with a key derived for that order alone, and posts it again before
+the listing runs out while it rests. The wallet must stay open, unlocked, until then;
+after that it may close, and takers fill the order while it is away. Each fill's credit
+is the wallet's at its next sync.
+
+### `fillRestingOrder({ order, amount? })` — approval per request
+Fills `amount` atoms (all of what rests when left out) of an order resting in the tree
+of the operator this wallet joined. `order` is the relay's offer of it, as served
+(its `resting_leaf` member). Before the window opens the library quotes the fill from
+the operator's own view of the order (`order_fill_resting_quote`): the coin it rests at
+now, what the fill takes and pays, the fee (the fill transaction's margin, in the asset
+paid), the coins given up, the change and what rests after. The window shows these,
+the order and the operator; on approval the fill is made of the order as the quote
+served it, only on what it showed. If another taker filled the order first, it rests at
+another coin and the operator refuses the fill (`order_moved`), giving the coins back:
+the wallet then asks for a new quote and fills the order where it rests now when that
+takes the same amount at the same price for no more fee, and refuses otherwise. Returns:
+```js
+{ order, filled, paid, fee, change, gives, coin, answer: { transfer_id, coins }, moved_from?, refused_first? }
+```
+`moved_from` is the coin the order rested at when the window showed it, when it moved.
+The leaf got is operator-confirmed, as any coin paid in the tree, and final once the
+round the order rests on is final.
+
+Refused before the window, besides the common ones: an offer without a `resting_leaf`
+member, an order of another operator, and the library's quote refusals (a fill below the
+lot, one leaving less than a lot, an order not resting, too few leaves of the asset paid
+that expire no later than the order's coin).
+
+### `cancelRestingOrder({ order })` — approval per request
+Cancels an order this site rested from this wallet (`order`: its id). The library quotes
+the cancel first (`order_cancel_resting_quote`): the coin it rests at, what that holds,
+what comes back as a leaf of the wallet's own and the fee (the transfer's margin, in the
+asset sold). The window shows these; on approval the coin is spent into that leaf, only
+as quoted, and the wallet withdraws its listing from the relay (which delists the order
+from the operator's view in any case). Fills made before stand. Returns
+`{ order, state: 'cancelled', coin, transfer }`.
+
+### `getRestingOrders()` — silent, requires connection and developer mode
+The orders this site rested from this wallet, as the library and the operator show them:
+```js
+{ orders: [{ order, rested_by, offer_id, at, amount, state, coin, holds, fills_left, fills, credits,
+             listed: { at, coin, relay_expires, maker_pubkey } | null, post_error }] }
+```
+`state` is the operator's (`resting`, `filled`, `cancelled`, `exhausted`, …), or the
+library's while the order has no leaf yet (`participating`, `not_rested`). `credits` are
+the leaves the wallet holds of the order's fills.
+
+`getCapabilities().features` carries `resting-orders` on builds that serve this section.
+
 ## Events
 
 Subscribe with `window.sequentia.on(event, handler)` and unsubscribe with
@@ -861,6 +947,12 @@ nothing else to trade. The wallet takes only orders it can settle in one step:
   figure and are moved into the wallet's own coins, and what is left of it can be
   taken back once its time has run out (a day after it is placed, by the chain's
   median time). Every fee is paid in the asset the wallet gives, never in another.
+- **In developer mode, with an operator joined**: an order resting as a leaf in that
+  operator's tree is one more order of the market. When the best of them prices at least
+  as well as every covenant order and holds the whole trade, the trade fills it in the
+  tree from the wallet's leaves (as `fillRestingOrder` does, one transfer the operator
+  co-signs, its fee in the asset given), and nothing goes on the chain. In user mode the
+  wallet does not take such an order.
 - **Against BTC** (`quote: 'BTC'`): the quotes of makers who settle instantly over
   Lightning, through this wallet's own channels. Such a trade does not rest: a limit
   order against BTC trades what the book offers at the price or better, and the rest

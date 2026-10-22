@@ -16,6 +16,7 @@
 
 import * as leaves from './leaves.js';
 import * as R from './leaf-orders.js';
+import * as leafResting from './leaf-resting.js';
 import { postExisting, orderFromCovenantTerms } from '../vendor/covenant-order.js';
 import * as seqob from '../vendor/seqob.js';
 import { secp256k1 } from '../vendor/btc.js';
@@ -48,11 +49,15 @@ export async function operator() {
 
 // Tells the offscreen host which takes still need the wallet. Runs in either mode: a
 // take made in developer mode must finish whatever the mode is now.
+// The participations of resting orders (src/leaf-resting.js) wait on the wallet's
+// forfeits in the same way, and are watched with the takes.
+leafResting.setWatchHook(() => watchTakes());
 export async function watchTakes() {
   const recs = await R.takeRecords();
-  if (!recs.length) return [];
-  const parts = await leaves.runAny('participations');
-  const ids = R.takesToWatch(recs, parts);
+  const resting = await leafResting.participationsToWatch().catch(() => []);
+  if (!recs.length && !resting.length) return [];
+  const parts = recs.length ? await leaves.runAny('participations') : [];
+  const ids = [...R.takesToWatch(recs, parts), ...resting];
   await leaves.hostOp('watch', { takes: ids, tickMs: R.TAKE_TICK_MS });
   return ids;
 }

@@ -20,6 +20,7 @@ import * as leaves from './leaves.js';
 import { readRequest, planSend, leafBalancesAnswer } from './leaf-request.js';
 import * as leafTrade from './leaf-trade.js';
 import * as leafSwap from './leaf-swap.js';
+import * as leafResting from './leaf-resting.js';
 
 // ---- pending approvals ----
 const pending = new Map();
@@ -140,7 +141,8 @@ export async function handleDappRequest(origin, method, params = {}) {
           'openampGetIdentity', 'openampSignTagged', 'openampSignSpend', 'openampSignSupervision',
           'signContractSpend', 'getContractKey', 'signContractStatement', 'getWalletMode', 'getLeafBalances', 'getLeafAddress', 'requestLeafReceive', 'sendLeaves',
           'boardLeaves', 'exitLeaf', 'getLeafOperator', 'takeOrder', 'getLeafTakes', 'placeOrderFromLeaves', 'getLeafOrders',
-          'leafSwapOffer', 'leafSwapAccept', 'leafSwapComplete', 'getLeafSwaps', 'leafSwapCancel'],
+          'leafSwapOffer', 'leafSwapAccept', 'leafSwapComplete', 'getLeafSwaps', 'leafSwapCancel',
+          'restOrder', 'fillRestingOrder', 'cancelRestingOrder', 'getRestingOrders'],
         // What this build can do beyond the method names, for sites that have
         // to know before they build something: 'pset-site-built' means
         // signPset fills in this wallet's key origins itself, so a PSET a site
@@ -153,9 +155,12 @@ export async function handleDappRequest(origin, method, params = {}) {
         // getLeafTakes, placeOrderFromLeaves, getLeafOrders) and the leafTake event;
         // 'leaf-swaps' the in-tree swap between two wallets holding leaves
         // (leafSwapOffer, leafSwapAccept, leafSwapComplete, getLeafSwaps, leafSwapCancel).
+        // 'resting-orders' the orders resting as leaves in the operator's tree, filled
+        // there with their makers away (restOrder, fillRestingOrder, cancelRestingOrder,
+        // getRestingOrders).
         // 'orders' means the market and limit orders the wallet settles its own way
         // (placeOrder, getOrders, cancelOrder), in either mode.
-        features: ['pset-site-built', 'contract-spend', 'leaves', 'leaf-orders', 'leaf-swaps', 'orders'],
+        features: ['pset-site-built', 'contract-spend', 'leaves', 'leaf-orders', 'leaf-swaps', 'resting-orders', 'orders'],
         events: ['accountsChanged', 'disconnect', 'modeChanged', 'leafArrived', 'leafSyncDue', 'leafTake'],
       };
 
@@ -915,6 +920,129 @@ export async function handleDappRequest(origin, method, params = {}) {
         await ensureOpenOrThrow();
         return await leaves.run('swap_cancel', { swap });
       });
+    }
+
+    // An order resting as a leaf in the operator's tree (src/leaf-resting.js): the
+    // library quotes the rest (the coins given up, their refresh fees, the change); the
+    // window shows the quote and the order rests only on it. Once its round is final and
+    // the wallet has handed over its forfeits, the library publishes it to the operator,
+    // the wallet lists it on the relay, and the browser may close.
+    case 'restOrder': {
+      await requireConnected(origin);
+      const hex64 = (v, name) => { const x = String(v ?? '').toLowerCase(); if (!/^[0-9a-f]{64}$/.test(x)) throw new Error(name + ' must be a 64-hex asset id'); return x; };
+      const pos = (v, name) => { const x = String(v ?? ''); if (!/^\d+$/.test(x) || BigInt(x) <= 0n) throw new Error(name + ' must be a positive whole number'); return x; };
+      const args = {
+        sell: hex64(params.sell, 'sell'), want: hex64(params.want, 'want'),
+        amount: pos(params.amount, 'amount'), rate_num: pos(params.rate_num, 'rate_num'), rate_den: pos(params.rate_den, 'rate_den'),
+      };
+      if (args.sell === args.want) throw new Error('an order sells one asset for another');
+      if (params.min_lot != null && params.min_lot !== '') args.min_lot = pos(params.min_lot, 'min_lot');
+      if (params.max_fee_ppm != null && params.max_fee_ppm !== '') args.max_fee_ppm = pos(params.max_fee_ppm, 'max_fee_ppm');
+      const whole = leafResting.wholePrice(args.amount, args.rate_num, args.rate_den);
+      if (!(await sessionMnemonic())) throw new Error('the wallet is locked; open the wallet popup and unlock first');
+      await leaves.requireLeaves();
+      if (params.expiry != null && params.expiry !== '') args.expiry = pos(params.expiry, 'expiry');
+      else {
+        // A week ahead of the chain's median time unless the site names when the
+        // order, once landed on the chain, may be refunded.
+        const sch = await leaves.run('schedule');
+        args.expiry = String(Number(sch.now) + 7 * 86400);
+      }
+      const quote = await leaves.run('order_rest_quote', args);
+      const fee = quote.fee || {};
+      const op = await leafTrade.operator();
+      const refundAt = new Date(Number(args.expiry) * 1000).toISOString().replace('T', ' ').replace(/\.\d+Z$/, ' UTC');
+      return requestApproval(origin, 'restOrder', {
+        text: origin + ' asks you to rest an order in the operator’s tree: the next round makes a leaf of exactly the order’s amount, which takers fill there while you are away, the operator co-signing each fill under the order’s own terms.',
+        deltas: [{ ticker: (A.assetMeta(args.sell).ticker || args.sell.slice(0, 12)), atoms: '-' + (BigInt(args.amount) + BigInt(fee.amount || 0)), precision: A.assetMeta(args.sell).precision || 0 }],
+        rows: [
+          ['You give', leafAmount(args.amount, args.sell) + ' into the order, and the fee below, from your leaves'],
+          ['You get', leafAmount(whole.toString(), args.want) + ' if filled whole; ' + args.rate_num + ' of it for every ' + args.rate_den + ' sold, each fill rounded up, paid to you as leaves'],
+          ['Smallest fill', leafAmount(quote.min_lot ?? args.min_lot ?? args.amount, args.sell)],
+          ['Fee', leafAmount(fee.amount, fee.asset || args.sell) + ' (the refresh fee of the coins given up)'],
+          ['Change', quote.change && BigInt(quote.change) > 0n ? leafAmount(quote.change, args.sell) + ' back as a leaf' : 'none'],
+          ['Cancel', 'what rests can be taken back with the operator at any time, while the wallet is open'],
+          ['Landing', 'if the leaf is ever taken on the chain, it becomes an on-chain order for the same terms, refundable from ' + refundAt + ' (median time)'],
+          ['Operator', op.operator || '?'],
+          ['Listed at', leafResting.RELAY],
+        ],
+        detail: 'Keep the wallet open, unlocked, until the round that makes the order is final and the wallet has handed over its forfeits: the order is then published to the operator and listed, and the browser may close. Each fill’s credit is yours at the wallet’s next sync. The order rests only on the fee shown.',
+      }, async () => {
+        await ensureOpenOrThrow();
+        return await leafResting.rest(origin, args, quote);
+      });
+    }
+
+    // A fill of an order resting in the operator's tree, as a relay served it: the
+    // library quotes the fill from the operator's own view of the order, the window
+    // shows it, and the fill goes ahead only on it (src/leaf-resting.js).
+    case 'fillRestingOrder': {
+      await requireConnected(origin);
+      const served = leafResting.servedOrder(params.order);
+      const amount = params.amount != null && params.amount !== '' ? String(params.amount) : null;
+      if (amount != null && (!/^\d+$/.test(amount) || BigInt(amount) <= 0n)) throw new Error('amount must be a positive number of atoms');
+      if (!(await sessionMnemonic())) throw new Error('the wallet is locked; open the wallet popup and unlock first');
+      await leaves.requireLeaves();
+      const op = await leafTrade.operator();
+      if (served.operator_key && op.operator && served.operator_key !== String(op.operator).toLowerCase()) {
+        throw new Error('this order rests in the tree of operator ' + served.operator_key + ', not of the operator this wallet joined (' + op.operator + ')');
+      }
+      const quote = await leafResting.fillQuote(served, amount);
+      const a = quote.gets.asset, b = quote.fee.asset;
+      const tick = (h) => { const m = A.assetMeta(h); return m.ticker && m.ticker !== '?' ? m.ticker : h.slice(0, 12) + '…'; };
+      const gives = (BigInt(quote.paid) + BigInt(quote.fee.amount)).toString();
+      return requestApproval(origin, 'fillRestingOrder', {
+        text: origin + ' asks you to fill an order resting in the operator’s tree, from your leaves: one transfer in the tree, which the operator co-signs, pays the order’s maker and pays you a leaf at once.',
+        deltas: [{ ticker: tick(b), atoms: '-' + gives, precision: A.assetMeta(b).precision || 0 },
+          { ticker: tick(a), atoms: String(quote.filled), precision: A.assetMeta(a).precision || 0 }],
+        rows: [
+          ['You get', leafAmount(quote.filled, a) + ' as a leaf, as soon as the operator co-signs the fill'],
+          ['You give', leafAmount(gives, b) + ': the price and the fee, from your leaves'],
+          ['Price', leafAmount(quote.paid, b) + ', paid to the order’s maker in the tree'],
+          ['Fee', leafAmount(quote.fee.amount, b) + ' (the fill transaction’s margin)'],
+          ['Change', quote.change && BigInt(quote.change) > 0n ? leafAmount(quote.change, b) + ' back as a leaf' : 'none'],
+          ['Order after the fill', quote.remainder != null ? leafAmount(quote.remainder, a) + ' rests again in the tree, under the same terms' : 'filled whole'],
+          ['Order', served.order + ', resting at ' + quote.coin + (served.coin && served.coin !== quote.coin ? ' (the operator’s view; the relay listed it at ' + served.coin + ')' : '')],
+          ['Operator', op.operator || '?'],
+        ],
+        detail: 'The leaf you get is operator-confirmed, as any coin paid to you in the tree, and final once the round its order rests on is final, its block certified and its Bitcoin anchor buried. The fill goes ahead only on the amount, price and fee shown: if another taker fills the order first, the wallet fills it where it then rests only for the same amount and price and no higher fee.',
+      }, async () => {
+        await ensureOpenOrThrow();
+        return await leafResting.fill(served, amount, quote);
+      });
+    }
+
+    // A cancel of an order this site rested from this wallet: what rests comes back to a
+    // leaf of the wallet's own, less the transfer's margin; the library quotes it first.
+    case 'cancelRestingOrder': {
+      await requireConnected(origin);
+      const order = String(params.order ?? '').toLowerCase();
+      if (!/^[0-9a-f]{64}$/.test(order)) throw new Error('order must be the order’s id (64 hex)');
+      if (!(await sessionMnemonic())) throw new Error('the wallet is locked; open the wallet popup and unlock first');
+      await leaves.requireLeaves();
+      const rec = await leafResting.recordFor(origin, order);
+      const quote = await leaves.run('order_cancel_resting_quote', { order: rec.order || rec.rested_by });
+      const a = quote.gets.asset;
+      return requestApproval(origin, 'cancelRestingOrder', {
+        text: origin + ' asks you to cancel an order resting in the operator’s tree: the coin it rests at moves to a leaf of your own, so no taker can fill it any more.',
+        deltas: [{ ticker: (A.assetMeta(a).ticker || a.slice(0, 12)), atoms: '-' + quote.fee.amount, precision: A.assetMeta(a).precision || 0 }],
+        rows: [
+          ['You give', 'the order’s coin ' + quote.coin + ', holding ' + leafAmount(quote.holds, a)],
+          ['You get', leafAmount(quote.gets.amount, a) + ' as a leaf of your own'],
+          ['Fee', leafAmount(quote.fee.amount, a) + ' (the transfer’s margin)'],
+          ['Order', order],
+        ],
+        detail: 'Fills made before the cancel stand, and their credits are yours. The relay delists the order. The cancel goes ahead only on the coin and fee shown.',
+      }, async () => {
+        await ensureOpenOrThrow();
+        return await leafResting.cancel(rec, quote);
+      });
+    }
+
+    case 'getRestingOrders': {
+      await requireUnlockedAndConnected(origin);
+      await leaves.requireLeaves();
+      return { orders: await leafResting.forOrigin(origin) };
     }
 
     case 'getLeafOrders': {

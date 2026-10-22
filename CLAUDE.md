@@ -52,7 +52,10 @@ wasm. Read this before changing anything.
   (`src/leaf-trade.js`, records in `src/leaf-orders.js`) are carried on with no window
   open: the host syncs every few seconds while a take waits on its forfeits, and the
   service worker lists an order on the relay once the library says it rests. Both run in
-  either mode once started; only what a site sees follows the mode. An in-tree swap
+  either mode once started; only what a site sees follows the mode. An order resting in
+  the operator's tree (`src/leaf-resting.js`) is carried on the same way: the host syncs
+  for its participation as for a take, and the service worker lists it on the relay once
+  the operator holds it. An in-tree swap
   (`src/leaf-swap.js`) keeps only which site started which swap and what the library
   answered when it did; the host follows a coin held for a swap ('offered') until the
   other wallet completes it, so its mailbox is read. Mode and leaf events reach

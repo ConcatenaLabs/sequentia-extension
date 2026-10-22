@@ -149,3 +149,32 @@ test('an order followed on the chain: each spend that pays its maker is a fill; 
   const q = progressFromChain(rec, [{ ...f1, confirmed: true }], []);
   assert.equal(q.holds, 600n); assert.equal(q.restsAt, 't1:3'); assert.equal(q.fills[0].standing, 'sent');
 });
+
+// ---- an order resting in the operator's tree, taken by placeOrder in developer mode ----
+import { restingQuote, planResting } from '../src/market-plan.js';
+
+test('a resting order of the joined operator is one more order of the market, at what its coin holds', () => {
+  const A = 'aa'.repeat(32), B = 'bb'.repeat(32), OP = 'cc'.repeat(32);
+  const offer = (over = {}) => ({ offer_id: 'r', offer_asset: A, want_asset: B, offer_amount: '600000', _active: '400000',
+    resting_leaf: { operator_key: OP, rate_num: '2', rate_den: '1', min_lot: '10000', value: '400000' }, ...over });
+  const q = restingQuote(offer(), A, B, OP);
+  assert.equal(q.locked, 400000n);
+  assert.equal(restingQuote(offer(), A, B, 'dd'.repeat(32)), null, 'another operator\'s order is not taken');
+  assert.equal(restingQuote(offer({ _active: '0' }), A, B, OP), null, 'an order listed at nothing is not taken');
+  // Buying 200,000 base: filled from it at 2 each.
+  assert.deepEqual(planResting({ resting: [q], side: 'buy', amount: '200000', basePrecision: 0 }), { q, filled: 200000n, pays: 400000n });
+  // More than it holds: not this way.
+  assert.equal(planResting({ resting: [q], side: 'buy', amount: '400001', basePrecision: 0 }), null);
+  // A fill leaving less than a lot: not this way.
+  assert.equal(planResting({ resting: [q], side: 'buy', amount: '395000', basePrecision: 0 }), null);
+  // A covenant order priced better takes the trade instead.
+  const cov = { num: 3n, den: 2n, locked: 1000000n, minLot: 1n };
+  assert.equal(planResting({ resting: [q], covenants: [cov], side: 'buy', amount: '200000', basePrecision: 0 }), null);
+  // A limit below its price: not filled.
+  assert.equal(planResting({ resting: [q], side: 'buy', amount: '200000', price: '1', basePrecision: 0 }), null);
+  assert.ok(planResting({ resting: [q], side: 'buy', amount: '200000', price: '2', basePrecision: 0 }));
+  // Selling the base to an order that sells the quote (a bid): the base given buys as
+  // much of the quote as it pays for.
+  const bid = restingQuote({ ...offer(), offer_asset: B, want_asset: A, resting_leaf: { operator_key: OP, rate_num: '1', rate_den: '4', min_lot: '1', value: '800000' }, _active: '800000' }, B, A, OP);
+  assert.deepEqual(planResting({ resting: [bid], side: 'sell', amount: '100000', basePrecision: 0 }), { q: bid, filled: 400000n, pays: 100000n });
+});
