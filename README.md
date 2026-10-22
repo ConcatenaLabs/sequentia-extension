@@ -87,16 +87,20 @@ confidential `tsqb1…` addresses are an explicit opt-in).
   mode and with no prompt: after a sync, at most every ten minutes and once when
   the leaf wallet opens, it takes up every claim of a distribution named for one
   of its addresses (the asset then counts in its figure), signs a refresh plan
-  for each leaf whose refresh could run within ten days so that a wallet closed
-  across that leaf's expiry keeps it, cancels the plan of a leaf that moved, and
-  sends a leaf no round made into a round's refresh so it can be planned later.
-  A plan's fee comes out of the leaf in the leaf's own asset; a leaf the
-  operator will not plan is refreshed while the wallet is open instead. A leaf
-  younger than that stays free to pay, so a wallet closed within a leaf's first
-  two weeks or so and kept closed through its refresh can lose that leaf to the
-  operator's sweep, as any absent holder can. Developer mode shows the last run
-  and the plans in Settings, with Cancel, and Release (cancel, then refresh in
-  the next round on the fees shown).
+  for every leaf of a round so that a wallet closed across that leaf's expiry
+  keeps it, whenever it closes, cancels the plan of a leaf that moved, and sends
+  a leaf no round made into a round's refresh once that refresh could run within
+  ten days, so it can be planned later. A plan's fee comes out of the leaf in the
+  leaf's own asset; a leaf the operator will not plan is refreshed while the
+  wallet is open instead. A planned leaf is paid out of round by no wallet, so a
+  payment, take, swap, order or fill that the unplanned leaves cannot cover is
+  made through the next round, by itself: the wallet gives the planned leaves it
+  needs up in that round for leaves no plan names (which `care` leaves unplanned
+  for a day, so they can be paid), waits until the round is final, and asks again. The person waits one round and sees nothing else.
+  Developer mode shows the last run, the plans with Cancel and Release (the
+  plan's leaf given up in the next round), each planned leaf marked under
+  Leaves and their dates, and "Paying through the next round" while a payment
+  waits.
 - **Stakes** — the Stake tab lists every stake of the wallet's staking key,
   whichever wallet bonded it (the web wallet bonds with a lock of 43,200 blocks,
   Ambra with a time lock of 2,532 units of 512 seconds, about 15 days), found on
@@ -227,10 +231,12 @@ committed, so no build step is needed to load the extension.
   has the command-line wallet distribute an asset to three holders, the
   extension's wallet one of them by the key of its receive address, sees the
   claim taken up with no click and counted in the popup's one figure in user
-  mode, moves the chain's median time until a leaf is within ten days of its
-  refresh and sees it planned and listed in developer mode with Cancel and
-  Release, and checks that the user-mode screens carry none of the developer
-  words (`DEVELOPER_WORDS` in `src/balance-view.js`).
+  mode, moves the chain's median time until the claimed leaf (a leaf of no round)
+  is within ten days of its refresh and sees it sent into a round, sees the
+  round's leaf planned at once and listed in developer mode with Cancel and
+  Release, releases it into the next round and cancels the next plan, and checks
+  that the user-mode screens carry none of the developer words
+  (`DEVELOPER_WORDS` in `src/balance-view.js`).
 - One phrase's whole balance, read where another wallet put it: `CHROME=…
   ARCA_OPERATOR_CONTROL=… TOTAL_PHRASE_FILE=… [WEB_TOTALS=…/totals.json] node
   test/leaves/total-drive.mjs <evidence-dir> <work-dir>` opens the phrase the web

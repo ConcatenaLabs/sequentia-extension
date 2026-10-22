@@ -36,6 +36,9 @@ export class LeafError extends Error {
     this.kind = (e && e.kind) || 'error';
     if (e && e.code) this.code = e.code;
     if (e && e.status) this.status = e.status;
+    // A payment the planned coins would cover: their asset, and which to give up.
+    if (e && e.asset) this.asset = e.asset;
+    if (e && Array.isArray(e.release)) this.release = e.release;
   }
 }
 
@@ -165,11 +168,14 @@ export async function requireLeaves() {
   }
 }
 
-// One command of the library: its `result` (the `start` part is the library's own
-// witness and re-check, which it acts on itself).
+// One command of the library that a person or a site starts: its `result` (the `start`
+// part is the library's own witness and re-check, which it acts on itself). A command the
+// unplanned coins cannot cover and planned ones can is made through the next round, by
+// itself: the host gives the planned coins up in that round and asks again once it is
+// final (`payThrough`, src/leaf-schedule.js), so the answer can take one round.
 export async function run(command, args = {}) {
   await requireLeaves();
-  return (await host('run', { command, args })).result;
+  return (await host('run', { command, args, paying: true })).result;
 }
 // One command of the library in either mode, for the work the wallet carries on by
 // itself (a take's forfeits, an order's listing): what was started in developer mode

@@ -53,11 +53,87 @@ export function freshRequestWaits(schedule, windowSecs = FRESH_REQUEST_SECS) {
 // What the wallet does by itself, in either mode, is the library's `care`: after a sync,
 // at most every CARE_EVERY_MS and once after the leaf wallet opens. It takes up every
 // open claim named for one of the wallet's receive keys, cancels each refresh plan whose
-// coin has moved, plans each coin whose refresh step could run within ten days, and asks
-// a refresh in a round for a coin no round made (a board, a coin received or claimed out
-// of round), so that a later `care` can plan the new one. The web wallet's leaves.js
-// holds the same rules.
+// coin has moved, plans every coin of a round at the first `care` after the coin is made
+// (`plan_within`: PLAN_EVERY_ROUND_LEAF), and asks a refresh in a round for a coin no
+// round made (a board, a coin received or claimed out of round) once that refresh could
+// run within ten days, since it costs a fee, so that a later `care` can plan the new one.
+// The web wallet's leaves.js holds the same rules.
 export const CARE_EVERY_MS = 10 * 60_000;
+
+// `care`'s planning reach: every leaf of a round is planned at the first care after it is
+// made (the library's PLAN_EVERY_ROUND_LEAF).
+export const PLAN_EVERY_ROUND_LEAF = 4294967295;
+
+// The arguments `care` runs with: the claim scan, and every leaf of a round planned.
+export function careArgs(scan) {
+  const a = { plan_within: PLAN_EVERY_ROUND_LEAF };
+  if (scan) a.scan = scan;
+  return a;
+}
+
+// A planned coin carries refund halves the wallet signed, so no wallet pays it out of
+// round. A command the unplanned coins cannot cover and planned ones can is refused by the
+// library with kind `planned`, naming the coins whose release covers it (`release`). The
+// wallet pays it through the next round, by itself: `plan_release` gives those coins up in
+// the next round for leaves of its own that no plan names, it syncs every RELEASE_POLL_MS
+// until none of them is still the wallet's to spend or in that round (the round final, the
+// new leaves held), at most RELEASE_WAIT_MS, and asks the same command again; at most
+// RELEASE_TRIES releases for one command (a released coin comes back less its refresh fee
+// and its own margins, so one release can fall short). Every other refusal is the library's.
+export const RELEASE_POLL_MS = 15_000;
+export const RELEASE_WAIT_MS = 3 * 3600_000;
+export const RELEASE_TRIES = 3;
+export const RELEASE_TIMEOUT = 'the next round did not free the coins this payment needs in time; nothing was paid, and the payment can be asked again';
+
+// Whether the coins a release gave up are done with: none of them is still the wallet's
+// to spend or in the round that gives them up (their round final, the forfeits handed
+// over at sync), so the new leaves are held and the payment can be asked again.
+const RELEASING = new Set(['live', 'pending', 'given', 'offered', 'sending', 'forfeited']);
+export function releaseDone(coins, released) {
+  const by = new Map((coins || []).map((c) => [c.leaf_id, c]));
+  return (released || []).every((id) => { const c = by.get(id); return !c || !RELEASING.has(c.state); });
+}
+
+// The current coin of each open or stopped plan: the leaf its next step gives up.
+// -> Map(leaf id -> plan)
+export function plannedCoins(plans) {
+  const out = new Map();
+  for (const p of plans || []) {
+    if (p.state !== 'open' && p.state !== 'stopped') continue;
+    const current = ((p.steps || []).filter((st) => st.leaf_id).map((st) => st.leaf_id).pop()) || p.coin;
+    out.set(current, p);
+  }
+  return out;
+}
+
+// One command asked through the next round when it needs a planned coin. `io` gives
+// `run(command, args)` (the library's answer, or a throw of its refusal `{kind, message,
+// asset?, release?}`), `sync()`, `coins()`, `sleep(ms)`, `now()` (ms) and, optionally,
+// `waiting(state | null)`, told what is released while the wallet waits for the round.
+export async function payThrough(command, args, io) {
+  const sleep = io.sleep || ((ms) => new Promise((r) => setTimeout(r, ms)));
+  const now = io.now || (() => Date.now());
+  for (let i = 0; ; i++) {
+    try { return await io.run(command, args); } catch (e) {
+      if (!e || e.kind !== 'planned' || !Array.isArray(e.release) || !e.release.length || i >= RELEASE_TRIES) throw e;
+      const state = { command, coins: e.release, asset: e.asset || null, since: now() };
+      if (io.waiting) io.waiting(state);
+      try {
+        state.answer = await io.run('plan_release', { leaves: e.release });
+        if (io.waiting) io.waiting(state);
+        const until = now() + RELEASE_WAIT_MS;
+        for (;;) {
+          try { await io.sync(); } catch { /* the next poll syncs again */ }
+          let cs = null;
+          try { cs = await io.coins(); } catch { /* read again at the next poll */ }
+          if (cs && releaseDone(cs, e.release)) break;
+          if (now() >= until) throw { kind: 'refused', message: RELEASE_TIMEOUT };
+          await sleep(RELEASE_POLL_MS);
+        }
+      } finally { if (io.waiting) io.waiting(null); }
+    }
+  }
+}
 
 // Whether `care` runs now: at the first chance after the wallet opens, then at most every
 // `every` ms. `last` is when it last ran (ms), or null.

@@ -253,11 +253,15 @@
           <button id="btnLeafSync" class="ghost tiny" style="margin-top:8px">Sync now</button>
           <div id="leafCare" style="margin-top:12px">
             <h2>Kept by itself: claims and refresh plans</h2>
-            <p class="sub">After a sync, at most every ten minutes and once when the wallet opens, in either mode, the wallet takes up every claim named for one of its addresses, signs a refresh plan for each leaf whose refresh could run within ten days (so a closed wallet keeps it across its expiry), cancels the plan of a leaf that moved, and sends a leaf no round made into a round's refresh. A younger leaf stays unplanned and free to pay; a wallet closed in a leaf's first two weeks or so and kept closed through its refresh can lose it to the operator's sweep. A planned leaf pays nothing until it is refreshed in a round: Release cancels its plan and quotes that refresh.</p>
+            <p class="sub">After a sync, at most every ten minutes and once when the wallet opens, in either mode, the wallet takes up every claim named for one of its addresses, signs a refresh plan for every leaf of a round (so a closed wallet keeps it across its expiry, whenever it closes), and cancels the plan of a leaf that moved. A leaf received or boarded out of round is free to pay, and is sent into a round's refresh once that refresh could run within ten days. A planned leaf is paid out of round by no wallet: a payment the unplanned leaves cannot cover gives the planned leaves it needs up in the next round and is made once that round is final, by itself. Release does that for one plan now.</p>
             <div id="leafCareLast" class="sub"></div>
             <div id="leafPlans"></div>
-            <div id="leafRelease"></div>
+            <div id="leafReleasing" class="status hide"></div>
             <button id="btnLeafCare" class="ghost tiny" style="margin-top:8px">Run now</button>
+          </div>
+          <div id="leafCoinsCard" style="margin-top:12px">
+            <h2>Leaves and their dates</h2>
+            <div id="leafCoins"></div>
           </div>
         </div>
         <div id="leafStatus" class="status"></div>

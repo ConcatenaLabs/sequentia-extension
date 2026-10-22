@@ -65,9 +65,15 @@ wasm. Read this before changing anything.
   after the leaf wallet opens and after a sync at most every ten minutes
   (`careDue`, `src/leaf-schedule.js`, the web wallet's rules), in either mode,
   with `scan` = the kit wallet's next receive index + 20 (`claimScan`; the
-  service worker tells the host through `ensureRunning`). Which claim to take,
-  which coin to plan, its fee and every refusal are the library's; never decide
-  one in JavaScript.
+  service worker tells the host through `ensureRunning`) and `plan_within` set
+  to plan every leaf of a round (`careArgs`). Which claim to take, which coin to
+  plan, its fee and every refusal are the library's; never decide one in
+  JavaScript. Every leaf command a person or a site starts goes through one path:
+  `leaves.run` asks the host with `paying`, and the host's `payThrough`
+  (`src/leaf-schedule.js`) answers a refusal of kind `planned` with
+  `plan_release` of the coins it names, syncs until that round has freed them,
+  and asks again. The host carries that wait, so it outlives the service worker.
+  Keep that one path; `runAny` (the work carried on by itself) does not take it.
 - **BigInt never crosses the message boundary** — all RPC amounts are strings.
 - **No bundler, no framework, plain ES modules** (matches the web wallet).
   Content scripts: inpage.js runs in the MAIN world, content.js relays.
@@ -144,7 +150,8 @@ token (already public in sequentia-web-wallet) — not a secret.
 - What the wallet does by itself with leaves: `CHROME=… ARCA_OPERATOR_CONTROL=…
   ARCA_CLI=… node test/leaves/care-drive.mjs <evidence-dir> <work-dir>` (a
   distribution's claim taken up with no click and shown in the popup's figure in
-  user mode, a leaf planned within ten days of its step window, the user-mode
+  user mode, the claimed leaf sent into a round once within ten days of its step
+  window and the round's leaf planned at once, Release and Cancel, the user-mode
   screens checked against the developer words). Fresh operator harness each run.
 - One phrase's figures and headline beside the web wallet's: `CHROME=…
   ARCA_OPERATOR_CONTROL=… TOTAL_PHRASE_FILE=… WEB_TOTALS=… node
