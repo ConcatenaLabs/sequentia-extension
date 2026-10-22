@@ -6,9 +6,12 @@
 // (src/market-plan.js), shows one approval with what is given, what is got and what is
 // paid in fees, each also in the reference currency, and then settles:
 //
-//  - Between two Sequentia assets, from the covenant orders on the on-chain book: each
-//    order taken is one transaction that pays its maker on the chain and this wallet in
-//    the same transaction, with no maker online. What a limit order does not fill rests
+//  - Between two Sequentia assets, from the orders on the on-chain book: each order
+//    taken is one transaction that pays its maker on the chain and this wallet in the
+//    same transaction. A covenant order needs no maker online; an interactive maker's
+//    offer is co-signed by its maker over the relay (src/dex.js), and this wallet checks
+//    that transaction against its own half before signing it. Either way the wallet
+//    receives at its usual address, in the clear. What a limit order does not fill rests
 //    on the book as an order of the same kind, funded from this wallet and listed by it;
 //    it fills with this wallet offline, and what is left can be taken back once its
 //    time runs out. Every fee is paid in the asset the wallet gives.
@@ -198,6 +201,7 @@ async function prepareChain(origin, { type, base, quote, side, amount, price }) 
   const receive = side === 'buy' ? base : quote, payAsset = side === 'buy' ? quote : base;
   const all = await marketOffers(base, quote);
   const covs = all.filter((o) => P.covenantQuote(o, receive, payAsset));
+  const inters = all.filter((o) => P.interactiveQuote(o, receive, payAsset));
   // An order resting in the joined operator's tree, when it is where the best price
   // is, is filled from leaves: no on-chain coin moves.
   const leaf = await prepareResting(origin, { type, base, quote, side, amount, price, all, covs, receive, payAsset });
@@ -205,8 +209,8 @@ async function prepareChain(origin, { type, base, quote, side, amount, price }) 
   // Coins are chosen from a scan begun now: one begun before the wallet's last trade
   // landed can still show a coin that trade spent.
   await engine.syncFresh();
-  const offers = await withChainAmounts(covs);
-  const plan = P.planTrade({ offers, base, quote, side, amount, price, basePrecision: prec(base) });
+  const offers = [...await withChainAmounts(covs), ...inters];
+  const plan = P.planTrade({ offers, base, quote, side, amount, price, basePrecision: prec(base), interactive: true });
   const rest = type === 'limit' ? P.restTerms({ base, quote, side, baseLeft: plan.baseLeft, price, basePrecision: prec(base) }) : null;
   if (!plan.slices.length && !rest) {
     throw new Error(type === 'market' ? 'nothing on the book can be traded at this market right now' : 'nothing to place');
@@ -214,7 +218,7 @@ async function prepareChain(origin, { type, base, quote, side, amount, price }) 
 
   // Each order taken is checked against the chain now: a relay that lies about an
   // order's script is caught before anything is shown.
-  for (const s of plan.slices) planFillFromMatched(synthOf(s), s.offer._spk, { makerCancellableOK: true });
+  for (const s of plan.slices) if (!s.interactive) planFillFromMatched(synthOf(s), s.offer._spk, { makerCancellableOK: true });
 
   const pay = plan.pay;
   const fillFee = plan.slices.length ? feeIn(pay, FILL_VSIZE) : 0n;
@@ -379,6 +383,15 @@ function synthOf(s) {
 // Takes one order: one transaction, its credit to the maker and this wallet's asset to
 // this wallet's transparent address, the fee in the asset given.
 async function fillOne(s, payAsset, feeAtoms) {
+  if (s.interactive) {
+    // The maker co-signs; the fee is paid in the asset given, as for a covenant fill.
+    const receive = String(s.offer.offer_asset).toLowerCase();
+    const txid = await dex.liftSameChain(s.offer,
+      { take: s.take, payAsset, payAtoms: s.pays, recvAsset: receive, recvAtoms: s.filled },
+      { feeAsset: payAsset, feeAmount: feeAtoms, feeRate: BigInt(A.feeRateFor(payAsset)) });
+    if (!txid) throw new Error('the maker\'s swap was not broadcast');
+    return { txid };
+  }
   const transparent = engine.rawAddress(false).toString();
   const hooks = makeCovenantHooks({
     wasm: wasmMod,

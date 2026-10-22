@@ -7,7 +7,9 @@
 // for the quote is an ask, and one that sells the quote for the base (listed on the
 // reversed market) is a bid. Only orders the wallet can settle in one step are read:
 // covenant orders on the on-chain book, filled by one transaction that pays the maker
-// on the chain and the wallet in the same transaction. Each covenant fixes its rate
+// on the chain and the wallet in the same transaction, and interactive makers' offers
+// on the same book, filled by one transaction the maker co-signs while it is online
+// (src/dex.js). Each covenant fixes its rate
 // (the maker gets ceil(filled * rate_num / rate_den) of what it wants for `filled` of
 // what it sells), its smallest lot, and that what it leaves resting is at least one
 // lot; every number here follows those rules, so a plan the chain would refuse is
@@ -39,6 +41,34 @@ export function covenantQuote(o, receive, pay, nowSec = Math.floor(Date.now() / 
   const locked = big(o.offer_amount);
   if (num <= 0n || den <= 0n || locked <= 0n) return null;
   return { offer: o, offerId: o.offer_id, num, den, minLot: minLot > 0n ? minLot : 1n, locked };
+}
+
+// The terms of an interactive maker's same-chain offer selling `receive` for `pay`, as
+// numbers. The maker co-signs a fill of `take` base atoms at the daemon's proRata: the
+// wallet receives floor(offer * take / base) and pays ceil(want * take / base). null for
+// anything else: a covenant, a leaf order, a cross-chain or confidential-book offer.
+export function interactiveQuote(o, receive, pay, nowSec = Math.floor(Date.now() / 1000)) {
+  if (!o || o.covenant || o.Covenant || o.resting_leaf || o.restingLeaf || o.cross_chain || o.confidential) return null;
+  const sc = o.same_chain || o.sameChain;
+  if (!sc || !(sc.maker_recv_address || sc.makerRecvAddress)) return null;
+  if (String(o.offer_asset || '').toLowerCase() !== receive || String(o.want_asset || '').toLowerCase() !== pay) return null;
+  if (Number(o.expires_at_unix || 0) > 0 && Number(o.expires_at_unix) <= nowSec) return null;
+  const offer = big(o.offer_amount), want = big(o.want_amount), baseAmt = big(o.base_amount);
+  if (offer <= 0n || want <= 0n || baseAmt <= 0n) return null;
+  const baseAsset = String((o.pair && o.pair.base_asset) || '').toLowerCase();
+  return { offer: o, offerId: o.offer_id, num: want, den: offer, minLot: 1n, locked: offer, interactive: true,
+    baseAmt, baseIsReceive: baseAsset === receive };
+}
+
+// An interactive fill near `filled` receive atoms, in the maker's own terms: the base
+// atoms to take, and what that receives and pays at the daemon's proRata. Receiving the
+// base, the take is what is received; paying it, the least take that receives `filled`.
+export function interactiveSlice(q, filled) {
+  let take = q.baseIsReceive ? filled : (filled * q.num + q.den - 1n) / q.den;
+  if (take > q.baseAmt) take = q.baseAmt;
+  const recv = (q.den * take) / q.baseAmt;
+  const pays = (q.num * take + q.baseAmt - 1n) / q.baseAmt;
+  return { take, filled: recv, pays };
 }
 
 // The terms of an order resting in an operator's tree (`resting_leaf`) selling
@@ -100,15 +130,17 @@ export function lotFit(q, want) {
 // whole base unit) bounds a limit order; a market order is bounded MARKET_BOUND_PCT
 // past the best order. Returns { side, receive, pay, slices, got, gave, baseDone,
 // baseLeft } where each slice is { offerId, offer, filled (receive atoms), pays (pay
-// atoms) }.
-export function planTrade({ offers, base, quote, side, amount, price = null, basePrecision, nowSec }) {
+// atoms) }, and for an interactive maker's offer (taken only with `interactive`) also
+// { take (base atoms, the maker's terms), interactive: true }.
+export function planTrade({ offers, base, quote, side, amount, price = null, basePrecision, nowSec, interactive = false }) {
   if (side !== 'buy' && side !== 'sell') throw new Error("side must be 'buy' or 'sell'");
   const want = big(amount);
   if (want <= 0n) throw new Error('the amount must be more than zero');
   const unit = 10n ** BigInt(basePrecision);
   const receive = side === 'buy' ? base : quote;
   const pay = side === 'buy' ? quote : base;
-  const quotes = (offers || []).map((o) => covenantQuote(o, receive, pay, nowSec)).filter(Boolean);
+  const quotes = (offers || []).map((o) => covenantQuote(o, receive, pay, nowSec)
+    || (interactive ? interactiveQuote(o, receive, pay, nowSec) : null)).filter(Boolean);
   // Cheapest first: the fewest atoms paid for each atom received. The same order is
   // best for both sides, since a sell pays the base and receives the quote.
   quotes.sort((a, b) => (rateLess(a, b) ? -1 : rateLess(b, a) ? 1 : 0));
@@ -133,6 +165,15 @@ export function planTrade({ offers, base, quote, side, amount, price = null, bas
       filled = lotFit(q, (left * q.den) / q.num);
     }
     if (filled <= 0n) continue;
+    if (q.interactive) {
+      const x = interactiveSlice(q, filled);
+      if (x.filled <= 0n || x.pays <= 0n) continue;
+      if (side === 'sell' && x.pays > left) continue;
+      slices.push({ offerId: q.offerId, offer: q.offer, filled: x.filled, pays: x.pays, take: x.take, interactive: true });
+      got += x.filled; gave += x.pays;
+      left -= side === 'buy' ? x.filled : x.pays;
+      continue;
+    }
     const pays = ceilPrice(filled, q.num, q.den);
     slices.push({ offerId: q.offerId, offer: q.offer, filled, pays });
     got += filled; gave += pays;

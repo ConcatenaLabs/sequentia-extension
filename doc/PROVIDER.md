@@ -1010,8 +1010,14 @@ nothing else to trade. The wallet takes only orders it can settle in one step:
   a decimal string; the limit order trades at that price or better and rests the
   rest exactly at it.
 
-A market order goes no further than 5% past the best order on the book and takes at
-most six orders; what the book does not reach near the best price is not traded, and
+Between two Sequentia assets the orders taken are the on-chain book's covenant orders
+and its interactive makers' offers, cheapest first, each in one transaction that pays
+its maker and the wallet together: a covenant order with no maker online, an
+interactive maker's with the maker co-signing over the relay, the wallet checking that
+transaction against its own half before signing. Either way the wallet receives at its
+usual address, in the clear; a balance held at a blinded address is first moved to it
+in one transfer, as part of the trade. A market order goes no further than 5% past the
+best order on the book and takes at most six orders; what the book does not reach near the best price is not traded, and
 the approval says so. The approval lists what is given, what is got (now, and later
 as others fill a resting order), the fees, and the resting order with when it can be
 taken back, each amount also in the reference currency. Returns

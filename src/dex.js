@@ -140,51 +140,62 @@ export async function prepareOnchainFill({ mount = 'chain', base, quote, offerId
   };
 
   const exec = async () => {
-    seqob.setSeqobBase(MOUNTS[mount]);
-    const wollet = engine.getWollet(), signer = engine.getSigner(), client = engine.getClient();
-    // Transparent by default: on the on-chain book the swap receives at the
-    // usual (unconfidential) address and every output of this wallet's half is
-    // explicit; the confidential book receives at the blinded form, which the
-    // maker blinds to.
-    const receiveAddr = engine.rawAddress(confidential);
-    let sreq = null;
-    const buildRequest = async () => engine.withWollet(async () => {
-      sreq = wollet.seqdexSwapRequest(
-        new AssetId(q.payAsset), q.payAtoms,
-        new AssetId(q.recvAsset), q.recvAtoms,
-        receiveAddr,
-        new AssetId(fee.feeAsset), fee.feeAmount, fee.feeRate,
-      );
-      return sreq.toJson();
-    });
-    const finalizeAccept = async (acc) => engine.withWollet(async () => {
-      const pset = new Pset(acc.transaction);
-      // Nothing is signed until the maker's answer is the swap this wallet
-      // proposed: its inputs untouched, no other coin spent, every output of
-      // its half paying the amounts it asked for, in the form it asked for.
-      // A refusal names what the maker changed; nothing has been signed.
-      if (!sreq) throw new Error('no swap request to check the maker\'s answer against');
-      wollet.seqdexVerifyAccept(sreq, pset);
-      pset.addDetails(wollet);
-      const signed = signer.sign(pset);
-      const strippedB64 = stripBip32(signed.toString());
-      const finalized = wollet.finalize(new Pset(strippedB64));
-      const txid = await client.broadcast(finalized);
-      try { wollet.applyTransaction(finalized); } catch {}
-      engine.noteOwn(finalized);
-      return { transaction: strippedB64, txid: txid.toString() };
-    });
-    // lift resolves to the settled txid.
-    const txid = await seqob.lift(o, q.take, fee.feeAsset, { buildRequest, finalizeAccept, onStatus: say });
+    const txid = await liftSameChain(o, q, fee, { mount, confidential });
     engine.sync().catch(() => {});
     return {
-      txid: (typeof txid === 'string' ? txid : txid && txid.txid) || null,
+      txid,
       paid: { asset: q.payAsset, atoms: q.payAtoms.toString() },
       received: { asset: q.recvAsset, atoms: q.recvAtoms.toString() },
     };
   };
 
   return { display, exec };
+}
+
+// Lift an interactive maker's same-chain offer `o`: q = { take (base atoms),
+// payAsset, payAtoms, recvAsset, recvAtoms } in the daemon's proRata, fee = {
+// feeAsset, feeAmount, feeRate }. The maker co-signs over the relay courier; the
+// wallet checks the maker's answer against its own half, signs and broadcasts.
+// On the on-chain book it receives at the usual address in the clear, spending
+// explicit coins; on the confidential book, blinded. Resolves to the txid.
+export async function liftSameChain(o, q, fee, { mount = 'chain', confidential = false } = {}) {
+  seqob.setSeqobBase(MOUNTS[mount]);
+  const wollet = engine.getWollet(), signer = engine.getSigner(), client = engine.getClient();
+  // Transparent by default: on the on-chain book the swap receives at the
+  // usual (unconfidential) address and every output of this wallet's half is
+  // explicit; the confidential book receives at the blinded form, which the
+  // maker blinds to.
+  const receiveAddr = engine.rawAddress(confidential);
+  let sreq = null;
+  const buildRequest = async () => engine.withWollet(async () => {
+    sreq = wollet.seqdexSwapRequest(
+      new AssetId(q.payAsset), q.payAtoms,
+      new AssetId(q.recvAsset), q.recvAtoms,
+      receiveAddr,
+      new AssetId(fee.feeAsset), fee.feeAmount, fee.feeRate,
+    );
+    return sreq.toJson();
+  });
+  const finalizeAccept = async (acc) => engine.withWollet(async () => {
+    const pset = new Pset(acc.transaction);
+    // Nothing is signed until the maker's answer is the swap this wallet
+    // proposed: its inputs untouched, no other coin spent, every output of
+    // its half paying the amounts it asked for, in the form it asked for.
+    // A refusal names what the maker changed; nothing has been signed.
+    if (!sreq) throw new Error('no swap request to check the maker\'s answer against');
+    wollet.seqdexVerifyAccept(sreq, pset);
+    pset.addDetails(wollet);
+    const signed = signer.sign(pset);
+    const strippedB64 = stripBip32(signed.toString());
+    const finalized = wollet.finalize(new Pset(strippedB64));
+    const txid = await client.broadcast(finalized);
+    try { wollet.applyTransaction(finalized); } catch {}
+    engine.noteOwn(finalized);
+    return { transaction: strippedB64, txid: txid.toString() };
+  });
+  // lift resolves to the settled txid.
+  const txid = await seqob.lift(o, q.take, fee.feeAsset, { buildRequest, finalizeAccept, onStatus: say });
+  return (typeof txid === 'string' ? txid : txid && txid.txid) || null;
 }
 
 // What of `asset` this wallet holds in the clear (explicit coins).
