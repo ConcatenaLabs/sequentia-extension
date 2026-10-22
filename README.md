@@ -97,6 +97,15 @@ confidential `tsqb1…` addresses are an explicit opt-in).
   coin stays frozen on the chain until the issuer lifts the freeze. The operator
   serves no take, resting order or Lightning payment in such an asset, so a market
   of one is never filled from the operator's tree.
+- **Issuer-operated assets** — the operator may serve an asset issuer-operated:
+  the issuer mints each round's float through the asset's mint limiter, and every
+  batch's sweep can only burn. The library checks each new leaf against that
+  profile by itself. Developer mode shows each leaf's batch profile under Leaves
+  and their dates (`issuer-operated` or `open`) and, for each asset the operator
+  serves issuer-operated, **Supply**: the operator's report of what it minted,
+  burned and holds under burn-only sweeps, each mint and burn read again from the
+  wallet's own node. It checks the transactions the report lists; it does not
+  prove the list complete. User mode shows none of it.
 - **The operator's bond** — the operator posts an equivocation bond: two
   different messages its key signs under one coin's salt prove it signed twice,
   and burn the bond whole. At the pace of the wallet's own upkeep (below), in

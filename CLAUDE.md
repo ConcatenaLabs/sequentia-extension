@@ -87,6 +87,10 @@ wasm. Read this before changing anything.
   the operator key sign twice. The gate on a receive or a swap is the library's;
   user mode's words for its refusal are `BOND_WORDS` (`src/leaf-profiles.js`),
   shared with the web wallet and Ambra.
+- **Issuer-operated assets are developer mode's only**: each leaf's `batch_profile`
+  under Leaves and their dates, and Supply (the library's `supply`, every mint and
+  burn the operator lists read again on the wallet's node) for each asset the
+  operator's `info` marks `issuer`.
 - **BigInt never crosses the message boundary** — all RPC amounts are strings.
 - **No bundler, no framework, plain ES modules** (matches the web wallet).
   Content scripts: inpage.js runs in the MAIN world, content.js relays.

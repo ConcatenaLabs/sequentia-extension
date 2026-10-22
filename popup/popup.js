@@ -3,7 +3,7 @@
 import { lnInvoiceKind } from '../src/util.js';
 import { userSplit, developerSplit } from '../src/balance-view.js';
 import { plannedCoins } from '../src/leaf-schedule.js';
-import { frozenSentence, plainRefusal } from '../src/leaf-profiles.js';
+import { frozenSentence, plainRefusal, batchLine } from '../src/leaf-profiles.js';
 
 const $ = (id) => document.getElementById(id);
 const el = (t, c, txt) => { const e = document.createElement(t); if (c) e.className = c; if (txt != null) e.textContent = txt; return e; };
@@ -589,6 +589,7 @@ async function renderLeaves() {
   }
   renderCare(st);
   renderBond(st);
+  renderSupply(st);
   renderCoins(st);
   const rel = st.status && st.status.releasing;
   $('leafReleasing').classList.toggle('hide', !rel);
@@ -675,6 +676,35 @@ function renderBond(st) {
 }
 $('btnLeafWatchBond').onclick = () => leafAct('Watching the bond…', () => rpc('leaves.watchBond'));
 
+// Developer mode: each asset the operator serves issuer-operated, with its supply report,
+// every mint and burn the operator lists read again on the wallet's own node.
+const SUPPLY = {};
+function renderSupply(st) {
+  const assets = st.issuerAssets || [];
+  $('leafSupply').classList.toggle('hide', !assets.length);
+  const box = $('leafSupplyRows'); box.innerHTML = '';
+  for (const a of assets) {
+    const row = el('div', 'leaf-supply'); row.dataset.asset = a;
+    row.appendChild(el('div', 'mono', short(a)));
+    const r = SUPPLY[a];
+    if (r && r.error) row.appendChild(el('div', 'status err', r.error));
+    else if (r) {
+      row.dataset.checked = String(!!r.checked_on_the_node);
+      for (const k of ['minted', 'burned', 'in_batches']) if (r[k] != null && typeof r[k] !== 'object') row.appendChild(kvRow(k.replace('_', ' '), r[k]));
+      row.appendChild(kvRow('Checked on this node', r.checked_on_the_node ? 'yes: every listed mint and burn agrees' : 'no'));
+      row.appendChild(el('div', 'sub', (r.mints || []).length + ' mint(s), ' + (r.burns || []).length + ' burn(s) listed'));
+    }
+    const b = el('button', 'ghost tiny', 'Supply'); b.dataset.action = 'supply';
+    b.onclick = async () => {
+      const v = await leafAct('Asking for the supply…', () => rpc('leaves.supply', { asset: a }));
+      SUPPLY[a] = v ? v.supply : { error: $('leafStatus').textContent || 'refused' };
+      renderSupply(st);
+    };
+    row.appendChild(b);
+    box.appendChild(row);
+  }
+}
+
 // Developer mode's leaves, each with its state and dates, a planned one marked: a planned
 // leaf is paid out of round only once released into the next round.
 const HELD = new Set(['live', 'pending', 'offered', 'sending', 'given', 'forfeited', 'exiting']);
@@ -690,6 +720,8 @@ function renderCoins(st) {
     if (c.exit_by != null) mid.appendChild(el('div', 'sub', 'refresh from ' + isoOf(c.refresh_from) + ' · exit by ' + isoOf(c.exit_by)));
     const plan = planned.get(c.leaf_id);
     if (plan) { d.dataset.planned = plan.plan_id; mid.appendChild(el('div', 'sub', 'Planned: plan ' + short(plan.plan_id) + ', ' + plan.state + '; paid out of round only once released into the next round')); }
+    const batch = batchLine(c.batch_profile);
+    if (batch) { d.dataset.batchProfile = c.batch_profile; mid.appendChild(el('div', 'sub', 'Batch: ' + batch)); }
     // A supervised asset's leaf: where it lands, and whether its issuer has frozen it.
     if (c.landing) { d.dataset.landing = c.landing; mid.appendChild(el('div', 'sub', 'Lands at ' + c.landing + " (this wallet's landing key: a supervised asset's leaf leaves the tree only there)")); }
     if (c.frozen) {

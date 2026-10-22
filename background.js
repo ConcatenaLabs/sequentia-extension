@@ -23,6 +23,7 @@ import { btc as btcLib } from './vendor/btc.js';
 import * as perms from './src/permissions.js';
 import * as router from './src/provider-router.js';
 import * as leaves from './src/leaves.js';
+import { issuerAssets } from './src/leaf-profiles.js';
 import * as leafTrade from './src/leaf-trade.js';
 import * as leafResting from './src/leaf-resting.js';
 import * as market from './src/market.js';
@@ -549,6 +550,8 @@ const uiMethods = {
       out.schedule = await leaves.run('schedule');
       out.plans = ((await leaves.run('plans')) || {}).plans || [];
       out.coins = (await leaves.run('coins')) || [];
+      // The assets the operator serves issuer-operated, each with its Supply in developer mode.
+      out.issuerAssets = issuerAssets(await leaves.run('info'));
     } catch (e) { out.error = String((e && e.message) ?? e); }
     return out;
   },
@@ -560,6 +563,9 @@ const uiMethods = {
   // that round is final.
   'leaves.care': async () => ({ care: await leaves.careNow() }),
   'leaves.planCancel': async ({ plan }) => ({ result: await leaves.run('plan_cancel', { plan }) }),
+  // The operator's report of an issuer-operated asset's supply, each mint and burn it
+  // lists read again on the wallet's own node (the library's `supply`).
+  'leaves.supply': async ({ asset }) => ({ supply: await leaves.run('supply', { asset: String(asset) }) }),
   // The operator's bond, read and watched now (the host does both at care's pace).
   'leaves.watchBond': async () => await leaves.watchBondNow(),
   'leaves.release': async ({ leaf }) => ({ result: await leaves.run('plan_release', { leaves: [String(leaf)] }) }),

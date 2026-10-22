@@ -2,7 +2,7 @@
 // rules and the words are the web wallet's, shared across the three wallets.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { supervisedAssets, frozenAtoms, frozenSentence, plainRefusal, frozenRefusal, FROZEN_REFUSAL, bondRefusal, BOND_WORDS } from '../src/leaf-profiles.js';
+import { supervisedAssets, frozenAtoms, frozenSentence, plainRefusal, frozenRefusal, FROZEN_REFUSAL, bondRefusal, BOND_WORDS, issuerAssets, batchLine } from '../src/leaf-profiles.js';
 import { developerWordsIn } from '../src/balance-view.js';
 
 const X = 'aa'.repeat(32);
@@ -60,4 +60,13 @@ test('a refusal of the bond reads plainly in user mode, in the words the three w
   assert.equal(bondRefusal(new Error('refused: the bonded stake')), false, 'a whole word only');
   assert.deepEqual(developerWordsIn(BOND_WORDS.refused), []);
   for (const w of ['leaf', 'operator', 'round', 'tree', 'bond']) assert.ok(!new RegExp(`\\b${w}\\b`, 'i').test(BOND_WORDS.refused), w);
+});
+
+test('issuer-operated assets are the ones the operator serves with an issuer entry, and a leaf says its batch', () => {
+  const info = { server_info: { assets: [{ asset: X, issuer: { limiter: 'l' } }, { asset: Y }] } };
+  assert.deepEqual(issuerAssets(info), [X]);
+  assert.deepEqual(issuerAssets({}), []);
+  assert.equal(batchLine('issuer-operated'), 'issuer-operated: its sweep can only burn');
+  assert.equal(batchLine('open'), 'open: its sweep pays the operator');
+  assert.equal(batchLine(null), null);
 });
