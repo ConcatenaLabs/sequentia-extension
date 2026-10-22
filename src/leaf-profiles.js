@@ -18,6 +18,18 @@ export function supervisedAssets(info) {
   return servedAssets(info).filter((a) => a && a.supervised && typeof a.asset === 'string').map((a) => a.asset);
 }
 
+// The assets the operator serves issuer-operated (`info`'s `issuer` entry): their batches'
+// sweeps can only burn, and the issuer mints each round's float through a mint limiter.
+export function issuerAssets(info) {
+  return servedAssets(info).filter((a) => a && a.issuer && typeof a.asset === 'string').map((a) => a.asset);
+}
+
+// A leaf's batch profile, for developer mode: what its batch's sweep may do.
+export function batchLine(profile) {
+  if (!profile) return null;
+  return profile === 'issuer-operated' ? 'issuer-operated: its sweep can only burn' : profile + ': its sweep pays the operator';
+}
+
 // What of each asset its issuer has frozen for this wallet: every held leaf whose landing
 // the node shows frozen (or the asset paused), and every on-chain coin the leaf wallet
 // counts frozen (a leaf taken home by its landing stays frozen there).
