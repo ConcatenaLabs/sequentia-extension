@@ -428,18 +428,29 @@ the leaf wallet opens, and after a sync at most every ten minutes, it runs the
 library's `care`. That takes up every open claim of a distribution named for one
 of the wallet's receive keys (the main wallet's addresses handed out so far, and
 20 more), so the asset counts in its figure with no click; cancels each refresh
-plan whose coin has moved; signs a refresh plan for each coin whose refresh step
-could run within ten days, so a wallet closed across that coin's expiry keeps
-it; and sends a coin no round made (a board, a coin received or claimed out of
-round) into a round's refresh, so that a later run can plan the new one. A
-plan's fee is taken from the coin in the coin's own asset, never another; a
-coin the operator will not plan stays unplanned and is refreshed by `sync`
-while the wallet is open. A coin younger than that stays free to pay; a wallet
-closed within a coin's first two weeks or so and kept closed through its step
-window can lose the coin to the operator's sweep, as any absent holder can.
-A coin a plan names pays nothing until it is refreshed in a round: the popup's
-developer mode lists the plans with Cancel and Release (cancel, then refresh in
-the next round), and none of this shows in user mode.
+plan whose coin has moved; signs a refresh plan for every coin of a round at the
+first run after the coin is made, so a wallet closed across that coin's expiry
+keeps it, whenever it closes; and sends a coin no round made (a board, a coin
+received or claimed out of round) into a round's refresh once that refresh could
+run within ten days (it costs a fee, so it waits), so that a later run can plan
+the new one. A plan's fee is taken from the coin in the coin's own asset, never
+another; a coin the operator will not plan stays unplanned and is refreshed by
+`sync` while the wallet is open. The popup's developer mode lists the plans with
+Cancel and Release, and marks each planned coin; none of this shows in user mode.
+
+A planned coin carries refund halves the wallet signed, so no wallet pays it out
+of round. A method below that pays, takes, swaps, places or fills from leaves,
+and that the unplanned coins cannot cover while planned ones can, is made
+through the next round with no further window: the library refuses it naming
+the planned coins whose release covers it, the wallet gives those up in the next
+round for leaves of its own that no plan names (`plan_release`), syncs every
+15 seconds until that round is final and the new leaves are held, and asks the
+same command again (at most three releases, since a released coin comes back
+less its refresh fee). The method's answer then comes one round later. A
+release costs the refresh fee the asset's schedule asks then (none in the
+coin's free window). When the round has not freed the coins within three hours
+the method refuses with `refused: the next round did not free the coins this
+payment needs in time; nothing was paid, and the payment can be asked again`.
 
 The wallet runs the operator's wallet library, compiled to wasm, in a worker of
 its offscreen document (`leaves/`). Every script, record, check, fee and

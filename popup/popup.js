@@ -2,6 +2,7 @@
 // renders state and relays user intents over the ui RPC scope.
 import { lnInvoiceKind } from '../src/util.js';
 import { userSplit, developerSplit } from '../src/balance-view.js';
+import { plannedCoins } from '../src/leaf-schedule.js';
 
 const $ = (id) => document.getElementById(id);
 const el = (t, c, txt) => { const e = document.createElement(t); if (c) e.className = c; if (txt != null) e.textContent = txt; return e; };
@@ -281,7 +282,7 @@ chrome.runtime.onMessage.addListener((msg) => {
     if (msg.event === 'leaves-changed' && OV) rpc('overview', { withLn: false }).then((v) => { OV = v; renderOverview(); }).catch(() => {});
   }
   // A leaf sync finished (on the schedule, or asked): show what it changed.
-  if (msg && msg.scope === 'leaf-event' && (msg.event === 'leafSynced' || msg.event === 'leafCared') && !$('leafCard').classList.contains('hide')) {
+  if (msg && msg.scope === 'leaf-event' && (msg.event === 'leafSynced' || msg.event === 'leafCared' || msg.event === 'leafReleasing') && !$('leafCard').classList.contains('hide')) {
     renderLeaves().catch(() => {});
   }
 });
@@ -581,6 +582,11 @@ async function renderLeaves() {
     box.appendChild(row);
   }
   renderCare(st);
+  renderCoins(st);
+  const rel = st.status && st.status.releasing;
+  $('leafReleasing').classList.toggle('hide', !rel);
+  $('leafReleasing').textContent = rel ? 'Paying through the next round: ' + rel.command + ' needs more than the unplanned leaves hold, so '
+    + rel.coins.length + ' planned leaf(s) (' + rel.coins.map(short).join(', ') + ') are given up in the next round for leaves no plan names; it is asked again once that round is final.' : '';
   const sc = st.schedule || {};
   const last = st.status && st.status.lastSync;
   $('leafSchedule').textContent = (sc.next_sync_at ? 'Next sync the schedule asks for: ' + new Date(sc.next_sync_at * 1000).toISOString() : 'Nothing held off the chain, nothing awaited.')
@@ -622,7 +628,7 @@ function renderCare(st) {
       const acts = el('div', 'bal-acts');
       const c = el('button', 'ghost tiny', 'Cancel'); c.onclick = () => leafAct('Cancelling the plan…', () => rpc('leaves.planCancel', { plan: p.plan_id }));
       const current = ((p.steps || []).filter((x) => x.leaf_id).map((x) => x.leaf_id).pop()) || p.coin;
-      const r = el('button', 'ghost tiny', 'Release'); r.onclick = () => releasePlan(p.plan_id, current);
+      const r = el('button', 'ghost tiny', 'Release'); r.onclick = () => leafAct('Releasing the leaf into the next round…', () => rpc('leaves.release', { leaf: current }));
       acts.appendChild(c); acts.appendChild(r); row.appendChild(acts);
     }
     list.appendChild(row);
@@ -633,18 +639,24 @@ async function leafAct(what, fn) {
   try { const v = await fn(); $('leafStatus').textContent = ''; await renderLeaves(); return v; }
   catch (e) { $('leafStatus').className = 'status err'; $('leafStatus').textContent = e.message; await renderLeaves().catch(() => {}); return null; }
 }
-// Release: the plan cancelled and its leaf's refresh in a round quoted; confirmed here,
-// the leaf joins the next round on exactly the fees shown, and comes out free to pay.
-async function releasePlan(plan, leaf) {
-  const r = await leafAct('Cancelling the plan and quoting the refresh…', () => rpc('leaves.releaseQuote', { plan, leaf }));
-  const box = $('leafRelease'); box.innerHTML = '';
-  if (!r) return;
-  const coins = (r.quote && r.quote.coins) || [];
-  box.appendChild(el('div', 'sub', 'Plan cancelled. Refresh of leaf ' + short(leaf) + ' in the next round: '
-    + coins.map((c) => short(c.leaf_id || c.coin || '') + ' fee ' + (c.fee ?? '?')).join(', ')));
-  const ok = el('button', 'primary tiny', 'Refresh on these fees'); ok.id = 'btnLeafReleaseGo';
-  ok.onclick = async () => { box.innerHTML = ''; await leafAct('Joining the round…', () => rpc('leaves.participate', { leaves: r.leaves, shown: coins })); };
-  box.appendChild(ok);
+// Developer mode's leaves, each with its state and dates, a planned one marked: a planned
+// leaf is paid out of round only once released into the next round.
+const HELD = new Set(['live', 'pending', 'offered', 'sending', 'given', 'forfeited', 'exiting']);
+function renderCoins(st) {
+  const box = $('leafCoins'); box.innerHTML = '';
+  const planned = plannedCoins(st.plans);
+  const held = (st.coins || []).filter((c) => HELD.has(c.state));
+  if (!held.length) box.appendChild(el('div', 'sub', 'No leaf held.'));
+  for (const c of held) {
+    const d = el('div', 'kv leaf-coin'); d.dataset.leaf = c.leaf_id; d.dataset.state = c.state; d.dataset.asset = c.asset;
+    const mid = el('div', 'grow');
+    mid.appendChild(el('div', 'mono', short(c.leaf_id) + ' · ' + (c.standing || c.state) + ' · ' + c.kind + ' · ' + c.value + ' of ' + short(c.asset)));
+    if (c.exit_by != null) mid.appendChild(el('div', 'sub', 'refresh from ' + isoOf(c.refresh_from) + ' · exit by ' + isoOf(c.exit_by)));
+    const plan = planned.get(c.leaf_id);
+    if (plan) { d.dataset.planned = plan.plan_id; mid.appendChild(el('div', 'sub', 'Planned: plan ' + short(plan.plan_id) + ', ' + plan.state + '; paid out of round only once released into the next round')); }
+    d.appendChild(mid);
+    box.appendChild(d);
+  }
 }
 $('btnLeafCare').onclick = () => leafAct('Running…', () => rpc('leaves.care'));
 

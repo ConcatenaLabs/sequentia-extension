@@ -7,10 +7,11 @@
 //     key of its receive address (m/84'/1'/0'/0/i): the leaf host takes the claim up with
 //     no click, and the asset appears in its one figure in the popup's Balance tab;
 //  2. the claimed coin, a coin of no round, sent into a round's refresh by itself once
-//     near its window, and the round's new coin, once its refresh could run within ten
-//     days, planned by itself; developer mode lists the plan, with Cancel and Release;
-//     Release cancels the plan and joins the leaf to the next round on the fees it shows;
-//     the round's new leaf is planned again once within reach, and Cancel cancels that;
+//     its refresh could run within ten days, and the round's new coin planned by itself
+//     at the next care (every leaf of a round is planned); developer mode lists the plan,
+//     with Cancel and Release, and marks the planned leaf; Release gives the leaf up in
+//     the next round (`plan_release`); the round's new leaf is planned again, and Cancel
+//     cancels that;
 //  3. the popup's user-mode screens (Balance, Send, Receive, Stake) free of the
 //     developer words, and the split one tap away in plain words.
 //
@@ -203,7 +204,7 @@ async function main() {
     check('user mode: Balance, Send, Receive, Stake and the header carry no developer word', words1.length === 0, words1);
     await shot(pop2, 'balance-user-mode');
 
-    // --- 2. Planned by itself once the leaf's refresh could run within ten days ---
+    // --- 2. Sent into a round once its refresh could run within ten days; then planned ---
     await setMode(pop2, 'developer');
     await pop2.waitFor("!document.querySelector('#leafJoined').classList.contains('hide')", 60000);
     const lastCare = async () => (await ui(pop2, 'leaves.state')).result;
@@ -240,9 +241,7 @@ async function main() {
     }
     check('the new leaf of the round is live, a horizon later', fresh.length >= 1, fresh.map((c) => [c.leaf_id, c.state, c.exit_by]));
     const expiry2 = Math.max(...fresh.map(expiryOf));
-    const t0 = (await ctl('/advance', { seconds: 1 })).median_time;
-    await ctl('/advance', { seconds: Math.max(1, expiry2 - 5 * DAY - 10 * DAY + DAY - t0) });
-    await ctl('/produce');
+    // Every leaf of a round is planned at the next care: no time moves for it.
     await pop2.click('[data-tab=settings]');
     let plans = [];
     for (let i = 0; i < 90; i++) {
@@ -252,25 +251,22 @@ async function main() {
       await pop2.eval("document.querySelector('[data-tab=settings]').click()");
     }
     const open = plans.find((p) => p.state === 'open');
-    check('developer mode: the leaf planned by itself, with Cancel and Release', !!open && /Cancel/.test(open.text) && /Release/.test(open.text), plans);
+    check('developer mode: the round\'s leaf planned by itself at once, with Cancel and Release', !!open && /Cancel/.test(open.text) && /Release/.test(open.text), plans);
+    const marked = await pop2.eval("[...document.querySelectorAll('#leafCoins .leaf-coin')].filter(d=>d.dataset.planned).map(d=>d.dataset.leaf)");
+    check('developer mode: the planned leaf is marked under Leaves and their dates', marked.length >= 1, marked);
     await pop2.eval("document.querySelector('#leafCare').scrollIntoView()");
     await shot(pop2, 'plan-developer-mode');
-    // Release, from the card: the plan cancelled, its leaf's refresh quoted, and the leaf
-    // joined to the next round on the fees shown. A leaf a plan named is refreshed in a
-    // round before it pays or is planned again.
+    // Release, from the card: the plan's leaf given up in the next round for a leaf no
+    // plan names (plan_release); the plan ends once that round is final.
     const planOf = (id) => `[...document.querySelectorAll('#leafPlans .leaf-plan')].find(p=>p.dataset.plan===${JSON.stringify(id)})`;
     let expiry3 = null;
     if (open) {
       await pop2.eval(`${planOf(open.plan)}.querySelectorAll('button')[1].click()`);
-      await pop2.waitFor("!!document.querySelector('#btnLeafReleaseGo') || /error|refused|failed/i.test(document.querySelector('#leafStatus').innerText)", 60000);
-      const quote = await pop2.text('#leafRelease');
-      check('Release cancels the plan and shows the refresh\'s fees', /Plan cancelled/.test(quote) && /fee/.test(quote), { quote, status: await pop2.text('#leafStatus') });
-      await shot(pop2, 'release-quote');
-      await pop2.click('#btnLeafReleaseGo');
-      await pop2.waitFor("!/Joining/.test(document.querySelector('#leafStatus').innerText)", 60000);
-      check('the released leaf asks its refresh with no refusal', !(await pop2.text('#leafStatus')), await pop2.text('#leafStatus'));
+      await pop2.waitFor("!/Releasing/.test(document.querySelector('#leafStatus').innerText)", 60000);
+      check('Release gives the planned leaf up in the next round with no refusal', !(await pop2.text('#leafStatus')), await pop2.text('#leafStatus'));
+      await shot(pop2, 'release-asked');
       const rr2 = await ctl('/round');
-      check('the operator builds the round that refreshes it', !!rr2.round, rr2);
+      check('the operator builds the round that releases it', !!rr2.round, rr2);
       let fresh2 = [];
       for (let i = 0; i < 90; i++) {
         ls = await lastCare();
@@ -281,10 +277,10 @@ async function main() {
       check('the released leaf is live again in a new round, a horizon later', fresh2.length >= 1, fresh2.map((c) => [c.leaf_id, c.state, c.exit_by]));
       expiry3 = fresh2.length ? Math.max(...fresh2.map(expiryOf)) : null;
     }
-    // Planned again once within reach, and cancelled from the card this time.
+    // Planned again by care once the day the library leaves a released leaf free to pay
+    // has passed (RELEASE_HOLD), and cancelled from the card this time.
     if (expiry3) {
-      const t3 = (await ctl('/advance', { seconds: 1 })).median_time;
-      await ctl('/advance', { seconds: Math.max(1, expiry3 - 5 * DAY - 10 * DAY + DAY - t3) });
+      await ctl('/advance', { seconds: DAY + 600 });
       await ctl('/produce');
       let again = null;
       for (let i = 0; i < 90 && !again; i++) {

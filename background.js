@@ -542,22 +542,19 @@ const uiMethods = {
       out.balance = await leaves.run('balance');
       out.schedule = await leaves.run('schedule');
       out.plans = ((await leaves.run('plans')) || {}).plans || [];
+      out.coins = (await leaves.run('coins')) || [];
     } catch (e) { out.error = String((e && e.message) ?? e); }
     return out;
   },
   'leaves.join': async (cfg) => ({ info: await leaves.join(cfg || {}) }),
   'leaves.sync': async () => ({ result: await leaves.syncNow() }),
   // What the wallet does by itself, shown and steered in developer mode: `care` now, a
-  // plan cancelled, and Release (the plan cancelled, then its coin's refresh in a round
-  // quoted and, once the quote is confirmed, joined).
+  // plan cancelled, and Release: the plan's current coin given up in the next round for a
+  // leaf of the wallet's own that no plan names (`plan_release`), which ends the plan once
+  // that round is final.
   'leaves.care': async () => ({ care: await leaves.careNow() }),
   'leaves.planCancel': async ({ plan }) => ({ result: await leaves.run('plan_cancel', { plan }) }),
-  'leaves.releaseQuote': async ({ plan, leaf }) => {
-    const cancelled = await leaves.run('plan_cancel', { plan });
-    const quote = await leaves.run('quote', { leaves: [leaf] });
-    return { cancelled, quote, leaves: [leaf] };
-  },
-  'leaves.participate': async ({ leaves: ids, shown }) => ({ result: await leaves.run('participate', { leaves: ids, shown }) }),
+  'leaves.release': async ({ leaf }) => ({ result: await leaves.run('plan_release', { leaves: [String(leaf)] }) }),
   'getSettings': async () => ((await stGet('local', 'ext.settings')) || {}),
   'setSettings': async (p) => {
     const s = (await stGet('local', 'ext.settings')) || {};

@@ -25,16 +25,25 @@
 // the wallet opens and after a sync or a tick of the schedule at most every ten minutes
 // (`careDue`): it takes up every open claim named for one of the wallet's receive keys
 // (`scan`: the kit wallet's next receive index and 20 more, which the service worker
-// keeps current), cancels each refresh plan whose coin has moved, plans each coin whose
-// refresh step could run within ten days, and asks a round's refresh for a coin no round
-// made. A claim taken up counts in the balance like any leaf. Each run is reported as
-// `leafCared` and kept for developer mode (`status`).
+// keeps current), cancels each refresh plan whose coin has moved, plans every coin of a
+// round (`plan_within`: PLAN_EVERY_ROUND_LEAF), and asks a round's refresh for a coin no
+// round made once that refresh could run within ten days. A claim taken up counts in the
+// balance like any leaf. Each run is reported as `leafCared` and kept for developer mode
+// (`status`).
+//
+// A planned coin is paid out of round by no wallet, so every command a person or a site
+// starts (`run` with `paying`) is asked through `payThrough`: a refusal of kind `planned`
+// gives the coins the library names up in the next round (`plan_release`), syncs every
+// 15 s until that round has freed them, and asks the same command again. The host carries
+// that wait itself, so it outlives the service worker; while it waits, `status` names what
+// is released (`releasing`) and `leafReleasing` is sent.
 //
 // Messages (scope 'leaf'), answered { ok, value } or { ok: false, error: { kind, message } }:
 //   'status'                                -> { open, lastSync, lastError, schedule }
 //   'start' { mnemonic, config?, nodePassword? } -> opens the wallet of that mnemonic
 //        (created against `config` when this browser holds none); answers { created, info? }
-//   'run'   { command, args }               -> the library's { result, start }
+//   'run'   { command, args, paying? }      -> the library's { result, start }; with
+//        `paying`, a command the planned coins cover is made through the next round
 //   'sync'                                  -> runs sync now (events as on the schedule)
 //   'watch' { takes, tickMs? }              -> the takes to sync for every tickMs while
 //        their forfeits wait on the wallet; each change of one is sent as `leafTake`
@@ -43,7 +52,7 @@
 //   'stop'                                  -> closes the wallet and stops the schedule
 // The mnemonic is handed to the worker and not kept here.
 
-import { inFlight, nextAskMs, freshRequestWaits, syncDecision, careDue, careSummary, CARE_EVERY_MS } from './src/leaf-schedule.js';
+import { inFlight, nextAskMs, freshRequestWaits, syncDecision, careDue, careSummary, careArgs, payThrough, CARE_EVERY_MS } from './src/leaf-schedule.js';
 
 const TICK_MS = 60_000;
 let worker = null;
@@ -51,10 +60,16 @@ let next = 1;
 const pending = new Map();
 let failed = null;
 const S = { open: false, fp: null, timer: null, heldFor: null, schedule: null, coins: [], participations: [], lastSync: null, lastError: null, tickMs: TICK_MS,
-  watch: new Set(), watchMs: 3000, seen: new Map(), scan: null, careAt: null, careMs: CARE_EVERY_MS, lastCare: null };
+  watch: new Set(), watchMs: 3000, seen: new Map(), scan: null, careAt: null, careMs: CARE_EVERY_MS, lastCare: null, releasing: null };
 
 function errorOf(e) {
-  if (e && typeof e === 'object' && e.message) return { kind: e.kind || 'error', message: e.message, code: e.code, status: e.status };
+  if (e && typeof e === 'object' && e.message) {
+    const out = { kind: e.kind || 'error', message: e.message, code: e.code, status: e.status };
+    // A payment the planned coins would cover: their asset, and which to give up.
+    if (e.asset) out.asset = e.asset;
+    if (Array.isArray(e.release)) out.release = e.release;
+    return out;
+  }
   return { kind: 'error', message: String(e) };
 }
 
@@ -153,10 +168,8 @@ async function sync(by) {
 async function careIfDue(force = false) {
   if (!S.open || (!force && !careDue(S.careAt, Date.now(), S.careMs))) return null;
   S.careAt = Date.now();
-  const args = {};
-  if (S.scan) args.scan = S.scan;
   try {
-    const v = (await call('run', { command: 'care', args })).result;
+    const v = (await call('run', { command: 'care', args: careArgs(S.scan) })).result;
     const sum = careSummary(v);
     S.lastCare = { at: Date.now(), value: v, summary: sum };
     console.info(`[leaves] care: ${sum.taken} claim(s) taken up, ${sum.planned} plan(s) signed, ${sum.cancelled} cancelled, ${sum.refreshing} sent to a round, ${sum.later} not yet near`);
@@ -234,6 +247,33 @@ async function tick() {
   plan(Math.max(wait, 1000));
 }
 
+// One command of the library. The node runs one UTXO-set scan at a time, and every wallet
+// sharing it scans: a read refused for that alone is asked again, a little later. A
+// command that signs or moves anything is never repeated here; the caller sees the refusal.
+async function runCommand(command, cargs) {
+  try {
+    for (let i = 0; ; i++) {
+      try { return await call('run', { command, args: cargs }); }
+      catch (e) {
+        if (!(READS.has(command) || command === 'sync') || i >= 8 || !SCAN_BUSY.test(String((e && e.message) || e))) throw e;
+        await new Promise((r) => setTimeout(r, 750 * (i + 1)));
+      }
+    }
+  } finally {
+    if (!READS.has(command)) {
+      await reportBalance();
+      // A command that moves coins (a take, an order, a board, a send) changes what
+      // the schedule follows: read the coins and participations again now, so the
+      // next tick syncs for what moves instead of waiting for the next sync to see it.
+      try {
+        S.coins = (await call('run', { command: 'coins' })).result || [];
+        S.participations = (await call('run', { command: 'participations' })).result || [];
+      } catch { /* the next sync reads them */ }
+      if (inFlight(S.coins, S.participations)) plan(1000);
+    }
+  }
+}
+
 // Starts run one at a time, so two at once open the wallet once.
 let starting = Promise.resolve();
 
@@ -276,7 +316,7 @@ async function handle(op, args) {
   }
   switch (op) {
     case 'status':
-      return { open: S.open, lastSync: S.lastSync, lastError: S.lastError, schedule: S.schedule, lastCare: S.lastCare, scan: S.scan };
+      return { open: S.open, lastSync: S.lastSync, lastError: S.lastError, schedule: S.schedule, lastCare: S.lastCare, scan: S.scan, releasing: S.releasing };
     case 'scan':
       if (args.scan) S.scan = Number(args.scan);
       return { scan: S.scan };
@@ -286,30 +326,18 @@ async function handle(op, args) {
     case 'run': {
       if (!S.open) throw { kind: 'refused', message: 'the leaf wallet is not open' };
       const command = String(args.command);
-      try {
-        // The node runs one UTXO-set scan at a time, and every wallet sharing it scans:
-        // a read refused for that alone is asked again, a little later. A command that
-        // signs or moves anything is never repeated here; the caller sees the refusal.
-        for (let i = 0; ; i++) {
-          try { return await call('run', { command, args: args.args || {} }); }
-          catch (e) {
-            if (!(READS.has(command) || command === 'sync') || i >= 8 || !SCAN_BUSY.test(String((e && e.message) || e))) throw e;
-            await new Promise((r) => setTimeout(r, 750 * (i + 1)));
-          }
-        }
-      } finally {
-        if (!READS.has(command)) {
-          await reportBalance();
-          // A command that moves coins (a take, an order, a board, a send) changes what
-          // the schedule follows: read the coins and participations again now, so the
-          // next tick syncs for what moves instead of waiting for the next sync to see it.
-          try {
-            S.coins = (await call('run', { command: 'coins' })).result || [];
-            S.participations = (await call('run', { command: 'participations' })).result || [];
-          } catch { /* the next sync reads them */ }
-          if (inFlight(S.coins, S.participations)) plan(1000);
-        }
-      }
+      if (!args.paying) return await runCommand(command, args.args || {});
+      return await payThrough(command, args.args || {}, {
+        run: runCommand,
+        sync: () => sync('release'),
+        coins: async () => (await call('run', { command: 'coins' })).result || [],
+        waiting: (st) => {
+          const first = !!st && !S.releasing;
+          S.releasing = st ? { command: st.command, coins: st.coins, asset: st.asset, since: st.since } : null;
+          if (first) console.info(`[leaves] ${st.command}: the unplanned leaves fall short; ${st.coins.length} planned leaf(s) given up in the next round, the payment asked again once it is final`);
+          emit('leafReleasing', S.releasing);
+        },
+      });
     }
     case 'sync':
       if (!S.open) throw { kind: 'refused', message: 'the leaf wallet is not open' };
