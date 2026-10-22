@@ -260,7 +260,8 @@ function encodeCovenantTerms(c){
 }
 
 // seqob.v1.SimplicityCovenantTerms (offer settlement oneof field 25): a funded
-// resting order under the Simplicity template seqdex/order (covenant-sim.js).
+// resting order under the Simplicity template seqdex/order (covenant-sim.js),
+// its version named by template_hash.
 // As for CovenantTerms, fields 1-2 (the outpoint) are outside the signed bytes:
 // the relay re-points the order at (txid, 2k+1) after a partial fill with its
 // maker offline. maker_script and refund_key are HEX in the offer object.
