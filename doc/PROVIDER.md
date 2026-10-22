@@ -460,6 +460,19 @@ validates anchors and keeps a transaction index); the wallet pins the
 operator's key and the node's chain when it joins, and refuses any server that
 names another.
 
+An asset whose issuer can freeze holdings by a rule of the chain (a supervised
+asset; the operator's `info` marks it `supervised`) is held, received and paid
+as leaves like any other, but only as landing-1 leaves: each one's way out of the
+tree pays one key of the wallet's own, its landing key (the phrase's first
+on-chain key), and the library makes and checks that by itself. When the issuer
+freezes that key or pauses the asset, the library and the operator refuse every
+payment of it (the operator's code `frozen`), a leaf of it leaves the tree only
+into the landing key (`exitLeaf`, or the wallet's own sync before the leaf's exit
+date), and the coin stays frozen on the chain there until the issuer lifts the
+freeze. The operator serves no take, no resting order, no distribution, no plan
+and no Lightning payment in such an asset. The popup says what is frozen under
+the asset's figure in either mode.
+
 Every asset is a leaf asset on equal terms; none is a default, so a send names
 its asset or pays a request that names one. Native BTC is not a leaf: a tree on
 Sequentia holds no BTC, which stays on its own chain and its own rail
@@ -963,7 +976,8 @@ nothing else to trade. The wallet takes only orders it can settle in one step:
   as well as every covenant order and holds the whole trade, the trade fills it in the
   tree from the wallet's leaves (as `fillRestingOrder` does, one transfer the operator
   co-signs, its fee in the asset given), and nothing goes on the chain. In user mode the
-  wallet does not take such an order.
+  wallet does not take such an order, nor in a market of a supervised asset (one its
+  issuer can freeze), in which the operator serves no resting order.
 - **Against BTC** (`quote: 'BTC'`): the quotes of makers who settle instantly over
   Lightning, through this wallet's own channels. Such a trade does not rest: a limit
   order against BTC trades what the book offers at the price or better, and the rest
