@@ -6,8 +6,12 @@
 // lift over the relay's courier (test/market/maker.mjs).
 //
 //   honest    the fill settles in a block: the taker gets exactly what the approval
-//             showed, the maker exactly what its offer asked, and each side's balance
-//             moves by that and its fee;
+//             showed, at its usual address and in the clear (every output paying the
+//             wallet explicit), the maker exactly what its offer asked, and each side's
+//             balance moves by that and its fee;
+//   blinded-coins  the wallet holds its USDX only at its blinded address: a fill that
+//             receives at the usual address spends coins in the clear only, so it is
+//             refused before any approval, saying why;
 //   shortpay  the maker pays one atom less than the request asked and keeps it in its
 //             own change; the wallet refuses before signing, in words, and nothing moves;
 //   blind     the maker blinds the output that pays the wallet to a key of the maker's
@@ -32,7 +36,7 @@ import { startInteractiveMaker } from '../market/maker.mjs';
 const { SEQUENTIAD, SEQOBD, OCEAND, SEQOB_MAKER, SEQOB_OCTL } = process.env;
 if (!SEQUENTIAD || !SEQOBD || !OCEAND || !SEQOB_MAKER || !SEQOB_OCTL) { console.log('SKIP: set SEQUENTIAD, SEQOBD, OCEAND, SEQOB_MAKER and SEQOB_OCTL'); process.exit(0); }
 const MODE = process.argv[2] || 'honest';
-if (!['honest', 'shortpay', 'blind'].includes(MODE)) throw new Error('mode: honest | shortpay | blind');
+if (!['honest', 'shortpay', 'blind', 'blinded-coins'].includes(MODE)) throw new Error('mode: honest | shortpay | blind | blinded-coins');
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const EVIDENCE = process.argv[3] || null;
 if (EVIDENCE) fs.mkdirSync(EVIDENCE, { recursive: true });
@@ -52,7 +56,7 @@ try {
   // The maker sells 1,000 of the Sequence token for 370 USDX: 0.37 USDX each.
   maker = await startInteractiveMaker({ chain, oceand: OCEAND, seqobMaker: SEQOB_MAKER, seqobOctl: SEQOB_OCTL, work: WORK,
     give: { asset: SEQ, atoms: 1000n * COIN }, want: { asset: Y, atoms: 370n * COIN }, fund: [{ asset: Y, amount: 1 }],
-    env: MODE === 'honest' ? {} : { SEQOB_HOSTILE: MODE }, log: say });
+    env: ['shortpay', 'blind'].includes(MODE) ? { SEQOB_HOSTILE: MODE } : {}, log: say });
   box = await startBox({ esplora: chain.shim.url, relay: chain.relay, rpc: chain.rpc, site: null,
     assets: { [SEQ]: ['tSEQ', 'Sequence (test)', 8], [Y]: ['USDX', 'Dollar (test)', 8] }, prices: { USDX: 1, tSEQ: 0.37, tBTC: 84200 } });
   register(pathToFileURL(path.join(ROOT, 'test/regtest/loader.mjs')).href, { data: { base: box.url, t4: 'http://127.0.0.1:9/', policyAsset: chain.policy, genesis: chain.genesis, recordsV2Height: null } });
@@ -75,7 +79,7 @@ try {
   await engine.ensureOpen();
   await Promise.allSettled([A.loadRegistry(), A.loadPrices(), A.fetchFeeRates()]);
   const takerAddr = engine.currentAddress(false).address;
-  await chain.fund(takerAddr, Y, 1000);
+  await chain.fund(MODE === 'blinded-coins' ? engine.currentAddress(true).address : takerAddr, Y, 1000);
   await chain.mine(1);
   await engine.sync();
   const bal = (h) => BigInt(engine.availableFor(h));
@@ -85,6 +89,18 @@ try {
   const offer = maker.offer;
   const take = 100n * COIN;   // 100 tSEQ of the 1,000 on offer
   const m0 = await maker.balance(), y0 = bal(Y), s0 = bal(SEQ);
+
+  if (MODE === 'blinded-coins') {
+    const before = opened.length;
+    await assert.rejects(ask('dexFillOnchain', { base: SEQ, quote: Y, offerId: offer.offer_id, takeBase: String(take) }), (e) => {
+      say('refused before any approval: ' + e.message);
+      assert.match(e.message, /receives at your usual address and so spends coins held in the clear, and 1000 of your USDX is held at a blinded address: 0 USDX in the clear of the 37\.00003 needed/);
+      return true;
+    });
+    assert.equal(opened.length, before, 'no approval opened');
+    assert.equal(bal(SEQ) - s0, 0n); assert.equal(y0 - bal(Y), 0n);
+    throw Object.assign(new Error('done'), { done: true });
+  }
 
   // The approval, read as the page reads it, approved.
   const before = opened.length;
@@ -107,6 +123,18 @@ try {
     assert.ok(tx.confirmations >= 1, 'the swap is in a block');
     say(`swap ${res.txid} (${tx.vsize} vB) in block ${tx.blockhash.slice(0, 16)}…, ${tx.confirmations} confirmation(s)`);
     for (const o of tx.vout) say(`  out ${o.n}: ${o.value != null ? o.value + ' ' + String(o.asset).slice(0, 8) + ' explicit' : 'blinded (valuecommitment ' + String(o.valuecommitment).slice(0, 10) + '…)'} -> ${o.scriptPubKey.address || o.scriptPubKey.type || 'fee'}`);
+    // Every output paying the wallet is at its usual address, in the clear: the receive
+    // output (100 tSEQ, at the wallet's address for this swap) and the change beside it.
+    const rcv = tx.vout.find((o) => o.asset === SEQ && o.value != null && BigInt(Math.round(o.value * 1e8)) === take);
+    assert.ok(rcv, 'the 100 tSEQ are paid in the clear');
+    const at = rcv.scriptPubKey.address;
+    assert.ok((await chain.call('getaddressinfo', [at])).iswitness, 'a usual (segwit, unblinded) address');
+    const mine = tx.vout.filter((o) => o.scriptPubKey && o.scriptPubKey.address === at);
+    assert.ok(mine.length >= 2, 'the receive and the change pay the usual address: ' + mine.length);
+    assert.ok(mine.every((o) => o.value != null && o.asset), 'every output paying the wallet is explicit');
+    const gotClear = mine.filter((o) => o.asset === SEQ).reduce((a, o) => a + BigInt(Math.round(o.value * 1e8)), 0n);
+    assert.equal(gotClear, take, 'the 100 tSEQ arrive in the clear');
+    if (EVIDENCE) fs.writeFileSync(path.join(EVIDENCE, `extension-interactive-${MODE}-tx.json`), JSON.stringify(tx, null, 1));
     const dS = bal(SEQ) - s0, dY = y0 - bal(Y);
     say(`taker: +${dS} tSEQ atoms, -${dY} USDX atoms (3700000000 paid plus the network fee in USDX)`);
     assert.equal(dS, take, 'the taker got exactly what it bought');
@@ -126,12 +154,12 @@ try {
     assert.ok(err, `the wallet signed the ${MODE} maker's swap: taker +${dS} tSEQ atoms for -${dY} USDX atoms`);
     say('refused: ' + err.message);
     assert.match(err.message, /refusing the maker's swap/);
-    assert.match(err.message, MODE === 'shortpay' ? /output 0 pays 9999999999 of [0-9a-f]{64} where this wallet asked for 10000000000/ : /output 0 (is not blinded to this wallet's key|.*blinded output 0)/);
+    assert.match(err.message, MODE === 'shortpay' ? /output 0 pays 9999999999 of [0-9a-f]{64} where this wallet asked for 10000000000/ : /the maker blinded output 0, which this wallet asked to receive explicitly|output 0 is not blinded to this wallet's key/);
     assert.equal(dS, 0n, 'nothing moved: tSEQ');
     assert.equal(dY, 0n, 'nothing moved: USDX');
   }
 } catch (e) {
-  failed = true; console.error(e); lines.push('FAILED: ' + (e && e.stack || e));
+  if (!e?.done) { failed = true; console.error(e); lines.push('FAILED: ' + (e && e.stack || e)); }
 } finally {
   if (EVIDENCE) {
     fs.writeFileSync(path.join(EVIDENCE, `extension-interactive-${MODE}.log`), lines.join('\n') + '\n');

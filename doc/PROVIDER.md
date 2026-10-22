@@ -266,7 +266,10 @@ daemon's proRata / slice math, and shows those in the approval window.
 Fills a resting same-chain order (maker co-signs over the relay courier; the
 wallet signs and broadcasts the atomic swap transaction). `takeBase` is the
 take size in base-asset atoms (partial fills settle at the offer's exact
-ratio). `mount: 'conf'` fills on the confidential book instead: the wallet
+ratio). On the on-chain book the wallet receives at its usual address, every
+output of its half in the clear, and pays with coins it holds in the clear: a
+balance held only at a blinded address is refused before any approval, saying
+so. `mount: 'conf'` fills on the confidential book instead: the wallet
 receives to a blinded address and the trade settles as a blinded
 transaction. Before signing, the wallet checks the maker's co-signed transaction
 against its own half: the same inputs, no other coin of the wallet, signed over
