@@ -97,6 +97,13 @@ confidential `tsqb1…` addresses are an explicit opt-in).
   coin stays frozen on the chain until the issuer lifts the freeze. The operator
   serves no take, resting order or Lightning payment in such an asset, so a market
   of one is never filled from the operator's tree.
+- **A payment the operator declines** — the operator's signer refuses what it
+  asks, and would refuse it again however often it were asked (the server's code
+  `declined`): the payment is refused for good. The library puts the coins back at
+  once and sends nothing again; user mode reads "This payment was declined; nothing
+  was sent.", and developer mode shows the operator's own words, which name the
+  code. An operator that cannot be reached is no refusal: the payment stands, and
+  the next sync sends it again.
 - **Issuer-operated assets** — the operator may serve an asset issuer-operated:
   the issuer mints each round's float through the asset's mint limiter, and every
   batch's sweep can only burn. The library checks each new leaf against that
