@@ -70,9 +70,14 @@ export const BOND_WORDS = Object.freeze({
   refused: 'Not accepted: the security deposit that backs these instant payments is missing or being withdrawn, so this wallet takes no payment that rests on it. Nothing was signed.',
 });
 
-// A refusal for user mode: the bond's and a frozen coin's said plainly; every other
-// refusal as it is.
+// A payment the operator's signer refuses for what it asks, which it would refuse again
+// however often it were asked (the server's `declined`): the library has put the coins back.
+export const DECLINED_REFUSAL = 'This payment was declined; nothing was sent.';
+
+// A refusal for user mode: one the operator declines, the bond's and a frozen coin's said
+// plainly; every other refusal as it is.
 export function plainRefusal(e) {
+  if (e && e.code === 'declined') return withMessage(e, DECLINED_REFUSAL);
   if (bondRefusal(e)) return withMessage(e, BOND_WORDS.refused);
   if (frozenRefusal(e)) return withMessage(e, FROZEN_REFUSAL);
   return e;

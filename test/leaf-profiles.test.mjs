@@ -2,7 +2,7 @@
 // rules and the words are the web wallet's, shared across the three wallets.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { supervisedAssets, frozenAtoms, frozenSentence, plainRefusal, frozenRefusal, FROZEN_REFUSAL, bondRefusal, BOND_WORDS, issuerAssets, batchLine } from '../src/leaf-profiles.js';
+import { supervisedAssets, frozenAtoms, frozenSentence, plainRefusal, frozenRefusal, FROZEN_REFUSAL, DECLINED_REFUSAL, bondRefusal, BOND_WORDS, issuerAssets, batchLine } from '../src/leaf-profiles.js';
 import { developerWordsIn } from '../src/balance-view.js';
 
 const X = 'aa'.repeat(32);
@@ -47,6 +47,19 @@ test('user mode says a frozen refusal plainly, and leaves every other refusal as
   assert.equal(frozenRefusal(new Error('refused: the issuer has paused this asset')), true);
   const o = new Error('refused: no');
   assert.equal(plainRefusal(o), o);
+});
+
+test('a payment the operator declines reads plainly in user mode, in the words the three wallets share', () => {
+  const e = { kind: 'server_refused', code: 'declined', status: 422, message: 'the server refused cosign_transfer (422 declined): the signer: the signer declined: policy: …' };
+  const p = plainRefusal(e);
+  assert.equal(p.message, 'This payment was declined; nothing was sent.');
+  assert.equal(p.message, DECLINED_REFUSAL);
+  assert.equal(p.status, 422);
+  assert.equal(p.code, 'declined');
+  assert.deepEqual(developerWordsIn(DECLINED_REFUSAL), []);
+  // An operator not reached is no refusal: said as it is.
+  const u = new Error('cosign_transfer: the server answered 503 signer_unavailable: …');
+  assert.equal(plainRefusal(u), u);
 });
 
 test('a refusal of the bond reads plainly in user mode, in the words the three wallets share', () => {
