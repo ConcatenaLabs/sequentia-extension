@@ -15,6 +15,8 @@
 //    after it, it is taken back and its coins return;
 //  - refused before any approval: a trade against BTC the wallet cannot settle, a
 //    market order with nothing on the book, a limit order with no price.
+//  - an order the trade planned, taken by someone else first, is replaced by the next order
+//    the book lists, inside the approved limit, and nothing rests;
 //  - the limit options: post only refused at a price the book meets and against BTC,
 //    `rest: false` refused at a price it does not, an option on a market order refused;
 //    a post-only bid with a smallest fill and a one-hour take-back rests, listed with that
@@ -278,6 +280,36 @@ try {
   await chain.mine(1); await engine.sync();
   assert.equal(bal(X) - x2, COIN / 20n, 'the room fill took 0.05 GOLD');
   say(`the room's fill of the re-rested order: ${room.txid}, +${bal(X) - x2} GOLD atoms`);
+
+  // ---- an order taken by someone else first is replaced by the next one the book lists ----
+  // Two asks at 4145 and 4146; the taker's limit buy of 0.1 at 4146 plans the cheaper one and
+  // waits for its approval; meanwhile that order is taken (the room's fill, by the same wallet);
+  // approved, the trade takes the 4146 order in its place, inside the limit, and nothing rests.
+  await use(MAKER);
+  const fa = await approve('placeOrder', { type: 'limit', base: X, quote: Y, side: 'sell', amount: String(COIN / 10n), price: String(4145n * COIN) }, [/sell 0\.1 GOLD/]);
+  const fb = await approve('placeOrder', { type: 'limit', base: X, quote: Y, side: 'sell', amount: String(COIN / 10n), price: String(4146n * COIN) }, [/sell 0\.1 GOLD/]);
+  await chain.mine(1); await market.progressOrders();
+  await use(TAKER);
+  const before1 = opened.length;
+  const buy = ask('placeOrder', { type: 'limit', base: X, quote: Y, side: 'buy', amount: String(COIN / 10n), price: String(4146n * COIN) });
+  for (let i = 0; i < 1200 && opened.length === before1; i++) await sleep(50);
+  assert.equal(opened.length, before1 + 1, 'the limit buy\'s approval opened');
+  const idBuy = new URL(opened.at(-1)).searchParams.get('id');
+  const shown = (await ui('approval.get', { id: idBuy })).approval.display;
+  assert.match(shown.rows.map(([k, v]) => k + ': ' + v).join('\n'), /You give: 414\.5 USDX/, 'it planned the 4145 order');
+  const taken = await approve('dexFillOnchain', { base: X, quote: Y, offerId: fa.order, takeBase: String(COIN / 10n) }, []);
+  await chain.mine(1); await engine.sync();
+  say(`the 4145 order was taken first by ${taken.txid}`);
+  await ui('approval.decide', { id: idBuy, approve: true });
+  const fr = await buy;
+  say('the limit buy after its planned order was taken: ' + JSON.stringify(fr));
+  assert.equal(fr.filled, 1, 'one order filled: ' + JSON.stringify(fr));
+  assert.equal(fr.failed.length, 1, 'the planned one failed: ' + JSON.stringify(fr));
+  assert.equal(fr.order, null, 'nothing rests');
+  assert.equal(fr.got, String(COIN / 10n)); assert.equal(fr.gave, String(4146n * COIN / 10n));
+  const recs = (await ask('getOrders', {})).trades.find((t) => t.trade === fr.trade);
+  say('its fills: ' + JSON.stringify(recs && recs.fills));
+  assert.ok(recs && recs.fills.length === 1, 'the trade lists the one fill');
 } catch (e) {
   failed = true; console.error(e);
 } finally {
