@@ -142,12 +142,16 @@ async function main() {
   }
   const call = (p, method, params = {}) => p.eval(`window.sequentia.request({method:${JSON.stringify(method)}, params:${JSON.stringify(params)}}).then((v)=>({ok:true,v}),(e)=>({ok:false,e:e.message}))`);
   async function market(b, pair = 'GOLD-USDX') {
-    const p = await b.page(DEX + 'index.html?pair=' + pair);
-    await p.waitFor("document.querySelector('#pairList button.mkt.on') && document.querySelector('#orderForm h2')", 60000);
+    const p = await b.page(DEX + 'market.html?pair=' + pair);
+    await p.waitFor("document.querySelector('#fGo') && /\\//.test(document.querySelector('#pairName').innerText)", 60000);
     return p;
   }
   async function connect(b, p) {
     await p.click('#btnConnect');
+    await p.waitFor("document.querySelector('#connectMenu [data-connector=\"extension\"]') && !document.querySelector('#connectMenu').hidden", 30000);
+    const menu = (await p.text('#connectMenu')).replace(/\s+/g, ' ');
+    check(`${b.name}: the chooser lists Ambra browser, ready`, /Ambra browser\s*Ready/.test(menu), menu);
+    await p.click('#connectMenu [data-connector="extension"]');
     await approve(b, 'connect', [/connect/i]);
     await p.waitFor("document.querySelector('#btnConnect').classList.contains('ok')", 60000);
   }
@@ -169,13 +173,32 @@ async function main() {
     const why = await p.text('#fStatus');
     return { ok: await p.eval("document.querySelector('#fStatus').classList.contains('ok')"), why };
   }
-  const orders = (p) => p.eval(`({open:[...document.querySelectorAll('#openOrders .order')].map((d)=>d.innerText), history:[...document.querySelectorAll('#history .hrow')].map((d)=>d.innerText.replace(/\\s+/g,' '))})`);
+  // Your orders, as the pair's page shows them: the rows of its Open orders tab, and of its
+  // Trades and Order history tabs (history), each row's text on one line.
+  async function orders(p) {
+    const rows = async (tab) => {
+      await p.click(`#ordTabs button[data-o="${tab}"]`); await sleep(1500);
+      return p.eval("[...document.querySelectorAll('#ordersBox tbody tr')].map((d)=>d.innerText.replace(/\\s+/g,' ').trim())");
+    };
+    const open = await rows('open'), history = [...await rows('trades'), ...await rows('history')];
+    await p.click('#ordTabs button[data-o="open"]');
+    return { open, history };
+  }
   async function refreshed(p, pred, what, ms = 180000) {
-    return until(what, async () => { await p.eval('location.reload(), true').catch(() => {}); await sleep(4000); await p.waitFor("!!document.querySelector('#orderForm h2')", 30000); const o = await orders(p); return pred(o) ? o : null; }, ms, 2000);
+    return until(what, async () => { await p.eval('location.reload(), true').catch(() => {}); await sleep(4000); await p.waitFor("!!document.querySelector('#fGo')", 30000); await sleep(2000); const o = await orders(p); return pred(o) ? o : null; }, ms, 2000);
   }
-  async function balancesShow(p, re, what) {
-    return until(what, async () => re.test(await p.text('#balances')) || (await p.eval('location.reload(), true').then(() => sleep(4000)).then(() => false)), 180000, 1000);
+  // The wallet's one figure for an asset, in whole units, as the pages read it.
+  async function figure(p, asset) {
+    const r = await call(p, 'getBalances');
+    if (!r.ok) return null;
+    const b = r.v.total || { ...(r.v.assets || {}) };
+    if (!r.v.total) for (const [h, v] of Object.entries(r.v.leaves || {})) b[h] = String(BigInt(b[h] || 0) + BigInt(v));
+    return Number(b[asset] || 0) / 1e8;
   }
+  async function balancesShow(p, asset, pred, what) {
+    return until(what, async () => pred(await figure(p, asset)), 180000, 2000);
+  }
+  const bookText = (p, side) => p.text(side === 'ask' ? '#asks' : '#bids');
 
   const maker = browser('maker'), taker = browser('taker');
   await maker.launch('maker start'); await readConsole(maker, 'start');
@@ -187,15 +210,14 @@ async function main() {
   await chain.fund(mAddr, X, 2); await chain.fund(tAddr, Y, 20000); await chain.fund(tAddr, X, 1);
   await chain.mine(1);
   note(`maker ${mAddr} funded with 2 GOLD; taker ${tAddr} with 20000 USDX and 1 GOLD`);
-  await balancesShow(mp, /GOLD\s+2\b/, 'the maker\'s balances');
-  await balancesShow(tp, /USDX\s+20,000/, 'the taker\'s balances');
+  await balancesShow(mp, X, (v) => v === 2, 'the maker\'s balances');
+  await balancesShow(tp, Y, (v) => v === 20000, 'the taker\'s balances');
 
   // ---- the default page: no rail, no developer word ----
   const words = (await mp.eval('document.body.innerText')).match(DEV_WORDS);
   check('user mode: the default page shows no word of a rail or of developer mode', !words, words ? words[0] : undefined);
-  check('user mode: the navigation names no room', (await mp.eval("document.querySelector('#devNav').childElementCount")) === 0);
-  const pairsText = await mp.text('#pairList');
-  check('the market list has the pair once', (pairsText.match(/GOLD \/ USDX/g) || []).length === 1, pairsText);
+  const nav = await mp.text('#devNav');
+  check('user mode: the navigation names no room', !/Rooms|LNDEX|On-chain|Confidential|Channels|Leaves|Pools/.test(nav), nav.replace(/\s+/g, ' '));
   await shot(mp, 'maker-default-view');
 
   // ---- the maker's limit order rests ----
@@ -203,30 +225,33 @@ async function main() {
     [/Make this trade\?/, /Place an order on the book to sell 0\.5 GOLD at your price/, /You give\s*0\.5 GOLD \(≈ 2,073 USD\)/, /You get\s*up to 2073 USDX \(≈ 2,073 USD\)/, /Fees\s*0\.0000\d+ GOLD \(≈/, /Taking it back/]);
   check('maker: the limit order is placed', r.ok && /Your order is on the book/.test(r.why), r.why);
   await chain.mine(1);
-  let o = await refreshed(mp, (x) => x.open.length === 1 && /Filled 0 of 0\.5 GOLD/.test(x.open[0]), 'the maker\'s open order');
+  let o = await refreshed(mp, (x) => x.open.length === 1 && /0\.5 GOLD/.test(x.open[0]) && /\b0%/.test(x.open[0]), 'the maker\'s open order');
   check('maker: the order is listed under Open', true, o.open[0].replace(/\s+/g, ' '));
+  // The market has an order now, so the relay lists it: once each way round.
+  const rows = await until('the market in the Tickers panel', async () => { const r = await mp.eval("[...document.querySelectorAll('#tickers tr[data-pair]')].map((r)=>r.dataset.pair)"); return r.includes('GOLD-USDX') ? r : null; }, 60000, 2000).catch(() => []);
+  check('the Tickers panel has the pair once each way round', rows.filter((x) => x === 'GOLD-USDX').length === 1 && rows.filter((x) => x === 'USDX-GOLD').length === 1, rows);
   await shot(mp, 'maker-open-order');
 
   // ---- the taker's market order fills part of it ----
   await tp.eval('location.reload(), true'); await sleep(3000);
-  await until('the ask in the taker\'s book', async () => /\$4,146\.00/.test(await tp.text('#bookBody')) || (await tp.eval('location.reload(), true').then(() => sleep(3000)).then(() => false)), 60000, 1000);
-  check('taker: the merged book shows the ask at $4,146.00', true, (await tp.text('#bookBody')).replace(/\s+/g, ' '));
+  await until('the ask in the taker\'s book', async () => /4,146\.00/.test(await bookText(tp, 'ask')) || (await tp.eval('location.reload(), true').then(() => sleep(3000)).then(() => false)), 60000, 1000);
+  check('taker: the merged book shows the ask at 4,146.00 USDX', true, (await bookText(tp, 'ask')).replace(/\s+/g, ' '));
   await shot(tp, 'taker-book-with-ask');
   r = await trade(taker, tp, { type: 'market', side: 'buy', amount: '0.2' }, 'market-buy',
     [/Buy 0\.2 GOLD at the best prices on the book/, /You give\s*829\.2 USDX \(≈ 829\.2 USD\)/, /You get\s*0\.2 GOLD \(≈ 829\.2 USD\)/, /Fees\s*0\.0000\d+ USDX/]);
   check('taker: the market order filled', r.ok && /Traded with 1 order/.test(r.why), r.why);
-  o = await refreshed(tp, (x) => x.history.some((h) => /Bought 0\.2 GOLD for 829\.2 USDX/.test(h)), 'the taker\'s trade in History');
-  check('taker: the trade reads Sent before the relay calls it final', o.history.some((h) => /Bought 0\.2 GOLD/.test(h) && /Sent$/.test(h)), o.history);
+  o = await refreshed(tp, (x) => x.history.some((h) => /Swapped 829\.2 USDX for 0\.2 GOLD/.test(h)), 'the taker\'s trade under Trades');
+  check('taker: the trade reads Sent before the relay calls it final', o.history.some((h) => /Swapped 829\.2 USDX for 0\.2 GOLD/.test(h) && /Sent$/.test(h)), o.history);
   await shot(tp, 'taker-history-sent');
   await chain.mine(1);
   for (let i = 0; i < 6; i++) await chain.bury(1);
-  o = await refreshed(tp, (x) => x.history.some((h) => /Bought 0\.2 GOLD/.test(h) && /Settled$/.test(h)), 'the taker\'s trade settled');
+  o = await refreshed(tp, (x) => x.history.some((h) => /for 0\.2 GOLD/.test(h) && /Settled$/.test(h)), 'the taker\'s trade settled');
   check('taker: the trade reads Settled once the relay calls the fill final', true, o.history);
   await shot(tp, 'taker-history-settled');
 
   // ---- the maker sees the part filled ----
-  o = await refreshed(mp, (x) => x.open.length === 1 && /Filled 0\.2 of 0\.5 GOLD/.test(x.open[0]), 'the maker\'s order partly filled');
-  check('maker: the open order shows 0.2 of 0.5 filled', true, o.open[0].replace(/\s+/g, ' '));
+  o = await refreshed(mp, (x) => x.open.length === 1 && /0\.5 GOLD/.test(x.open[0]) && /\b40%/.test(x.open[0]), 'the maker\'s order partly filled');
+  check('maker: the open order shows 40% (0.2 of 0.5) filled', true, o.open[0]);
   await shot(mp, 'maker-open-order-part-filled');
 
   // ---- the taker's limit order fills the rest ----
@@ -235,10 +260,10 @@ async function main() {
   check('taker: the limit order filled the rest', r.ok && /Traded with 1 order/.test(r.why), r.why);
   await chain.mine(1);
   for (let i = 0; i < 6; i++) await chain.bury(1);
-  o = await refreshed(mp, (x) => x.open.length === 0 && x.history.some((h) => /Your order filled: sell 0\.5 GOLD/.test(h) && /Settled$/.test(h)), 'the maker\'s order in History');
-  check('maker: the order moved to History, filled and settled', true, o.history);
-  await balancesShow(mp, /USDX\s+2,07[23]/, 'the maker\'s proceeds in its USDX figure');
-  check('maker: its USDX figure holds the proceeds', true, (await mp.text('#balances')).replace(/\s+/g, ' '));
+  o = await refreshed(mp, (x) => x.open.length === 0 && x.history.some((h) => /Sell/.test(h) && /0\.5 GOLD/.test(h) && /Settled$/.test(h)), 'the maker\'s order in Order history');
+  check('maker: the order moved to Order history, filled and settled', true, o.history);
+  await balancesShow(mp, Y, (v) => v >= 2072 && v < 2074, 'the maker\'s proceeds in its USDX figure');
+  check('maker: its USDX figure holds the proceeds', true, await figure(mp, Y));
   await shot(mp, 'maker-history-filled');
 
   // ---- a resting buy shows as a bid ----
@@ -246,35 +271,35 @@ async function main() {
     [/Place an order on the book to buy 0\.1 GOLD at your price/, /You give\s*400 USDX/, /You get\s*up to 0\.1 GOLD/]);
   check('taker: the buy order rests', r.ok && /Your order is on the book/.test(r.why), r.why);
   await chain.mine(1);
-  await until('the bid in the maker\'s book', async () => /\$4,000\.00/.test(await mp.text('#bookBody')) || (await mp.eval('location.reload(), true').then(() => sleep(3000)).then(() => false)), 90000, 1000);
-  check('maker: the merged book shows the taker\'s order as a bid at $4,000.00', true, (await mp.text('#bookBody')).replace(/\s+/g, ' '));
+  await until('the bid in the maker\'s book', async () => /4,000\.00/.test(await bookText(mp, 'bid')) || (await mp.eval('location.reload(), true').then(() => sleep(3000)).then(() => false)), 90000, 1000);
+  check('maker: the merged book shows the taker\'s order as a bid at 4,000.00 USDX', true, (await bookText(mp, 'bid')).replace(/\s+/g, ' '));
   await shot(mp, 'maker-book-with-bid');
 
   // ---- an order taken back after its time ----
   r = await trade(maker, mp, { type: 'limit', side: 'sell', amount: '0.1', price: '5000' }, 'limit-sell-2', [/Place an order on the book to sell 0\.1 GOLD/]);
   check('maker: a second order rests', r.ok, r.why);
   await chain.mine(1);
-  o = await refreshed(mp, (x) => x.open.some((t) => /Sell 0\.1 GOLD/.test(t) && /can be taken back from/.test(t)), 'the second order, with when it can be taken back');
-  check('maker: the page says when the order can be taken back, and offers no button before', !(await mp.eval("!!document.querySelector('#openOrders .order button')")), o.open.map((t) => t.replace(/\s+/g, ' ')));
+  o = await refreshed(mp, (x) => x.open.some((t) => /0\.1 GOLD/.test(t) && /from /.test(t) && /Stays on the book/.test(t)), 'the second order, with when it can be taken back');
+  check('maker: the page says when the order can be taken back, and offers no button before', !(await mp.eval("!!document.querySelector('#ordersBox tbody button')")), o.open);
   await shot(mp, 'maker-order-before-its-time');
   await chain.advance(86400 + 600);
   await refreshed(mp, () => true, 'reload');
-  await mp.waitFor("!!document.querySelector('#openOrders .order button')", 60000);
+  await mp.waitFor("!!document.querySelector('#ordersBox tbody button')", 60000);
   await shot(mp, 'maker-order-take-back-offered');
-  await mp.click('#openOrders .order button');
+  await mp.click('#ordersBox tbody button');
   await approve(maker, 'take-back', [/Take back your order\?/, /Take back what is left of your order: 0\.1 GOLD/, /You get back\s*0\.0999\d* GOLD/]);
   await chain.mine(1);
-  o = await refreshed(mp, (x) => x.history.some((h) => /Your order taken back: sell 0\.1 GOLD at \$5,000\.00, 0 of it filled Returned$/.test(h)), 'the order taken back');
-  check('maker: the order is taken back and in History', true, o.history);
+  o = await refreshed(mp, (x) => x.history.some((h) => /Sell/.test(h) && /5,000\.00/.test(h) && /0\.1 GOLD/.test(h) && /Taken back$/.test(h)), 'the order taken back');
+  check('maker: the order is taken back and in Order history', true, o.history);
   await shot(mp, 'maker-history-taken-back');
   const words2 = (await mp.eval('document.body.innerText')).match(DEV_WORDS);
   check('user mode: with orders and history on it, the default page still shows no word of a rail or of developer mode', !words2, words2 ? words2[0] : undefined);
 
   // ---- against BTC ----
-  const btc = await mp.eval("[...document.querySelectorAll('#pairList button.mkt')].map((b)=>b.innerText.split('\\n')[0])");
-  check('the market list puts the BTC pair first', /BTC/.test(btc[0] || ''), btc);
+  const groups = await mp.eval("[...document.querySelectorAll('#tickers tr.first td.nm')].map((d)=>d.innerText)");
+  check('the Tickers panel lists BTC first when a market has it', !groups.includes('BTC') || groups[0] === 'BTC', groups);
   const mb = await market(maker, 'GOLD-BTC').catch(() => null);
-  if (mb && /GOLD \/ BTC/.test(await mb.text('#pairTitle'))) {
+  if (mb && /GOLD\s*\/\s*BTC/.test(await mb.text('#pairName'))) {
     r = await trade(maker, mb, { type: 'market', side: 'buy', amount: '0.01' }, 'btc-refused', []);
     check('a trade against BTC with nothing to take is refused in plain words, before any approval', !r.ok && !DEV_WORDS.test(r.why), r.why);
     await shot(mb, 'maker-btc-refused');
@@ -286,7 +311,7 @@ async function main() {
   const pop = await popup(maker);
   await setMode(pop, 'developer');
   const dp = await market(maker);
-  await dp.waitFor("document.querySelector('#devNav').childElementCount > 0", 30000);
+  await dp.waitFor("/LNDEX/.test(document.querySelector('#devNav').innerText)", 30000);
   check('developer mode: the navigation names the rooms', /LNDEX/.test(await dp.text('#devNav')), await dp.text('#devNav'));
   await shot(dp, 'maker-developer-view');
   await setMode(pop, 'user');
