@@ -93,7 +93,7 @@ export const USER_WORDS = Object.freeze({
   noFunds: (pay) => `You have no ${pay} to trade.`,
   // Held, and shown in the balance, but not where a trade can pay it from yet (just arrived, or
   // still being moved in by the wallet): never "you have none".
-  notReady: (pay) => `Your ${pay} is not ready to trade yet. It will be in a few minutes; nothing has moved.`,
+  notReady: (pay) => `Your ${pay} is not ready to trade yet: it is once the next Bitcoin blocks settle it. Nothing has moved.`,
   pricing: 'Finding the best price…',
   priceMoved: 'The price moved. Here is the new one.',
   sent: 'Sent',
