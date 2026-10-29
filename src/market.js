@@ -192,12 +192,24 @@ export async function prepareOrder(origin, params) {
   const price = type === 'limit' ? String(params.price ?? '') : null;
   if (type === 'limit' && (!/^\d+$/.test(price) || big(price) <= 0n)) throw new Error('price (quote atoms per whole base unit) is required for a limit order');
   if (!A.precisionKnown(base) || (quote !== 'BTC' && !A.precisionKnown(quote))) throw new Error('the wallet does not know the precision of one of these assets');
+  const opts = P.readOrderOptions(params, type);
   if (!(await engine.ensureOpen())) throw new Error('the wallet is locked');
-  if (quote === 'BTC') return prepareInstant(origin, { type, base, side, amount, price });
-  return prepareChain(origin, { type, base, quote, side, amount, price });
+  if (quote === 'BTC') {
+    if (opts.postOnly) throw new Error(NEVER_RESTS);
+    return prepareInstant(origin, { type, base, side, amount, price });
+  }
+  return prepareChain(origin, { type, base, quote, side, amount, price, opts });
 }
 
-async function prepareChain(origin, { type, base, quote, side, amount, price }) {
+const WOULD_TRADE = 'this order would trade at once; nothing was placed';
+const NEVER_RESTS = 'an order against BTC trades at once and never rests on the book; nothing was placed';
+// "about 6 hours", "about 7 days": how long an order rests before it can be taken back.
+const restsFor = (secs) => {
+  const [n, u] = secs < 2 * 86400 ? [Math.round(secs / 3600), 'hour'] : [Math.round(secs / 86400), 'day'];
+  return 'about ' + n + ' ' + u + (n === 1 ? '' : 's');
+};
+
+async function prepareChain(origin, { type, base, quote, side, amount, price, opts = P.readOrderOptions({}, type) }) {
   const receive = side === 'buy' ? base : quote, payAsset = side === 'buy' ? quote : base;
   const all = await marketOffers(base, quote);
   const covs = all.filter((o) => P.covenantQuote(o, receive, payAsset));
@@ -205,16 +217,22 @@ async function prepareChain(origin, { type, base, quote, side, amount, price }) 
   // An order resting in the joined operator's tree, when it is where the best price
   // is, is filled from leaves: no on-chain coin moves.
   const leaf = await prepareResting(origin, { type, base, quote, side, amount, price, all, covs, receive, payAsset });
+  if (leaf && opts.postOnly) throw new Error(WOULD_TRADE);
   if (leaf) return leaf;
   // Coins are chosen from a scan begun now: one begun before the wallet's last trade
   // landed can still show a coin that trade spent.
   await engine.syncFresh();
   const offers = [...await withChainAmounts(covs), ...inters];
   const plan = P.planTrade({ offers, base, quote, side, amount, price, basePrecision: prec(base), interactive: true });
-  const rest = type === 'limit' ? P.restTerms({ base, quote, side, baseLeft: plan.baseLeft, price, basePrecision: prec(base) }) : null;
+  if (opts.postOnly && plan.slices.length) throw new Error(WOULD_TRADE);
+  const rest = type === 'limit' && opts.rest
+    ? P.withMinFill(P.restTerms({ base, quote, side, baseLeft: plan.baseLeft, price, basePrecision: prec(base) }), opts.minFill, { side, price, basePrecision: prec(base) })
+    : null;
   if (!plan.slices.length && !rest) {
-    throw new Error(type === 'market' ? 'nothing on the book can be traded at this market right now' : 'nothing to place');
+    throw new Error(type === 'market' ? 'nothing on the book can be traded at this market right now'
+      : !opts.rest ? 'nothing on the book reaches this price right now; nothing was placed' : 'nothing to place');
   }
+  const restSecs = opts.takeBackAfter || ORDER_SECONDS;
 
   // Each order taken is checked against the chain now: a relay that lies about an
   // order's script is caught before anything is shown.
@@ -243,7 +261,8 @@ async function prepareChain(origin, { type, base, quote, side, amount, price }) 
   if (rest) {
     rows.push(['Your order', (side === 'buy' ? 'Buy ' : 'Sell ') + fmtAtoms(plan.baseLeft, prec(base)) + ' ' + tick(base)
       + ' at ' + fmtAtoms(big(price), prec(quote)) + ' ' + tick(quote) + ' each' + (A.refValueStr(quote, price) ? ' (' + A.refValueStr(quote, price) + ')' : '')]);
-    rows.push(['Taking it back', 'what is left of it can be taken back from about ' + ORDER_SECONDS / 3600 + ' hours after it is placed; until then it stays on the book for anyone to fill at your price']);
+    if (opts.minFill != null) rows.push(['Smallest fill', amountLine(rest.sell, rest.minLot)]);
+    rows.push(['Taking it back', 'what is left of it can be taken back from ' + restsFor(restSecs) + ' after it is placed; until then it stays on the book for anyone to fill at your price']);
   }
   const text = (type === 'market'
     ? (side === 'buy' ? 'Buy ' : 'Sell ') + fmtAtoms(plan.baseDone, prec(base)) + ' ' + tick(base) + ' at the best prices on the book'
@@ -279,7 +298,7 @@ async function prepareChain(origin, { type, base, quote, side, amount, price }) 
     const done = trade.fills.filter((f) => f.ok);
     if (rest) {
       if (trade.fills.length) await engine.syncFresh().catch(() => {});
-      try { trade.order = (await placeRest(origin, { base, quote, side, price, baseLeft: plan.baseLeft + leftFromFailed(trade.fills, plan, side) }, rest, done.length !== trade.fills.length)).id; }
+      try { trade.order = (await placeRest(origin, { base, quote, side, price, baseLeft: plan.baseLeft + leftFromFailed(trade.fills, plan, side), opts }, rest, done.length !== trade.fills.length)).id; }
       catch (e) { trade.order_error = String((e && e.message) || e); }
     }
     if (done.length || trade.order) await R.rememberTrade(trade);
@@ -412,12 +431,14 @@ async function fillOne(s, payAsset, feeAtoms) {
 
 // Places the order that rests with what a limit order did not fill: the record first,
 // then the funding, then the listing (once the funding is in a block).
-async function placeRest(origin, { base, quote, side, price, baseLeft }, restPlanned, recompute) {
-  const rest = recompute ? P.restTerms({ base, quote, side, baseLeft, price, basePrecision: prec(base) }) : restPlanned;
+async function placeRest(origin, { base, quote, side, price, baseLeft, opts = {} }, restPlanned, recompute) {
+  const rest = recompute
+    ? P.withMinFill(P.restTerms({ base, quote, side, baseLeft, price, basePrecision: prec(base) }), opts.minFill ?? null, { side, price, basePrecision: prec(base) })
+    : restPlanned;
   const recs = await R.orderRecords();
   const idx = R.nextMakerIndex(recs);
   const payout = makerPayout(engine.getSigner(), engine.getNetwork(), idx);
-  const expiry = orderExpiryTime(await tipMedianTime(), ORDER_SECONDS);
+  const expiry = orderExpiryTime(await tipMedianTime(), opts.takeBackAfter || ORDER_SECONDS);
   const plan = planPlaceOrder({
     assetA: revHexStr(rest.sell), assetB: revHexStr(rest.want), sellAtoms: rest.sellAtoms,
     rateNum: rest.rateNum, rateDen: rest.rateDen, minLot: rest.minLot,

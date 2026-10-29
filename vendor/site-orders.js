@@ -10,6 +10,13 @@
 // has run out. Against BTC a limit order only trades: BTC is paid over the wallet's Bitcoin
 // Lightning, and nothing of it rests.
 //
+// A limit order takes four options (the provider protocol's, listed in getCapabilities'
+// features as ORDER_FEATURES): `post_only` (it only rests: one that would trade at once is
+// refused), `rest: false` (it only trades: nothing is placed when the book does not meet the
+// price), `min_fill` (base atoms: the smallest part of the resting order one fill may take) and
+// `take_back_after` (seconds from now, an hour to a week: when what is left can be taken back,
+// or the earliest time after it the operator takes a resting order for).
+//
 // Each step answers what the person must approve (`display`, in the words of
 // docs/DEFAULT_MODE.md) before anything is signed; the approval itself is the caller's: the web
 // wallet's dialog, the extension's approval window, Ambra's sheet. Every amount on it is the
@@ -38,6 +45,10 @@ const ceilDiv = (a, b) => (a + b - 1n) / b
 const KEY = 'swk.siteorders'
 const QUOTE_TTL_MS = 5 * 60 * 1000
 const DAY = 86400
+export const TAKE_BACK_MIN = 3600
+export const TAKE_BACK_MAX = 7 * DAY
+// What getCapabilities lists for the options this module serves.
+export const ORDER_FEATURES = Object.freeze(['order-post-only', 'order-no-rest', 'order-min-fill', 'order-take-back-after'])
 
 export const SITE_WORDS = Object.freeze({
   tradeTitle: 'Trade?',
@@ -56,6 +67,9 @@ export const SITE_WORDS = Object.freeze({
   priceNotMet: 'Nothing on the book meets that price right now.',
   cannotRest: 'This order could not be placed. Nothing moved.',
   notReady: (t) => `Not enough ${t} is ready to place this order yet: what arrived recently is ready once it settles. Nothing moved.`,
+  wouldTrade: 'This order would trade at once. Nothing was placed.',
+  neverRests: 'An order against BTC trades at once and never rests on the book. Nothing was placed.',
+  minFillTooBig: 'The smallest fill is more than the order. Nothing was placed.',
   lapsed: 'This review is no longer current: place the order again.',
 })
 
@@ -78,7 +92,43 @@ export function readParams (p) {
     price = String(p.price ?? '')
     if (!/^\d+$/.test(price) || big(price) <= 0n) throw new Error('a limit order needs a price: quote atoms per whole base unit')
   }
-  return { type, base, quote, side, amount: big(amount), price: price == null ? null : big(price) }
+  return { type, base, quote, side, amount: big(amount), price: price == null ? null : big(price), opts: readOptions(p, type) }
+}
+
+// A limit order's options: { postOnly, rest, minFill (base atoms) | null, takeBackAfter (s) | null }.
+// Each is refused on a market order, and post only beside `rest: false`. Neither `min_fill` nor
+// `take_back_after` shapes anything when nothing rests, so beside `rest: false` they are let be.
+export function readOptions (p, type) {
+  const has = (k) => p && p[k] !== undefined && p[k] !== null
+  const asked = ['post_only', 'rest', 'min_fill', 'take_back_after'].filter(has)
+  if (asked.length && type !== 'limit') throw new Error(asked.join(', ') + ': options of a limit order')
+  if (has('post_only') && typeof p.post_only !== 'boolean') throw new Error('post_only must be true or false')
+  if (has('rest') && typeof p.rest !== 'boolean') throw new Error('rest must be true or false')
+  const postOnly = p ? p.post_only === true : false
+  const rest = !(p && p.rest === false)
+  if (postOnly && !rest) throw new Error('post_only and rest: false cannot be asked together: one only rests, the other never does')
+  let minFill = null
+  if (has('min_fill')) {
+    if (!/^\d+$/.test(String(p.min_fill)) || big(p.min_fill) <= 0n) throw new Error('min_fill must be a positive number of base atoms')
+    minFill = big(p.min_fill)
+  }
+  let takeBackAfter = null
+  if (has('take_back_after')) {
+    const s = Number(p.take_back_after)
+    if (!Number.isInteger(s) || s < TAKE_BACK_MIN || s > TAKE_BACK_MAX) throw new Error(`take_back_after must be whole seconds from ${TAKE_BACK_MIN} (an hour) to ${TAKE_BACK_MAX} (a week)`)
+    takeBackAfter = s
+  }
+  return { postOnly, rest, minFill, takeBackAfter }
+}
+
+// The smallest fill of the resting order, in what it sells: `min_fill` in base atoms, as is for a
+// sale and at the price for a purchase (rounded up); a tenth of the order when none is asked.
+export function minLotOf (o, terms, unit) {
+  const mf = o.opts && o.opts.minFill
+  if (mf == null) return terms.amount / 10n > 0n ? terms.amount / 10n : 1n
+  const lot = o.side === 'sell' ? mf : ceilDiv(mf * o.price, unit)
+  if (lot > terms.amount) throw new Error(SITE_WORDS.minFillTooBig)
+  return lot > 0n ? lot : 1n
 }
 
 // What a limit order rests as: what it sells, for what, at which rate (want atoms per sold atoms).
@@ -151,13 +201,16 @@ export function makeSiteOrders (d) {
   // -> { id, display }: what the person approves. Nothing is signed yet.
   async function quote (params, origin) {
     const o = readParams(params)
+    if (o.quote === 'BTC' && o.opts.postOnly) throw new Error(SITE_WORDS.neverRests)
     const asked = [SITE_WORDS.askedBy, String(origin || '')]
     let tq = null
     const t0 = now()
     try { tq = await tradeQuote(o) } catch (e) { log('[site orders] no price:', e && e.message); tq = null }
     log(`[site orders] ${o.type} ${o.side}: priced in ${now() - t0} ms:`, tq && tq.q ? (tq.q.ok ? `${tq.q.ticket.amountIn} -> ${tq.q.ticket.amountOut}` : tq.q.why) : 'no price')
     const unit = unitOf(o.base)
+    const opts = o.opts || {}
     const takes = tq && tq.q && tq.q.ok && (o.type === 'market' || meetsLimit(o, tq.q.ticket, unit))
+    if (takes && opts.postOnly) { try { d.engine.drop(tq.q.choice) } catch {} throw new Error(SITE_WORDS.wouldTrade) }
     if (takes) {
       const t = tq.q.ticket
       const id = nid()
@@ -169,7 +222,7 @@ export function makeSiteOrders (d) {
       return { id, kind: 'take', display: { title: SITE_WORDS.tradeTitle, text: SITE_WORDS.tradeText, rows } }
     }
     if (tq && tq.q && tq.q.ok) { try { d.engine.drop(tq.q.choice) } catch {} }
-    if (o.type === 'market' || o.quote === 'BTC') {
+    if (o.type === 'market' || o.quote === 'BTC' || opts.rest === false) {
       if (o.type === 'limit') throw new Error(SITE_WORDS.priceNotMet)
       throw new Error(tq && tq.q ? refusal(tq.q, tq.pay, tq.get) : USER_WORDS.failed)
     }
@@ -177,10 +230,20 @@ export function makeSiteOrders (d) {
     const terms = restTerms(o, unit)
     const sch = await d.leaves.command('schedule', {})
     const args = { sell: terms.sell, want: terms.want, amount: String(terms.amount), rate_num: String(terms.rate_num), rate_den: String(terms.rate_den),
-      min_lot: String(terms.amount / 10n > 0n ? terms.amount / 10n : 1n), expiry: String(Number(sch.now) + DAY) }
+      min_lot: String(minLotOf(o, terms, unit)), expiry: String(Number(sch.now) + (opts.takeBackAfter || DAY)) }
     let q
     const t1 = now()
-    try { q = await d.leaves.command('order_quote', args); log(`[site orders] order_quote in ${now() - t1} ms`) } catch (e) {
+    const orderQuote = async () => {
+      try { return await d.leaves.command('order_quote', args) } catch (e) {
+        // The operator takes a resting order only some hours ahead of its refund: a shorter time
+        // asked becomes the earliest it names, which the approval then shows.
+        const m = String(e && e.message).match(/name an expiry of at least (\d+)/)
+        if (!opts.takeBackAfter || !m) throw e
+        args.expiry = m[1]
+        return await d.leaves.command('order_quote', args)
+      }
+    }
+    try { q = await orderQuote(); log(`[site orders] order_quote in ${now() - t1} ms`) } catch (e) {
       log('[site orders] order_quote:', e && e.message)
       const short = /live coins of asset/.test(String(e && e.message))
       const x = new Error(short ? SITE_WORDS.notReady(tick(args.sell)) : SITE_WORDS.cannotRest); x.cause = e; throw x
