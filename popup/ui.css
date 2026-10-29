@@ -107,10 +107,6 @@ a.link { color: var(--gold); text-decoration: none; cursor: pointer; }
 .leaf-supply { padding: 6px 0; border-bottom: 1px solid var(--line); }
 #recvDCode { max-height: 4.6em; overflow: hidden; text-overflow: ellipsis; }
 .arriving-line { color: var(--muted, #888); }
-.ucomp .uc-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 6px; }
-.ucomp .uc-row .lbl { flex-basis: 100%; }
-.ucomp .uc-pick { min-width: 110px; }
-.ucomp .uc-amount { flex: 1; min-width: 120px; }
-.ucomp .uc-ticket .kv { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; }
-.ucomp .uc-note.err { color: var(--bad, #c33); }
-.ucomp .uc-trade { display: flex; justify-content: space-between; gap: 12px; }
+.hidden-fold { margin-top: 10px; padding: 6px 2px; cursor: pointer; }
+.hidden-row { opacity: .75; }
+.asset-row button.tiny { margin-top: 6px; }

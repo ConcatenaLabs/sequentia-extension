@@ -2,6 +2,8 @@
 // renders state and relays user intents over the ui RPC scope.
 import { lnInvoiceKind } from '../src/util.js';
 import { userSplit, developerSplit } from '../src/balance-view.js';
+import { partitionHidden } from '../src/hidden.js';
+import { canonicalPair } from '../src/pair.js';
 import { plannedCoins } from '../src/leaf-schedule.js';
 import { frozenSentence, plainRefusal, batchLine } from '../src/leaf-profiles.js';
 import { DEFAULT_WORDS, heldAssetList } from '../vendor/default-arca.js';
@@ -156,7 +158,10 @@ function renderOverview() {
   // in plain words; developer mode names every rail under it, with Move to and from
   // Lightning.
   const dev = OV.mode === 'developer';
-  for (const r of OV.rows) {
+  // Hidden assets leave the list for a folded "Hidden assets (N)" at its foot; they still count in
+  // the total, which the service worker made over every row.
+  const { shown, folded } = partitionHidden(OV.rows, OV.hidden);
+  for (const r of shown) {
     const row = el('div', 'asset-row'); row.dataset.key = r.key;
     const head = el('div', 'arow-head');
     const tk = el('span', 'tk', r.ticker); tk.title = r.ticker; head.appendChild(tk);
@@ -181,10 +186,15 @@ function renderOverview() {
     }
     const fmt = (v) => fmtAtoms(v, r.precision);
     if (!dev) {
+      // A tap opens the row's details: what is staked of it, and hiding it (never BTC).
       const split = userSplit(r, fmt);
-      if (split) {
-        row.classList.add('tappable'); row.title = 'Show where this balance is';
-        if (SPLIT_OPEN.has(r.key)) row.appendChild(el('div', 'sub rail-split', split));
+      const canHide = r.key !== 'BTC' && !r.restricted;
+      if (split || canHide) {
+        row.classList.add('tappable'); row.title = 'Show details';
+        if (SPLIT_OPEN.has(r.key)) {
+          if (split) row.appendChild(el('div', 'sub rail-split', split));
+          if (canHide) row.appendChild(hideButton(r, true));
+        }
         row.onclick = () => { if (SPLIT_OPEN.has(r.key)) SPLIT_OPEN.delete(r.key); else SPLIT_OPEN.add(r.key); renderOverview(); };
       }
       list.appendChild(row);
@@ -214,9 +224,37 @@ function renderOverview() {
       meta.appendChild(acts);
       row.appendChild(meta);
     }
+    if (!r.restricted && r.key !== 'BTC') row.appendChild(hideButton(r, true));
     list.appendChild(row);
   }
+  if (folded.length) {
+    const hdr = el('div', 'sub hidden-fold tappable', (HIDDEN_OPEN ? '▾ ' : '▸ ') + 'Hidden assets (' + folded.length + ')');
+    hdr.onclick = () => { HIDDEN_OPEN = !HIDDEN_OPEN; renderOverview(); };
+    list.appendChild(hdr);
+    if (HIDDEN_OPEN) for (const r of folded) {
+      const row = el('div', 'asset-row hidden-row'); row.dataset.key = r.key;
+      const head = el('div', 'arow-head');
+      head.appendChild(el('span', 'tk', r.ticker));
+      head.appendChild(el('div', 'grow'));
+      const amt = el('span', 'amt'); amt.appendChild(el('div', 'fig', fmtAtoms(r.total, r.precision))); if (r.refStr) amt.appendChild(el('div', 'sub', r.refStr));
+      head.appendChild(amt); row.appendChild(head);
+      row.appendChild(hideButton(r, false));
+      list.appendChild(row);
+    }
+  }
 }
+// "Hide asset from list", or "Unhide" for an asset hidden now.
+function hideButton(r, hide) {
+  const b = el('button', 'ghost tiny', hide ? 'Hide asset from list' : 'Unhide');
+  b.title = hide ? 'Hide this asset from the balance list and the asset pickers. It still counts toward your total and can be found by search.'
+    : 'Show this asset in the balance list and the asset pickers again.';
+  b.onclick = async (ev) => {
+    ev.stopPropagation();
+    try { OV.hidden = (await rpc('setHidden', { hex: r.key, on: hide })).hidden; SPLIT_OPEN.delete(r.key); renderOverview(); } catch (e) { toast(e.message); }
+  };
+  return b;
+}
+let HIDDEN_OPEN = false;
 // The rows whose split is open in user mode, kept across renders.
 const SPLIT_OPEN = new Set();
 
@@ -1155,8 +1193,19 @@ async function renderDefaultReceive(fresh = false) {
     $('recvDCode').textContent = r.code;
     if (r.qr) $('recvDQr').src = r.qr; else $('recvDQr').removeAttribute('src');
     if (r.invoiceHash) watchInvoice(r.invoiceHash, sats);
-  } catch (e) { $('recvDStatus').className = 'status err'; $('recvDStatus').textContent = refusalShown(e); }
+    // The address stands in while the wallet cannot hold coins with the operator yet: the open
+    // screen asks again on its own, and the code takes the address's place once it can.
+    clearTimeout(recvRetry);
+    if (!r.isCode) recvRetry = setTimeout(() => { if (receiveOpen()) renderDefaultReceive(); }, RECV_RETRY_MS);
+  } catch (e) {
+    $('recvDStatus').className = 'status err'; $('recvDStatus').textContent = refusalShown(e);
+    clearTimeout(recvRetry);
+    recvRetry = setTimeout(() => { if (receiveOpen()) { $('recvDStatus').textContent = ''; renderDefaultReceive(); } }, RECV_RETRY_MS);
+  }
 }
+const RECV_RETRY_MS = 5000;
+let recvRetry = null;
+const receiveOpen = () => isDefault() && !$('tReceive').classList.contains('hide') && document.visibilityState !== 'hidden';
 // A code with an amount carries an invoice: once it is paid, say so and make a new code.
 function watchInvoice(hash, sats) {
   const mine = ++recvWatch;
@@ -1238,7 +1287,7 @@ function defaultReview(plan) {
 }
 
 // ---- trade: the user composer (vendor/user-composer.js), the web wallet's own ----
-let composer = null, userTrade = null, pairs = null, genesis = null, assetInfo = {};
+let composer = null, userTrade = null, pairs = { chains: {} }, genesis = null, assetInfo = {};
 const READ_TIMEOUT_MS = 20_000;
 seqob.setSeqobBase(BASE + '/seqob');
 function metaOf(h) {
@@ -1271,6 +1320,15 @@ async function relayPairBook(base, quote) {
 // document: each method asked there (BigInt crosses as { $big }).
 const arkBtc = new Proxy({}, { get: (_, method) => async (arg) => fromWire(await rpc('default.ark', { method: String(method), args: toWire(arg) })) });
 let arkUp = false;
+// An amount's value in the reference currency, in words ("≈ $12.30"), from the overview's own
+// valuation of what is held; '' for an asset it does not value.
+function refValue(h, atoms) {
+  const row = OV && OV.rows.find((r) => r.key === h);
+  if (!row || row.refVal == null || BigInt(row.total || 0) <= 0n) return '';
+  const v = row.refVal * Number(BigInt(atoms || 0)) / Number(BigInt(row.total));
+  try { return '≈ ' + new Intl.NumberFormat('en-US', { style: 'currency', currency: OV.ref, maximumFractionDigits: 2 }).format(v); }
+  catch { return '≈ ' + v.toFixed(2) + ' ' + OV.ref; }
+}
 async function fetchJsonOnce(url, init) {
   const r = await fetch(url, init ? { ...init, headers: { 'content-type': 'application/json' } } : { cache: 'no-store', signal: AbortSignal.timeout(READ_TIMEOUT_MS) });
   const j = await r.json().catch(() => ({}));
@@ -1280,11 +1338,6 @@ async function fetchJsonOnce(url, init) {
 async function renderTrade() {
   const root = $('userComposerRoot');
   if (!composer) {
-    try { pairs = await (await fetch(USER_PAIRS_URL, { cache: 'no-store' })).json(); } catch { pairs = { chains: {} }; }
-    try { genesis = (await rpc('default.leafInfo')).genesis_hash; } catch {}
-    try { const j = await rpc('default.joined'); arkUp = !!j.ark; } catch {}
-    // Tickers and decimals from the registry the service worker holds.
-    try { assetInfo = await rpc('default.assetMeta', { hexes: knownAssets() }); } catch {}
     userTrade = createUserTrade({
       leaves: { command: async (cmd, args) => {
         const t = Date.now();
@@ -1308,6 +1361,10 @@ async function renderTrade() {
         const o = ((await r.json()).vout || [])[vout]; return o && o.value != null ? String(o.value) : null;
       },
       admitted: async () => ({ pairs, genesis }),
+      // What the balance shows of an asset, so one held but not payable yet reads as not ready,
+      // never as none; and the board of what is on the chain, asked for at once.
+      held: (a) => held(a),
+      prepare: () => { rpc('default.prepare').catch(() => {}); },
       get btc() { return arkUp ? arkBtc : null; },
       onchain: null,
       store: localStorage, tag: () => OV && OV.tag ? OV.tag : 'default',
@@ -1316,11 +1373,27 @@ async function renderTrade() {
     composer = mountUserComposer({
       root, engine: userTrade, assetMeta: metaOf, fmtAtoms, parseAtoms: (t, p) => parseAmount(t, p),
       knownAssets, held,
+      isHidden: (h) => !!(OV && (OV.hidden || []).includes(h)),
+      refValue,
       admittedReceives: (pay) => admittedReceives(pairs, genesis, pay),
+      // The chosen pair's market above the inputs, from the relay's one trade log.
+      market: { relay: () => seqob.seqobBase(), pairOf: (a, b) => canonicalPair(a, b, (h) => metaOf(h).ticker),
+        visible: () => !$('tTrade').classList.contains('hide') },
     });
   }
+  // The tab draws at once; the pairs admitted, the chain, the Bitcoin ark and the registry's
+  // tickers come in behind it, and it draws again with them.
+  if (!tradeLoad) tradeLoad = loadTradeContext().then(() => { if (composer) composer.render(); }).catch(() => {}).finally(() => { tradeLoad = null; });
   composer.render();
   composer.follow();
+}
+let tradeLoad = null;
+async function loadTradeContext() {
+  if (!pairs || !Object.keys(pairs.chains || {}).length) { try { pairs = await (await fetch(USER_PAIRS_URL, { cache: 'no-store' })).json(); } catch { pairs = pairs || { chains: {} }; } }
+  if (!genesis) { try { genesis = (await rpc('default.leafInfo')).genesis_hash; } catch {} }
+  try { const j = await rpc('default.joined'); arkUp = !!j.ark; } catch {}
+  // Tickers and decimals from the registry the service worker holds.
+  try { assetInfo = { ...assetInfo, ...(await rpc('default.assetMeta', { hexes: knownAssets() })) }; } catch {}
 }
 
 // ---- remove the wallet ----

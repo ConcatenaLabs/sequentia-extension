@@ -71,8 +71,9 @@ export function addressRoute (amount, onchain, treeSpendable) {
 }
 
 // The coin states a balance counts as arriving: held, not yet spendable (a board not yet final,
-// a transfer recorded and not yet completed).
-export const ARRIVING_STATES = Object.freeze(['pending'])
+// a transfer recorded and not yet completed; `returning`, a coin the operator took at its expiry
+// while the wallet was away, which it owes back and repays as a new coin).
+export const ARRIVING_STATES = Object.freeze(['pending', 'returning'])
 
 // How often a wallet that could not join the page's operator tries again, while the page is open.
 export const JOIN_RETRY_MS = 120_000

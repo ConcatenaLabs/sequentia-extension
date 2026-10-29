@@ -5,3 +5,7 @@ Liquid Wallet Kit, which is distributed under a BSD-MIT licence. See the SWK
 repository for its text:
 
     https://github.com/ConcatenaLabs/SWK
+
+The chart library under vendor/vendor/lightweight-charts/ is TradingView
+Lightweight Charts, distributed under the Apache License 2.0; its LICENSE and
+NOTICE files are beside it. The market view shows its attribution notice.

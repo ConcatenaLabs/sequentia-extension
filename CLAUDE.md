@@ -121,9 +121,13 @@ wasm. Read this before changing anything.
   `vendor/lnupgrade.js`, `vendor/own-txs.js`, `vendor/stake-records.js`,
   `vendor/default-arca.js`, `vendor/pay-code.js`, `vendor/btc-ark.js`,
   `vendor/user-trade.js`, `vendor/user-trade-btc.js`, `vendor/user-composer.js`,
-  `vendor/tooling/lsp/` and `vendor/lightning/` are copied from
+  `vendor/asset-picker.js`, `vendor/market-view.js`, `vendor/chart.js`, `vendor/indicators.js`,
+  `vendor/vendor/lightweight-charts/` (`vendor/` mirrors the web wallet's root, so the market
+  view's relative import finds the library), `vendor/tooling/lsp/` and `vendor/lightning/` are copied from
   `sequentia-web-wallet` — fix bugs THERE and re-copy, don't fork them silently.
   `btc-ark/worker.js` and `btc-ark/pkg/` are the web wallet's `btc-ark/`, copied.
+  `popup/picker.css` is the web wallet's CSS for those modules, copied from its `index.html`;
+  `src/pair.js` is its `canonicalPair` (`swap.js`).
 - `leaves/worker.js` is copied from `sequentia-web-wallet/leaves/worker.js`
   (fix it there and re-copy). `leaves/pkg/` is the `arca` repository's
   `wallet-wasm/` build, made with `scripts/build-leaf-wallet.sh`; nothing about
