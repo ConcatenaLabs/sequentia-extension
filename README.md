@@ -16,13 +16,30 @@ confidential `tsqb1…` addresses are an explicit opt-in).
   headline in a user-chosen reference currency. No asset is privileged; the
   Sequence token (tSEQ) is one row among equals. Each asset's figure counts
   everything of it the wallet holds, in both modes: on-chain, leaves, Lightning
-  (the wallet's share of its own channels, reserve included) and, for tSEQ,
+  (the wallet's share of its own channels, reserve included), for BTC what it
+  holds on the Bitcoin ark and, for tSEQ,
   what is staked (each stake of the wallet's key under either lock, each
   unbonding output not yet withdrawn, and the delegation record); the headline
-  is the sum of every figure. User mode shows that one figure per asset, and a
-  tap on a row opens its parts in plain words (On-chain, Off-chain, Lightning,
-  Staked); developer mode names every rail under the row, with the controls that
-  move an asset to and from Lightning.
+  is the sum of every figure. User mode shows that one figure per asset, with
+  "<amount> <TICKER> arriving" under it for what cannot be spent yet, and a tap on
+  a row opens what is staked of it; developer mode names every rail under the row,
+  with the controls that move an asset to and from Lightning.
+- **Default mode on the operator's tree and the Bitcoin ark** — user mode follows
+  the default-mode contract of Concatena's wallets (the web wallet's
+  `docs/DEFAULT_MODE.md`; its words and route rules are the web wallet's own
+  modules, in `vendor/`). A wallet in user mode joins the operator pinned in
+  `src/config.js` (`ARCA`) by itself, only while its server shows the pinned key,
+  and tries again every two minutes when it cannot. BTC is held on the Bitcoin ark
+  (`BTC_ARK`, Bark's wallet in `btc-ark/`, opened in both modes). Receive shows one
+  receive code, `bitcoin:<tb1>?ark=<ark address>&sequentia=<receive request>`, with
+  an optional "Amount in BTC" that adds `amount=` and an ark invoice as
+  `lightning=`; the testnet faucet pays the code. Coins that arrive at the address
+  are moved into the tree (assets) or onto the ark (BTC) by themselves. Send takes a
+  receive code, an address or an invoice: a code is paid in the tree in seconds,
+  an address from the chain or else out of the tree, an invoice over Lightning, BTC
+  from the ark first. Trade is three inputs and one button (the web wallet's user
+  composer). Settings → Remove wallet closes the wallet's leaf and ark wallets
+  before it removes the vault, so a wallet made next shows none of their coins.
 - **Send / receive** — on-chain sends on both chains with any-asset fees
   (fee rates in the fee asset's own units per vByte), OpenAMP transfers with
   local sighash verification (never blind-signs), QR receive with the bare
@@ -191,8 +208,17 @@ issuance, and a DEX trading UI.
 1. Open `chrome://extensions`, enable **Developer mode**.
 2. **Load unpacked** → select this repository's root directory.
 
-The wasm artifacts (`pkg/`, `leaves/pkg/`, `vendor/lightning/pkg/`) are
-committed, so no build step is needed to load the extension.
+The wasm artifacts (`pkg/`, `leaves/pkg/`, `btc-ark/pkg/`, `vendor/lightning/pkg/`)
+are committed, so no build step is needed to load the extension.
+
+A package for the Chrome Web Store is a zip of the repository's tracked files
+without the tests and tooling:
+
+```sh
+git archive --format=zip -o ambra-extension.zip HEAD -- manifest.json background.js \
+  offscreen.html offscreen-boot.js offscreen.js offscreen-leaves.js offscreen-ark.js \
+  approval content icons leaves btc-ark pkg popup src vendor LICENSE NOTICE
+```
 
 ## Development
 
@@ -361,6 +387,15 @@ committed, so no build step is needed to load the extension.
   not report, a value above what the leaf holds, a filled order, an order past its delist
   time, a cancelled order); the maker's wallet, opened again, holds every credit and
   cancels the last order; user mode refuses every method before any window.
+- Default mode against the live testnet, end to end in headless Chromium:
+  `CHROME=/path/to/chrome node test/default/live-drive.mjs <evidence-dir> <work-dir>`.
+  Three fresh profiles: a new wallet joins by itself and shows its receive code, the
+  faucet pays it, it pays a second wallet's code, trades once in the composer
+  (`TRADE_PAY`, `TRADE_GET`, `TRADE_AMOUNT`), its phrase is restored in a third
+  profile with the same figures, and the second wallet is removed and made again
+  (BTC alone). Every default-mode tab is read against the forbidden words, and any
+  error in the extension's contexts fails it. The faucet pays each address once an
+  hour.
 - Icons: `node scripts/gen-icons.mjs`
 - Rebuild the SWK wasm (needs the SWK checkout + clang):
   ```sh
@@ -368,6 +403,9 @@ committed, so no build step is needed to load the extension.
   CARGO_PROFILE_RELEASE_OPT_LEVEL=z ./build-web.sh pkg_ext   # build paths remapped
   cp pkg_ext/{lwk_wasm.js,lwk_wasm.d.ts,lwk_wasm_bg.wasm,package.json} ../../sequentia-extension/pkg/
   ```
+- `btc-ark/` (the worker and its wasm) is copied from the web wallet's
+  `btc-ark/`, built there by `tooling/build-btc-ark.sh` from the `arca`
+  repository's `bark-wasm/`.
 - Rebuild the leaf wallet (`leaves/pkg/`, the `arca` repository's
   `wallet-wasm/`; needs the wasm32 target, `wasm-pack` and `protoc`):
   `scripts/build-leaf-wallet.sh ../arca`. Build paths are remapped, and the
@@ -383,15 +421,20 @@ src/                   engine (SWK wasm, dual-chain), vault, assets, openamp,
 offscreen.html/.js     persistent offscreen document: long Lightning and DEX
 offscreen-boot.js      jobs (taker swaps, wallet-as-maker), survives SW death
 offscreen-leaves.js    the leaf wallet's host in that document: its worker,
-                       its schedule, its events
+                       its schedule, its events, default mode's boards
+offscreen-ark.js       the Bitcoin ark wallet's host in that document
 leaves/                the leaf wallet's worker and its wasm (committed)
+btc-ark/               the Bitcoin ark wallet's worker and its wasm (committed)
 content/               inpage provider (MAIN world) + relay (isolated world)
 popup/                 wallet UI     approval/  site-request approval window
 vendor/                modules copied from sequentia-web-wallet (btc.js,
                        seqln.js, seqln-keys.js, seqob.js, covenant.js,
                        covenant-order.js, covenant-fill-host.js,
                        noble-ciphers.js, contracts.js, bolt11.js,
-                       lnupgrade.js, own-txs.js, lightning/ signer SDK)
+                       lnupgrade.js, own-txs.js, lightning/ signer SDK,
+                       default-arca.js, pay-code.js, btc-ark.js,
+                       user-trade.js, user-trade-btc.js, user-composer.js,
+                       tooling/lsp/ single-step book and settlement router)
 pkg/                   SWK lwk_wasm build (committed)
 doc/PROVIDER.md        the website provider protocol
 ```

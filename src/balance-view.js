@@ -2,8 +2,8 @@
 // the tests. The service worker's overview gives each row its parts (on-chain, leaves,
 // Lightning and, for the Sequence token, staked); the figure is their sum in both modes.
 //
-// User mode shows that one figure, and a tap on the row opens its parts in plain words,
-// only those it holds. Developer mode names every rail on one line under the row.
+// User mode shows that one figure, and a tap on the row opens what is staked of it, when
+// part of it is. Developer mode names every rail on one line under the row.
 
 const big = (v) => BigInt(v || 0);
 
@@ -22,12 +22,15 @@ export function figureOf(row) {
   return figureParts(row).reduce((a, [, v]) => a + v, 0n);
 }
 
-/// User mode's split, one tap away: the parts the row holds, or null when it holds
-/// only one (the figure says it all).
+/// User mode's details, one tap away: only what a person may act on (docs/DEFAULT_MODE.md
+/// in the web wallet). Where an asset is held is never said; what is staked is, when the
+/// figure holds more than the stake. What is arriving is said under the figure itself.
 export function userSplit(row, fmt) {
-  const held = figureParts(row).filter(([, v]) => v > 0n);
-  if (held.length < 2) return null;
-  return held.map(([k, v]) => k + ' ' + fmt(v)).join(' · ');
+  const staked = big(row.staked);
+  if (staked <= 0n) return null;
+  const total = row.total != null ? big(row.total) : figureOf(row);
+  if (total <= staked) return null;
+  return 'Staked ' + fmt(staked);
 }
 
 /// Developer mode's line: every rail by name, and what is staked when there is any.

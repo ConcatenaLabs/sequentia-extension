@@ -61,6 +61,22 @@ wasm. Read this before changing anything.
   other wallet completes it, so its mailbox is read. Mode and leaf events reach
   pages through `chrome.tabs.sendMessage` to the content script, not the
   service worker's ports, which die when it sleeps.
+- **Default mode is the web wallet's contract** (its `docs/DEFAULT_MODE.md`): the
+  words and route rules come from the vendored modules, never rewritten here, and
+  every default-mode screen is tested against `forbiddenIn` (`vendor/user-trade.js`).
+  `src/default-mode.js` (service worker) joins the operator pinned in
+  `src/config.js` (`ARCA`) by itself in user mode, after its server and then the
+  wallet's own answer show the pinned key; makes the receive code; asks the faucet;
+  and routes each send (code → the tree, address → the chain else `offboard`,
+  invoice → Lightning, BTC → the ark first). The leaf host boards on-chain assets
+  and reads the mailbox every 10 s in default mode (`defaults`). BTC lives on the
+  Bitcoin ark in the offscreen document (`offscreen-ark.js`, scope `ark`), open in
+  both modes so its BTC is in BTC's figure; it boards the wallet's confirmed tb1
+  coins in default mode, signed in that document with the phrase's own keys. The
+  popup's composer reaches the leaf library (`default.leaf`) and the ark's
+  Lightning (`default.ark`) through the service worker; BigInt crosses as
+  `{ $big }` (`src/wire.js`). Remove wallet closes the leaf and ark wallets before
+  the vault goes.
 - **Care is the library's, run by the host.** The offscreen host runs `care` once
   after the leaf wallet opens and after a sync at most every ten minutes
   (`careDue`, `src/leaf-schedule.js`, the web wallet's rules), in either mode,
@@ -102,9 +118,12 @@ wasm. Read this before changing anything.
 - `vendor/btc.js`, `vendor/seqln.js`, `vendor/seqln-keys.js`,
   `vendor/seqob.js`, `vendor/covenant.js`, `vendor/covenant-order.js`, `vendor/covenant-flow.js`,
   `vendor/covenant-fill-host.js`, `vendor/noble-ciphers.js`, `vendor/contracts.js`, `vendor/bolt11.js`,
-  `vendor/lnupgrade.js`, `vendor/own-txs.js`, `vendor/stake-records.js` and
-  `vendor/lightning/` are copied from `sequentia-web-wallet` — fix bugs THERE
-  and re-copy, don't fork them silently.
+  `vendor/lnupgrade.js`, `vendor/own-txs.js`, `vendor/stake-records.js`,
+  `vendor/default-arca.js`, `vendor/pay-code.js`, `vendor/btc-ark.js`,
+  `vendor/user-trade.js`, `vendor/user-trade-btc.js`, `vendor/user-composer.js`,
+  `vendor/tooling/lsp/` and `vendor/lightning/` are copied from
+  `sequentia-web-wallet` — fix bugs THERE and re-copy, don't fork them silently.
+  `btc-ark/worker.js` and `btc-ark/pkg/` are the web wallet's `btc-ark/`, copied.
 - `leaves/worker.js` is copied from `sequentia-web-wallet/leaves/worker.js`
   (fix it there and re-copy). `leaves/pkg/` is the `arca` repository's
   `wallet-wasm/` build, made with `scripts/build-leaf-wallet.sh`; nothing about
@@ -210,9 +229,9 @@ token (already public in sequentia-web-wallet) — not a secret.
 - Receiving a Lightning payment needs the device signer online: create the
   invoice from the popup and keep it open until paid (same constraint as the
   web wallet page, surfaced differently by the ephemeral service worker).
-- No camera QR scanning (paste or file only). QR display payloads are bare
-  addresses (deliberately NOT `Address.QRCodeUri()`, which emits a
-  wrong-network `liquidnetwork:` URI).
+- No camera QR scanning (paste or file only). Developer mode's QR payloads are
+  bare addresses (deliberately NOT `Address.QRCodeUri()`, which emits a
+  wrong-network `liquidnetwork:` URI); default mode's is the receive code.
 - RBF/CPFP rescue buttons are not yet ported from the web wallet.
 
 <!-- BEGIN SHARED AGENT CONVENTIONS: identical in every Sequentia repo. Change it in all of them together. -->

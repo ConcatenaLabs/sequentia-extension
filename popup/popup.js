@@ -4,6 +4,14 @@ import { lnInvoiceKind } from '../src/util.js';
 import { userSplit, developerSplit } from '../src/balance-view.js';
 import { plannedCoins } from '../src/leaf-schedule.js';
 import { frozenSentence, plainRefusal, batchLine } from '../src/leaf-profiles.js';
+import { DEFAULT_WORDS, heldAssetList } from '../vendor/default-arca.js';
+import { BTC_WORDS } from '../vendor/btc-ark.js';
+import { createEngine as createUserTrade } from '../vendor/user-trade.js';
+import { mountUserComposer } from '../vendor/user-composer.js';
+import { admittedReceives } from '../vendor/tooling/lsp/single-step-book.mjs';
+import * as seqob from '../vendor/seqob.js';
+import { toWire, fromWire } from '../src/wire.js';
+import { BASE, ESPLORA, USER_PAIRS_URL, LEAF_MAKERS } from '../src/config.js';
 
 const $ = (id) => document.getElementById(id);
 const el = (t, c, txt) => { const e = document.createElement(t); if (c) e.className = c; if (txt != null) e.textContent = txt; return e; };
@@ -31,14 +39,15 @@ const looksLikeBolt11 = (s) => /^ln(bc|tb|tbs|ert|sq|tsq)[0-9a-z]+$/i.test((s ||
 const VIEWS = ['vBoot', 'vWelcome', 'vCreate', 'vImport', 'vUnlock', 'vApp'];
 function view(id) { for (const v of VIEWS) $(v).classList.toggle('hide', v !== id); }
 
-const TABS = ['balance', 'send', 'receive', 'stake', 'history', 'settings'];
+const TABS = ['balance', 'send', 'receive', 'trade', 'stake', 'history', 'settings'];
 function tab(name) {
   for (const t of TABS) $('t' + t[0].toUpperCase() + t.slice(1)).classList.toggle('hide', t !== name);
   for (const b of document.querySelectorAll('.tabs [data-tab]')) b.classList.toggle('on', b.dataset.tab === name);
-  if (name === 'receive') renderReceive();
+  if (name === 'receive') { if (isDefault()) renderDefaultReceive(); else renderReceive(); }
   if (name === 'history') renderHistory();
   if (name === 'settings') renderSettings();
-  if (name === 'send') fillSendSelectors();
+  if (name === 'send') { if (isDefault()) fillDefaultSend(); else fillSendSelectors(); }
+  if (name === 'trade') renderTrade();
   if (name === 'stake') { renderStakes(); renderStake(); renderRewards(); }
 }
 for (const b of document.querySelectorAll('.tabs [data-tab]')) b.onclick = () => tab(b.dataset.tab);
@@ -115,6 +124,7 @@ async function refreshOverview() {
 
 function renderOverview() {
   if (!OV) return;
+  applyMode();
   $('headline').textContent = OV.totalRefStr || '—';
   $('headlineSub').textContent = 'Portfolio total' + (OV.pricesStale ? ' · prices may be stale' : '');
   $('syncNote').className = 'status';
@@ -151,6 +161,8 @@ function renderOverview() {
     // A holding its issuer has frozen for this wallet: one plain sentence, in both modes,
     // never hidden.
     if (BigInt(r.frozen || 0) > 0n) row.appendChild(el('div', 'sub frozen-line', frozenSentence(fmtAtoms(r.frozen, r.precision), r.ticker)));
+    // Default mode: what is held but cannot be spent yet, under the figure.
+    if (!(OV.mode === 'developer') && BigInt(r.arriving || 0) > 0n) row.appendChild(el('div', 'sub arriving-line', DEFAULT_WORDS.arriving(fmtAtoms(r.arriving, r.precision), r.ticker)));
 
     if (r.restricted && r.legend) {
       const meta = el('div', 'ln-meta'); meta.appendChild(el('div', null, r.legend)); row.appendChild(meta);
@@ -168,6 +180,7 @@ function renderOverview() {
     }
     // Developer mode: every rail of the asset on one line. BTC is never a leaf.
     if (r.key !== 'BTC' && !r.restricted) row.appendChild(el('div', 'sub rail-split', developerSplit(r, fmt)));
+    if (r.key === 'BTC' && BigInt(r.ark || 0) > 0n) row.appendChild(el('div', 'sub rail-split', fmt(r.onchain) + ' on-chain · ' + fmt(r.ark) + ' on the Bitcoin ark' + (BigInt(r.ln || 0) > 0n ? ' · ' + fmt(r.ln) + ' Lightning' : '')));
     const lnAtoms = BigInt(r.ln || 0);
     const canMove = (r.key === 'BTC' || r.feePriced) && !r.restricted;
     if (OV.lnDeployed && canMove && (lnAtoms > 0n || BigInt(r.onchain) > 0n)) {
@@ -283,7 +296,7 @@ chrome.runtime.onMessage.addListener((msg) => {
     }
     if (msg.event === 'locked') view('vUnlock');
     // The leaf wallet's balance changed: the figures and the headline count it.
-    if (msg.event === 'leaves-changed' && OV) rpc('overview', { withLn: false }).then((v) => { OV = v; renderOverview(); }).catch(() => {});
+    if (msg.event === 'leaves-changed' && OV) rpc('overview', { withLn: false }).then((v) => { OV = v; renderOverview(); if (isDefault() && !$('tSend').classList.contains('hide')) updateDefaultAvail(); }).catch(() => {});
   }
   // A leaf sync finished (on the schedule, or asked): show what it changed.
   if (msg && msg.scope === 'leaf-event' && (msg.event === 'leafSynced' || msg.event === 'leafCared' || msg.event === 'leafReleasing') && !$('leafCard').classList.contains('hide')) {
@@ -1092,4 +1105,210 @@ $('acMin').onchange = () => {
   const v = $('acMin').value.trim();
   if (v && !/^[0-9]+$/.test(v)) { $('acMsg').textContent = 'That is not an amount in atoms.'; return; }
   saveRewardSettings({ minReceive: v || '0' });
+};
+
+
+// ==== default mode (src/default-mode.js; the words are the web wallet's, vendor/) ====
+const isDefault = () => !!OV && OV.mode !== 'developer';
+function applyMode() {
+  const d = isDefault();
+  $('tabTradeBtn').classList.toggle('hide', !d);
+  $('sendDefault').classList.toggle('hide', !d);
+  $('sendDev').classList.toggle('hide', d);
+  $('recvDefault').classList.toggle('hide', !d);
+  $('recvDev').classList.toggle('hide', d);
+  $('faucetCard').classList.remove('hide');
+  if (!d && !$('tTrade').classList.contains('hide')) tab('balance');
+}
+
+// ---- receive: one code ----
+let recvCode = null, recvAsk = null, recvWatch = 0;
+function recvSats() {
+  const v = $('recvDAmt').value.trim();
+  if (!v) return null;
+  try { return parseAmount(v, 8); } catch { return null; }
+}
+async function renderDefaultReceive(fresh = false) {
+  $('recvDTip').textContent = DEFAULT_WORDS.receiveTip;
+  $('recvDAmt').placeholder = BTC_WORDS.amountHint;
+  if (!recvCode || fresh) { $('recvDCode').textContent = DEFAULT_WORDS.receiveWait; $('recvDQr').removeAttribute('src'); }
+  const sats = recvSats();
+  const ask = (recvAsk = rpc('default.receiveCode', { sats: sats ? sats.toString() : null, fresh }));
+  try {
+    const r = await ask;
+    if (ask !== recvAsk) return;
+    recvCode = r;
+    $('recvDLbl').textContent = r.isCode ? DEFAULT_WORDS.codeLabel : 'Receive';
+    $('btnDCopy').textContent = r.isCode ? DEFAULT_WORDS.copyCode : 'Copy';
+    $('recvDCode').textContent = r.code;
+    if (r.qr) $('recvDQr').src = r.qr; else $('recvDQr').removeAttribute('src');
+    if (r.invoiceHash) watchInvoice(r.invoiceHash, sats);
+  } catch (e) { $('recvDStatus').className = 'status err'; $('recvDStatus').textContent = refusalShown(e); }
+}
+// A code with an amount carries an invoice: once it is paid, say so and make a new code.
+function watchInvoice(hash, sats) {
+  const mine = ++recvWatch;
+  const until = Date.now() + 15 * 60_000;
+  const tick = async () => {
+    if (mine !== recvWatch || Date.now() > until || !document.body.isConnected) return;
+    let r = null; try { r = await rpc('default.invoiceReceived', { hash }); } catch {}
+    if (r && r.state === 'paid') {
+      $('recvDStatus').className = 'status ok'; $('recvDStatus').textContent = BTC_WORDS.received(fmtAtoms(sats, 8));
+      $('recvDAmt').value = ''; refreshOverview(); renderDefaultReceive(true); return;
+    }
+    setTimeout(tick, 3000);
+  };
+  setTimeout(tick, 3000);
+}
+$('btnDCopy').onclick = () => { if (recvCode) navigator.clipboard.writeText(recvCode.code).then(() => toast(recvCode.isCode ? 'Receive code copied' : 'Copied')); };
+$('btnDNew').onclick = () => { $('recvDStatus').textContent = ''; renderDefaultReceive(true); };
+{ let t = null; $('recvDAmt').addEventListener('input', () => { clearTimeout(t); t = setTimeout(() => { recvWatch++; renderDefaultReceive(); }, 600); }); }
+
+// ---- the testnet faucet: it pays the receive code ----
+for (const b of document.querySelectorAll('#faucetBtns button')) b.onclick = async () => {
+  const btns = [...document.querySelectorAll('#faucetBtns button')];
+  btns.forEach((x) => { x.disabled = true; });
+  $('faucetStatus').className = 'status'; $('faucetStatus').textContent = 'Requesting from the faucet…';
+  try {
+    const r = await rpc('default.faucet', { asset: b.dataset.faucet });
+    $('faucetStatus').className = 'status ok'; $('faucetStatus').textContent = r.text;
+    refreshOverview();
+    if (isDefault()) renderDefaultReceive();
+  } catch (e) { $('faucetStatus').className = 'status err'; $('faucetStatus').textContent = 'The faucet could not pay: ' + e.message; }
+  finally { btns.forEach((x) => { x.disabled = false; }); }
+};
+
+// ---- send: one recipient field ----
+function fillDefaultSend() {
+  if (!OV) return;
+  const sel = $('sendDAsset'); const prev = sel.value; sel.innerHTML = '';
+  const totals = {};
+  for (const r of OV.rows) if (r.key !== 'BTC' && !r.restricted) totals[r.key] = r.total;
+  for (const k of heldAssetList(totals)) {
+    const row = OV.rows.find((r) => r.key === k);
+    const o = el('option', null, k === 'BTC' ? 'BTC' : (row ? row.ticker : k.slice(0, 8))); o.value = k; sel.appendChild(o);
+  }
+  if (prev && [...sel.options].some((o) => o.value === prev)) sel.value = prev;
+  sel.onchange = updateDefaultAvail;
+  updateDefaultAvail();
+}
+function updateDefaultAvail() {
+  const row = OV && OV.rows.find((r) => r.key === $('sendDAsset').value);
+  $('sendDAvail').textContent = row ? 'balance ' + fmtAtoms(row.total, row.precision) : '';
+}
+$('btnDReview').onclick = async () => {
+  $('sendDErr').className = 'status'; $('sendDErr').textContent = '';
+  try {
+    $('btnDReview').disabled = true;
+    const plan = await rpc('default.prepareSend', { to: $('sendDTo').value.trim(), amtS: $('sendDAmt').value.trim(), asset: $('sendDAsset').value });
+    defaultReview(plan);
+  } catch (e) { $('sendDErr').className = 'status err'; $('sendDErr').textContent = e.message; }
+  finally { $('btnDReview').disabled = false; }
+};
+function defaultReview(plan) {
+  const { m, c } = modal(plan.title);
+  for (const line of plan.lines || []) c.appendChild(el('p', 'sub', line));
+  const st = el('div', 'status'); const row = el('div', 'row');
+  const ok = el('button', 'primary', plan.button || DEFAULT_WORDS.send); const no = el('button', 'ghost', 'Cancel');
+  row.appendChild(ok); row.appendChild(no); c.appendChild(row); c.appendChild(st);
+  no.onclick = () => m.remove();
+  ok.onclick = async () => {
+    ok.disabled = no.disabled = true;
+    st.className = 'status'; st.textContent = DEFAULT_WORDS.sending;
+    try {
+      const r = await rpc('default.confirmSend', { id: plan.id });
+      st.className = 'status ok'; st.textContent = r.text;
+      ok.classList.add('hide'); no.textContent = 'Close'; no.disabled = false;
+      $('sendDAmt').value = ''; $('sendDTo').value = '';
+      refreshOverview();
+    } catch (e) { st.className = 'status err'; st.textContent = e.message; no.disabled = false; }
+  };
+}
+
+// ---- trade: the user composer (vendor/user-composer.js), the web wallet's own ----
+let composer = null, userTrade = null, pairs = null, genesis = null, assetInfo = {};
+const READ_TIMEOUT_MS = 20_000;
+seqob.setSeqobBase(BASE + '/seqob');
+function metaOf(h) {
+  if (h === 'BTC') return { ticker: 'BTC', precision: 8 };
+  const row = OV && OV.rows.find((r) => r.key === h);
+  if (row) return { ticker: row.ticker, precision: row.precision };
+  return assetInfo[h] || { ticker: h.slice(0, 8), precision: 8 };
+}
+function held(h) { const row = OV && OV.rows.find((r) => r.key === h); return row ? BigInt(row.total) : 0n; }
+function knownAssets() {
+  const s = new Set(['BTC']);
+  for (const r of (OV && OV.rows) || []) if (!r.restricted) s.add(r.key);
+  for (const c of Object.values((pairs && pairs.chains) || {})) for (const p of c.pairs || []) { s.add(p.pay); s.add(p.receive); }
+  return [...s].filter((a) => a === 'BTC' || /^[0-9a-f]{64}$/.test(a));
+}
+async function relayPairBook(base, quote) {
+  const get = async (b, q) => {
+    const r = await fetch(`${seqob.seqobBase()}/v1/market/${b}/${q}/orderbook`, { cache: 'no-store', signal: AbortSignal.timeout(READ_TIMEOUT_MS) });
+    if (!r.ok) return [];
+    const j = await r.json();
+    return (j.offers || []).map((o, i) => { const raw = JSON.parse(JSON.stringify(o)); seqob.normRelayOffer(o); return { ...o, _verified: seqob.verifyOffer(o), _relayJson: raw, _status: (j.statuses || [])[i] || null }; });
+  };
+  const [a, b] = await Promise.all([get(base, quote), get(quote, base).catch(() => [])]);
+  const seen = new Set();
+  return [...a, ...b].filter((o) => { const k = (o.maker_pubkey || '') + ':' + (o.offer_id || ''); if (seen.has(k)) return false; seen.add(k); return true; });
+}
+// The trade's BTC is paid and received on the Bitcoin ark, which lives in the offscreen
+// document: each method asked there (BigInt crosses as { $big }).
+const arkBtc = new Proxy({}, { get: (_, method) => async (arg) => fromWire(await rpc('default.ark', { method: String(method), args: toWire(arg) })) });
+let arkUp = false;
+async function renderTrade() {
+  const root = $('userComposerRoot');
+  if (!composer) {
+    try { pairs = await (await fetch(USER_PAIRS_URL, { cache: 'no-store' })).json(); } catch { pairs = { chains: {} }; }
+    try { genesis = (await rpc('default.leafInfo')).genesis_hash; } catch {}
+    try { const j = await rpc('default.joined'); arkUp = !!j.ark; } catch {}
+    // Tickers and decimals from the registry the service worker holds.
+    try { assetInfo = await rpc('default.assetMeta', { hexes: knownAssets() }); } catch {}
+    userTrade = createUserTrade({
+      leaves: { command: (cmd, args) => rpc('default.leaf', { command: cmd, args: args || {} }) },
+      fetchJson: async (url, init) => {
+        const r = await fetch(url, init ? { ...init, headers: { 'content-type': 'application/json' } } : { cache: 'no-store', signal: AbortSignal.timeout(READ_TIMEOUT_MS) });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+        return j;
+      },
+      makers: () => LEAF_MAKERS,
+      relayBook: (pay, receive) => relayPairBook(receive, pay),
+      relayFills: async (pay, receive) => {
+        const get = async (b, q) => { const r = await fetch(`${seqob.seqobBase()}/v1/market/${b}/${q}/fills?limit=500`, { cache: 'no-store' }); return r.ok ? ((await r.json()).fills || []) : []; };
+        const [a, b] = await Promise.all([get(receive, pay).catch(() => []), get(pay, receive).catch(() => [])]);
+        return [...a, ...b];
+      },
+      outputValue: async (txid, vout) => {
+        const r = await fetch(`${ESPLORA}/tx/${txid}`, { cache: 'no-store' }); if (!r.ok) return null;
+        const o = ((await r.json()).vout || [])[vout]; return o && o.value != null ? String(o.value) : null;
+      },
+      admitted: async () => ({ pairs, genesis }),
+      get btc() { return arkUp ? arkBtc : null; },
+      onchain: null,
+      store: localStorage, tag: () => OV && OV.tag ? OV.tag : 'default',
+      log: (...a) => console.log(...a),
+    });
+    composer = mountUserComposer({
+      root, engine: userTrade, assetMeta: metaOf, fmtAtoms, parseAtoms: (t, p) => parseAmount(t, p),
+      knownAssets, held,
+      admittedReceives: (pay) => admittedReceives(pairs, genesis, pay),
+    });
+  }
+  composer.render();
+  composer.follow();
+}
+
+// ---- remove the wallet ----
+$('btnRemoveWallet').onclick = async () => {
+  $('removeStatus').className = 'status'; $('removeStatus').textContent = '';
+  try {
+    $('btnRemoveWallet').disabled = true;
+    await rpc('removeWallet', { password: $('removePw').value });
+    $('removePw').value = '';
+    OV = null; composer = null; userTrade = null; recvCode = null;
+    view('vWelcome');
+  } catch (e) { $('removeStatus').className = 'status err'; $('removeStatus').textContent = e.message; }
+  finally { $('btnRemoveWallet').disabled = false; }
 };

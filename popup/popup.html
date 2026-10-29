@@ -75,6 +75,7 @@
       <button data-tab="balance" class="on">Balance</button>
       <button data-tab="send">Send</button>
       <button data-tab="receive">Receive</button>
+      <button data-tab="trade" id="tabTradeBtn" class="hide">Trade</button>
       <button data-tab="stake">Stake</button>
       <button data-tab="history">History</button>
       <button data-tab="settings">Settings</button>
@@ -90,7 +91,18 @@
 
     <!-- send -->
     <div id="tSend" class="hide">
-      <div class="card">
+      <!-- default mode: one recipient field; the wallet picks the way -->
+      <div class="card hide" id="sendDefault">
+        <h2>Send</h2>
+        <label class="sub" for="sendDTo">Recipient</label>
+        <input id="sendDTo" placeholder="a receive code, an address or an invoice" class="mono">
+        <select id="sendDAsset"></select>
+        <div class="sub" id="sendDAvail" style="margin-top:4px"></div>
+        <input id="sendDAmt" placeholder="Amount" inputmode="decimal">
+        <button id="btnDReview" class="primary">Review</button>
+        <div id="sendDErr" class="status"></div>
+      </div>
+      <div class="card" id="sendDev">
         <h2>Send</h2>
         <p class="sub">Paste an address (on-chain) or a Lightning invoice. Restricted assets go to a recipient AID.</p>
         <input id="sendTo" placeholder="tb1… / tsqb1… address, AID, or lightning invoice" class="mono">
@@ -116,7 +128,32 @@
 
     <!-- receive -->
     <div id="tReceive" class="hide">
-      <div class="card">
+      <!-- default mode: one receive code -->
+      <div class="card hide" id="recvDefault">
+        <h2 id="recvDLbl">Receive code</h2>
+        <p class="sub" id="recvDTip"></p>
+        <input id="recvDAmt" placeholder="Amount in BTC (optional)" inputmode="decimal">
+        <img id="recvDQr" class="qr" alt="">
+        <div id="recvDCode" class="addr mono"></div>
+        <div class="row" style="margin-top:6px">
+          <button id="btnDCopy" class="ghost tiny">Copy receive code</button>
+          <button id="btnDNew" class="ghost tiny">New code</button>
+        </div>
+        <div id="recvDStatus" class="status"></div>
+      </div>
+      <div class="card hide" id="faucetCard">
+        <h2>Testnet faucet</h2>
+        <div class="row" id="faucetBtns" style="flex-wrap:wrap;gap:6px">
+          <button class="ghost tiny" data-faucet="USDX">USDX</button>
+          <button class="ghost tiny" data-faucet="EURX">EURX</button>
+          <button class="ghost tiny" data-faucet="GOLD">GOLD</button>
+          <button class="ghost tiny" data-faucet="SILVR">SILVR</button>
+          <button class="ghost tiny" data-faucet="OILX">OILX</button>
+          <button class="ghost tiny" data-faucet="">tSEQ</button>
+        </div>
+        <div id="faucetStatus" class="status"></div>
+      </div>
+      <div class="card" id="recvDev">
         <div class="row">
           <h2 class="grow">Receive</h2>
           <button id="btnRecvMode" class="ghost tiny">Lightning</button>
@@ -149,6 +186,11 @@
         <div id="oampRecvAddr" class="addr hide"></div>
         <img id="oampRecvQr" class="qr hide" alt="">
       </div>
+    </div>
+
+    <!-- trade (default mode): what you pay, what you get, how much -->
+    <div id="tTrade" class="hide">
+      <div class="card"><h2>Trade</h2><div id="userComposerRoot"></div></div>
     </div>
 
     <!-- stake: the stakes of the wallet's key, and pool delegation -->
@@ -284,6 +326,13 @@
         <input id="revealPw" type="password" placeholder="Password">
         <button id="btnReveal" class="ghost tiny" style="margin-top:8px">Reveal</button>
         <div id="revealOut" class="addr hide"></div>
+      </div>
+      <div class="card">
+        <h2>Remove wallet</h2>
+        <p class="sub">Removes this wallet from this browser. Your recovery phrase brings it back, with everything it holds.</p>
+        <input id="removePw" type="password" placeholder="Password">
+        <button id="btnRemoveWallet" class="ghost tiny" style="margin-top:8px">Remove wallet</button>
+        <div id="removeStatus" class="status"></div>
       </div>
       <div class="card">
         <p class="sub">Ambra for Chromium · <a class="link" href="https://sequentiatestnet.com" target="_blank" rel="noopener">sequentiatestnet.com</a></p>
