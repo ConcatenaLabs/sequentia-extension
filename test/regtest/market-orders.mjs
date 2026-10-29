@@ -15,6 +15,10 @@
 //    after it, it is taken back and its coins return;
 //  - refused before any approval: a trade against BTC the wallet cannot settle, a
 //    market order with nothing on the book, a limit order with no price.
+//  - the limit options: post only refused at a price the book meets and against BTC,
+//    `rest: false` refused at a price it does not, an option on a market order refused;
+//    a post-only bid with a smallest fill and a one-hour take-back rests, listed with that
+//    smallest fill, and is taken back after the hour.
 //
 //   SEQUENTIAD=/path/to/sequentiad SEQOBD=/path/to/seqobd node test/regtest/market-orders.mjs [evidence-dir]
 import assert from 'node:assert/strict';
@@ -132,6 +136,31 @@ try {
   say(`the relay lists it: offer ${book.offers[0].offer_id} holding ${book.offers[0].offer_amount} at ${book.offers[0].covenant.covenant_txid}:${book.offers[0].covenant.covenant_vout}`);
   await refused('taking an order back before its time', 'cancelOrder', { order: placed.order }, /can be taken back from .* UTC; until then it stays on the book/);
 
+  // ---- the limit options ----
+  await use(TAKER);
+  await refused('post only, at a price the book meets', 'placeOrder', { type: 'limit', base: X, quote: Y, side: 'buy', amount: String(COIN / 10n), price: String(4200n * COIN), post_only: true }, /would trade at once; nothing was placed/);
+  await refused('nothing left resting, at a price the book does not meet', 'placeOrder', { type: 'limit', base: X, quote: Y, side: 'buy', amount: String(COIN / 10n), price: String(4000n * COIN), rest: false }, /nothing on the book reaches this price right now; nothing was placed/);
+  await refused('post only against BTC', 'placeOrder', { type: 'limit', base: X, quote: 'BTC', side: 'buy', amount: String(COIN / 10n), price: '100', post_only: true }, /never rests on the book/);
+  await refused('an option on a market order', 'placeOrder', { type: 'market', base: X, quote: Y, side: 'buy', amount: String(COIN / 10n), post_only: true }, /options of a limit order/);
+  await refused('a smallest fill above the order', 'placeOrder', { type: 'limit', base: X, quote: Y, side: 'buy', amount: String(COIN / 10n), price: String(4000n * COIN), min_fill: String(COIN) }, /smallest fill is more than the order/);
+  const bid = await approve('placeOrder', { type: 'limit', base: X, quote: Y, side: 'buy', amount: String(COIN / 10n), price: String(4000n * COIN), post_only: true, min_fill: String(COIN / 40n), take_back_after: 3600 },
+    [/Place an order on the book to buy 0\.1 GOLD at your price/, /Smallest fill: 100 USDX/, /taken back from about 1 hour after/]);
+  await chain.mine(1); await market.progressOrders();
+  const bids = await (await fetch(`${chain.relay}/v1/market/${Y}/${X}/orderbook`)).json();
+  const listed = (bids.offers || []).find((o) => o.offer_id === bid.order);
+  assert.ok(listed, 'the relay lists the bid: ' + JSON.stringify(bids).slice(0, 400));
+  // The smallest fill is a term of the covenant itself, which the chain holds every fill to.
+  assert.equal(String(listed.covenant && listed.covenant.min_lot), String(100n * COIN), 'its covenant\'s smallest fill: ' + JSON.stringify(listed.covenant));
+  say(`post-only bid ${bid.order} listed holding ${listed.offer_amount} USDX atoms, its covenant's smallest fill ${listed.covenant.min_lot}`);
+  let ob = (await ask('getOrders', {})).orders.find((o) => o.order === bid.order);
+  assert.equal(ob.can_take_back, false);
+  await chain.advance(3600 + 600);
+  ob = (await ask('getOrders', {})).orders.find((o) => o.order === bid.order);
+  assert.equal(ob.can_take_back, true, 'can be taken back after the hour: ' + JSON.stringify(ob));
+  await approve('cancelOrder', { order: bid.order }, [/Take back what is left of your order/]);
+  await chain.mine(1); await engine.sync();
+  say(`the bid was taken back after its hour (${ob.take_back_from_text})`);
+
   // ---- the taker's market order ----
   await use(TAKER);
   // The page polls the wallet while it trades, as the site does.
@@ -144,17 +173,19 @@ try {
     [/Buy 0\.2 GOLD at the best prices on the book/, /You give: 829\.2 USDX \(≈ 829\.2 USD\)/, /You get: 0\.2 GOLD \(≈ 829\.2 USD\)/, /Fees: .* USDX/]);
   assert.equal(t1.filled, 1, JSON.stringify(t1));
   let tr = await ask('getOrders', {});
-  const fillTx = tr.trades[0].fills[0].txid;
-  assert.equal(tr.trades[0].state, 'sent');
+  // The market trade, not the post-only bid placed (and taken back) before it.
+  const mt = () => tr.trades.find((t) => t.trade === t1.trade);
+  const fillTx = mt().fills[0].txid;
+  assert.equal(mt().state, 'sent');
   const raw = await chain.call('getrawtransaction', [fillTx, true]);
   say(`market order filled by ${fillTx} (${raw.vsize} vB): out 0 ${raw.vout[0].value} ${raw.vout[0].asset.slice(0, 8)} to the maker, out 1 ${raw.vout[1].value} ${raw.vout[1].asset.slice(0, 8)} rests again`);
   await chain.mine(1);
   await engine.sync();
   assert.equal(bal(X) - x0, COIN / 5n, 'the taker got 0.2 GOLD');
   say(`taker: +${bal(X) - x0} GOLD atoms, -${y0 - bal(Y)} USDX atoms`);
-  for (let i = 0; i < 20; i++) { tr = await ask('getOrders', {}); if (tr.trades[0].state === 'settled') break; await chain.bury(1); await sleep(1500); }
-  assert.equal(tr.trades[0].state, 'settled', JSON.stringify(tr.trades[0]));
-  say('taker trade, once the relay calls the fill final: ' + JSON.stringify(tr.trades[0]));
+  for (let i = 0; i < 20; i++) { tr = await ask('getOrders', {}); if (mt().state === 'settled') break; await chain.bury(1); await sleep(1500); }
+  assert.equal(mt().state, 'settled', JSON.stringify(mt()));
+  say('taker trade, once the relay calls the fill final: ' + JSON.stringify(mt()));
 
   // ---- the maker sees its order partly filled ----
   await stopPolling();
@@ -171,8 +202,10 @@ try {
     [/Buy 0\.3 GOLD now at your price or better\./, /You give: 1243\.8 USDX/, /You get: 0\.3 GOLD/]);
   assert.equal(t2.filled, 1); assert.equal(t2.order, null);
   await chain.mine(1);
-  for (let i = 0; i < 20; i++) { tr = await ask('getOrders', {}); if (tr.trades.every((t) => t.state === 'settled')) break; await chain.bury(1); await sleep(1500); }
-  assert.ok(tr.trades.every((t) => t.state === 'settled'), JSON.stringify(tr.trades));
+  // Every trade that took an order (the bid placed before took none).
+  const took = () => tr.trades.filter((t) => t.fills.length);
+  for (let i = 0; i < 20; i++) { tr = await ask('getOrders', {}); if (took().every((t) => t.state === 'settled')) break; await chain.bury(1); await sleep(1500); }
+  assert.ok(took().length === 2 && took().every((t) => t.state === 'settled'), JSON.stringify(tr.trades));
 
   // ---- a buy that crosses nothing rests: the order sells the quote ----
   const t3 = await approve('placeOrder', { type: 'limit', base: X, quote: Y, side: 'buy', amount: String(COIN / 10n), price: String(4000n * COIN) },

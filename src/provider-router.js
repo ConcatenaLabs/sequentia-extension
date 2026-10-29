@@ -22,6 +22,7 @@ import * as leafTrade from './leaf-trade.js';
 import * as leafSwap from './leaf-swap.js';
 import * as leafResting from './leaf-resting.js';
 import * as siteTrade from './site-trade.js';
+import { ORDER_FEATURES } from './market-plan.js';
 
 // ---- pending approvals ----
 const pending = new Map();
@@ -168,7 +169,9 @@ export async function handleDappRequest(origin, method, params = {}) {
         // 'orders' means the market and limit orders the wallet settles its own way
         // (placeOrder, getOrders, cancelOrder), in either mode. 'balances-total' means
         // getBalances answers `total` and `arriving` (and `by_place` in developer mode).
-        features: ['pset-site-built', 'contract-spend', 'leaves', 'leaf-orders', 'leaf-swaps', 'resting-orders', 'orders', 'balances-total'],
+        // ORDER_FEATURES name placeOrder's limit options (post only, rest: false, min_fill,
+        // take_back_after), served in either mode.
+        features: ['pset-site-built', 'contract-spend', 'leaves', 'leaf-orders', 'leaf-swaps', 'resting-orders', 'orders', 'balances-total', ...ORDER_FEATURES],
         events: ['accountsChanged', 'disconnect', 'modeChanged', 'leafArrived', 'leafSyncDue', 'leafTake'],
       };
 

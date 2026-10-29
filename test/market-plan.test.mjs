@@ -249,3 +249,30 @@ test('a part-filled interactive offer is planned at what the relay says it has l
   const gone = { ...live('sell', 1000, 370), _active: '0' };
   assert.equal(planTrade({ offers: [gone], base: G, quote: U, side: 'buy', amount: 10, basePrecision: 8, interactive: true }).slices.length, 0);
 });
+
+test('a limit order\'s options read as the web wallet\'s site-orders.js reads them, refusals included', async () => {
+  const { readOrderOptions, ORDER_FEATURES } = await import('../src/market-plan.js');
+  const site = await import('../vendor/site-orders.js');
+  const cases = [
+    [{}, 'limit'], [{ post_only: true }, 'limit'], [{ rest: false }, 'limit'], [{ rest: true }, 'limit'],
+    [{ min_fill: '25' }, 'limit'], [{ take_back_after: 3600 }, 'limit'], [{ take_back_after: 604800, min_fill: '1' }, 'limit'],
+    [{ post_only: true }, 'market'], [{ post_only: true, rest: false }, 'limit'], [{ post_only: 'yes' }, 'limit'],
+    [{ min_fill: '0' }, 'limit'], [{ min_fill: '-3' }, 'limit'], [{ take_back_after: 60 }, 'limit'], [{ take_back_after: 604801 }, 'limit'],
+    [{ take_back_after: 3600.5 }, 'limit'], [{ min_fill: null, take_back_after: undefined }, 'market'],
+  ];
+  const run = (f, p, t) => { try { return { ok: f(p, t) }; } catch (e) { return { err: e.message }; } };
+  for (const [p, t] of cases) assert.deepEqual(run(readOrderOptions, p, t), run(site.readOptions, p, t), JSON.stringify([p, t]));
+  assert.deepEqual([...ORDER_FEATURES], [...site.ORDER_FEATURES]);
+  assert.deepEqual(readOrderOptions({ post_only: true, min_fill: '2', take_back_after: 3600 }, 'limit'), { postOnly: true, rest: true, minFill: 2n, takeBackAfter: 3600 });
+});
+
+test('min_fill becomes the resting order\'s smallest lot, at the price for a purchase', async () => {
+  const { withMinFill } = await import('../src/market-plan.js');
+  const sell = restTerms({ base: G, quote: U, side: 'sell', baseLeft: 2n * 10n ** 8n, price: 4200n * 10n ** 8n, basePrecision: 8 });
+  assert.equal(withMinFill(sell, 25000000n, { side: 'sell', price: 4200n * 10n ** 8n, basePrecision: 8 }).minLot, 25000000n);
+  assert.equal(withMinFill(sell, null, { side: 'sell', price: 1n, basePrecision: 8 }), sell);
+  // A purchase of 1 G at 3800 U sells 3800 U; a smallest fill of 0.25 G is 950 U.
+  const buy = restTerms({ base: G, quote: U, side: 'buy', baseLeft: 10n ** 8n, price: 3800n * 10n ** 8n, basePrecision: 8 });
+  assert.equal(withMinFill(buy, 25000000n, { side: 'buy', price: 3800n * 10n ** 8n, basePrecision: 8 }).minLot, 950n * 10n ** 8n);
+  assert.throws(() => withMinFill(sell, 3n * 10n ** 8n, { side: 'sell', price: 1n, basePrecision: 8 }), /smallest fill is more than the order/);
+});
