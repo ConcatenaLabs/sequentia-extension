@@ -127,7 +127,9 @@ wasm. Read this before changing anything.
   `sequentia-web-wallet` — fix bugs THERE and re-copy, don't fork them silently.
   `btc-ark/worker.js` and `btc-ark/pkg/` are the web wallet's `btc-ark/`, copied.
   `popup/picker.css` is the web wallet's CSS for those modules, copied from its `index.html`;
-  `src/pair.js` is its `canonicalPair` (`swap.js`).
+  `src/pair.js` is its `canonicalPair` (`swap.js`). Every asset `<select>` in the popup gets the shared
+  chooser in front of it (`attachChooser`, `ASSET_SELECTS` in `popup/popup.js`; the select stays,
+  hidden, as the value; its button is `<id>Chooser`). A new asset menu joins that list.
 - `leaves/worker.js` is copied from `sequentia-web-wallet/leaves/worker.js`
   (fix it there and re-copy). `leaves/pkg/` is the `arca` repository's
   `wallet-wasm/` build, made with `scripts/build-leaf-wallet.sh`; nothing about

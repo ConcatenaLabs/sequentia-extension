@@ -10,6 +10,7 @@ import { DEFAULT_WORDS, heldAssetList } from '../vendor/default-arca.js';
 import { BTC_WORDS } from '../vendor/btc-ark.js';
 import { createEngine as createUserTrade } from '../vendor/user-trade.js';
 import { mountUserComposer } from '../vendor/user-composer.js';
+import { attachChooser, PICKER_WORDS } from '../vendor/asset-picker.js';
 import { admittedReceives } from '../vendor/tooling/lsp/single-step-book.mjs';
 import * as seqob from '../vendor/seqob.js';
 import { toWire, fromWire } from '../src/wire.js';
@@ -1460,3 +1461,38 @@ async function paintReport() {
     $('reportText').value = ''; $('reportAddr').checked = false; paintReportNow();
   };
 })();
+
+
+// ==== every asset menu is the shared asset chooser (vendor/asset-picker.js attachChooser) ====
+// A search box, what the wallet holds first with its balance and value, hidden assets out of the
+// way until searched for (the web wallet's docs/DEFAULT_MODE.md, "Asset pickers"). The <select>
+// stays, hidden, as the value the popup reads and listens to; its button is `<id>Chooser`.
+function walletAssetRow(v, text) {
+  const t = String(text || '').split(' · ')[0].replace(/\s*\(.*\)$/, '').trim();
+  if (v === '') return { ticker: t, name: '', pin: true };
+  const row = OV && OV.rows.find((r) => r.key === v);
+  const atoms = row ? BigInt(row.total || 0) : 0n;
+  const precision = row ? row.precision : (v === 'BTC' ? 8 : 0);
+  return {
+    ticker: v === 'BTC' ? 'BTC' : (t || (row && row.ticker) || String(v).slice(0, 8)),
+    name: v === 'BTC' ? 'Bitcoin' : ((row && row.name) || ''),
+    held: atoms > 0n,
+    hidden: !!(OV && (OV.hidden || []).includes(v)),
+    bal: atoms > 0n ? { b: fmtAtoms(atoms, precision), r: (row && row.refStr) || '' } : null,
+  };
+}
+const ASSET_SELECTS = ['sendDAsset', 'sendAsset', 'feeAsset', 'lnPayAsset', 'lnRecvAsset', 'oampRecvAsset', 'acTarget'];
+const SELECT_VALUE = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value');
+function attachAssetChoosers() {
+  for (const id of ASSET_SELECTS) {
+    const sel = $(id);
+    if (!sel || sel._chooser || !sel.parentNode) continue;
+    const c = attachChooser(sel, walletAssetRow, { hint: PICKER_WORDS.hintSearch });
+    c.button.id = id + 'Chooser';
+    sel._chooser = c;
+    // The popup sets some of these from code (a pasted invoice names its asset, a saved choice is
+    // shown): the button follows every value set, not only a person's choice.
+    Object.defineProperty(sel, 'value', { configurable: true, get() { return SELECT_VALUE.get.call(this); }, set(v) { SELECT_VALUE.set.call(this, v); c.refresh(); } });
+  }
+}
+attachAssetChoosers();
