@@ -20,6 +20,10 @@ import * as dm from './default-mode.js';
 import { BASE, ESPLORA, USER_PAIRS_URL, LEAF_MAKERS } from './config.js';
 import { stGet, stSet, fmtAtoms } from './util.js';
 import { walletTag } from './mode.js';
+import * as engineMod from './engine.js';
+
+// The kit wallet's own balances, for the figures.
+async function engineBalances() { const b = await engineMod.balances(); return { seq: b.seq, btc: b.btc }; }
 
 const STORE_KEY = 'ext.siteTrade';
 const READ_TIMEOUT_MS = 20_000;
@@ -83,6 +87,13 @@ async function siteOrders() {
     },
     get btc() { return arkUp ? arkBtc : null; },
     onchain: null,
+    // What the wallet shows it holds of an asset, so one held but not payable yet reads as not
+    // ready, never as none; and a sync of the leaf host at once, which boards coins on the chain.
+    held: async (a) => {
+      const f = await figures(await engineBalances(), false).catch(() => ({ total: {} }));
+      return BigInt((f.total || {})[a] || 0);
+    },
+    prepare: () => { leaves.hostOp('sync').catch(() => {}); },
     store: st, tag: () => tag || 'default',
     log: (...a) => console.log(...a),
   });
@@ -168,4 +179,13 @@ export async function figures(bal, developer) {
     if (developer) byPlace[k] = { chain: chain.toString(), leaves: lv.toString(), lightning: ln.toString(), ark: ak.toString() };
   }
   return developer ? { total, arriving, by_place: byPlace } : { total, arriving };
+}
+
+// What a trade can pay from now, per asset (getBalances' `spendable`): the leaves the engine can
+// spend, and BTC on the Bitcoin ark, less what is still arriving there.
+export async function spendable() {
+  const out = {};
+  try { const s = await fresh(); for (const [a, v] of await s.engine.spendable()) if (v > 0n) out[a] = v.toString(); } catch {}
+  try { const ark = await dm.arkSum(); const v = BigInt((ark && ark.total) || 0) - BigInt((ark && ark.arriving) || 0); if (v > 0n) out.BTC = v.toString(); } catch {}
+  return out;
 }

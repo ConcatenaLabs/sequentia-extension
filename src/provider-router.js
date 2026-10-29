@@ -222,7 +222,8 @@ export async function handleDappRequest(origin, method, params = {}) {
       // What is held as leaves and spendable now, in either mode: in user mode the wallet's
       // coins are boarded within a minute, so this is most of what it can trade.
       const fig = await siteTrade.figures(b, (await leaves.mode()) === 'developer').catch(() => ({}));
-      return { assets: b.seq, btc: b.btc, openamp: oamp, leaves: await siteTrade.leafBalances(), ...fig };
+      const spendable = (await leaves.config().catch(() => null)) ? await siteTrade.spendable().catch(() => ({})) : {};
+      return { assets: b.seq, btc: b.btc, openamp: oamp, leaves: await siteTrade.leafBalances(), spendable, ...fig };
     }
 
     case 'getUtxos': {

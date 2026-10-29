@@ -125,6 +125,7 @@ export function makeSiteOrders (d) {
     if (q.why === 'not-listed') return W.notListed(tick(get), tick(pay))
     if (q.why === 'not-offered') return W.notOffered(tick(get), tick(pay))
     if (q.why === 'no-funds') return W.noFunds(tick(pay))
+    if (q.why === 'not-ready') return W.notReady(tick(pay))
     return W.tooSmall
   }
 

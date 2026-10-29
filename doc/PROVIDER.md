@@ -80,13 +80,19 @@ not connected or locked. Use it to restore a session without prompting.
   leaves: { '<assetHexId>': '<atoms>' },   // held as leaves and spendable now, in either mode
   total: { '<assetHexId>'|'BTC': '<atoms>' },     // one figure per asset wherever it is held
   arriving: { '<assetHexId>'|'BTC': '<atoms>' },  // of it, received but not spendable yet
-  by_place: { '<assetHexId>'|'BTC': { chain, leaves, lightning, ark } } }  // developer mode only
+  by_place: { '<assetHexId>'|'BTC': { chain, leaves, lightning, ark } },  // developer mode only
+  spendable: { '<assetHexId>'|'BTC': '<atoms>' } }  // what a trade can pay from now
 ```
 `total` is the figure the wallet itself shows: for a Sequentia asset its coins on the
 chain, its leaves and its Lightning balance; for BTC the chain, the Bitcoin ark and
 Lightning. `arriving` is the part of it received and not yet spendable (default mode's
 "<amount> <TICKER> arriving"). `by_place` splits `total` by where it is held and is
-answered in developer mode only. A wallet that answers these three lists
+answered in developer mode only. `spendable` is what the wallet's own trades can pay from
+at this moment (in user mode its leaves that are live and the BTC on its Bitcoin ark), so
+a site offers no more than that ("Max", a share of the balance): a coin just received, or
+on the chain and not yet moved into the tree, counts in `total` and not yet here, and an
+order for it is refused with "Your <TICKER> is not ready to trade yet…", never with "You
+have none". A wallet that answers these three lists
 `balances-total` in `getCapabilities().features`; a site falls back to `assets`, `btc`
 and `leaves` when it does not.
 What the wallet can trade of a Sequentia asset is `assets` and `leaves` together: in user

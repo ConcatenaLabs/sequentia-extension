@@ -150,15 +150,23 @@ async function stepTrade() {
     const j = await joined(T, t);
     check('T: joined the operator by itself (user mode)', j.joined && j.open, j);
     const [baseTk] = PAIR.split('-');
-    await faucet(T, baseTk);
+    if (process.env.FAUCET_ONCHAIN) {
+      // Paid on the chain, at the address the wallet shows: default mode boards it by itself.
+      await T.pop.click('[data-tab=receive]');
+      await T.pop.waitFor("/^bitcoin:tb1/.test((document.querySelector('#recvDCode')||{}).innerText||'')", 120000);
+      const addr = decodeURIComponent(String(await T.pop.text('#recvDCode')).replace(/^bitcoin:/i, '').split('?')[0]).trim();
+      const r = await fetch('https://sequentiatestnet.com/faucet', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ address: addr, asset: baseTk }) }).then(async (x) => ({ ok: x.ok, t: await x.text() })).catch((e) => ({ ok: false, t: e.message }));
+      check(`T: the faucet paid ${baseTk} on the chain to ${addr}`, r.ok, r.t.slice(0, 200));
+    } else await faucet(T, baseTk);
     // The coin lands as a leaf (the receive code's tree part).
     let r = null;
     const tw = Date.now();
-    while (Date.now() - tw < 240000) { r = (await rows(T))[baseTk]; if (r && BigInt(r.leaves || 0) > 0n) break; await sleep(3000); }
+    while (Date.now() - tw < (process.env.FAUCET_ONCHAIN ? 900000 : 240000)) { r = (await rows(T))[baseTk]; if (r && BigInt(r.leaves || 0) > 0n && BigInt(r.arriving || 0) === 0n) break; await sleep(5000); }
+    note(`     T: ${baseTk} held as leaves after ${secs(tw)}`);
     check(`T: ${baseTk} is held as leaves`, r && BigInt(r.leaves || 0) > 0n, r && { onchain: r.onchain, leaves: r.leaves, total: r.total });
 
     const site = await T.b.page(`https://sequentiatestnet.com/dex/index.html?pair=${PAIR}&view=default`);
-    await site.waitFor("document.querySelector('#btnConnect') && document.querySelector('#orderForm h2')", 120000);
+    await site.waitFor("document.querySelector('#btnConnect') && document.querySelector('#fGo')", 120000);
     await site.click('#btnConnect'); await sleep(1500);
     const menu = await site.text('#connectMenu');
     check('T: the chooser lists every wallet', /Sequentia web wallet/.test(menu) && /Ambra mobile/.test(menu) && /Ambra browser\s*Ready/.test(menu), menu.replace(/\s+/g, ' '));
@@ -167,8 +175,9 @@ async function stepTrade() {
     await approval(T, 'connect', [/wants to connect/], true);
     await site.waitFor("document.querySelector('#btnConnect').classList.contains('ok')", 60000);
     await sleep(3000);
-    const bal = await site.text('#balances');
-    check(`T: the site shows the ${baseTk} held as leaves`, new RegExp(baseTk + '\\s+[1-9]').test(bal), bal.replace(/\s+/g, ' '));
+    const bal = await site.eval("document.body.innerText");
+    const held = (bal.match(new RegExp('[^\\n]*' + baseTk + '[^\\n]*[1-9][^\\n]*', 'g')) || []).slice(0, 4);
+    check(`T: the site shows the ${baseTk} held as leaves`, held.length > 0, held);
     await shot(site, 'T-site-connected');
 
     await sell(site, SELL);
@@ -182,8 +191,9 @@ async function stepTrade() {
     st = await siteStatus(site);
     check('T: approved: the site says it traded', /^ok: Traded with 1 order/.test(st), `${st} (${secs(tt)} from the click)`);
     await sleep(5000);
-    const ord = await site.eval(`({open:[...document.querySelectorAll('#openOrders .order')].map((d)=>d.innerText.replace(/\\s+/g,' ')), history:[...document.querySelectorAll('#history > *')].map((d)=>d.innerText.replace(/\\s+/g,' ')).slice(0,6)})`);
-    check('T: the trade is under Your orders', ord.history.length >= 1 || ord.open.length >= 1, ord);
+    const body = await site.eval("document.body.innerText");
+    const ord = (body.match(new RegExp('[^\\n]*Sold ' + SELL + ' ' + baseTk + '[^\\n]*', 'g')) || []).slice(0, 3);
+    check('T: the trade is listed on the site', ord.length >= 1, ord);
     await shot(site, 'T-site-traded');
     const after = (await rows(T))[baseTk] || {};
     note(`     T: ${baseTk} after: ${JSON.stringify({ onchain: after.onchain, leaves: after.leaves, total: after.total })}`);

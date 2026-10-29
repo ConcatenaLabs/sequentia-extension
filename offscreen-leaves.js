@@ -253,9 +253,32 @@ const MAILBOX_QUIET_MS = 20_000;
 // smallest leaf, is boarded whole less its fee (vendor/default-arca.js boardAll: the fee the
 // library quoted for that very board, in the asset boarded). Coins the library refused to
 // board are asked again only once they change.
+// The leaf wallet finds its on-chain coins by a gap of 20 unused keys past the last key it handed
+// out or saw holding an UNSPENT coin, where the kit wallet finds them by a gap past the last key
+// with any history: a coin at a key past the leaf wallet's window (keys used and spent before it
+// looked) is shown in the balance and never boarded. So the leaf wallet is handed keys (`address`,
+// each the next key) until its window covers every key the kit wallet handed out (`S.scan`, the
+// receive index and 20 more), once per key, remembered per wallet in this document's storage.
+async function coverReceiveKeys() {
+  const want = Number(S.scan || 0) - 20;
+  if (!(want > 0) || !S.fp) return 0;
+  const key = 'ext.leaves.window.' + S.fp;
+  let had = 0;
+  try { had = Number(localStorage.getItem(key) || 0); } catch {}
+  let n = 0;
+  for (let i = had; i < want; i++) {
+    try { await call('run', { command: 'address' }); } catch (e) { console.warn('[leaves] handing the leaf wallet its keys:', e && e.message); break; }
+    n++;
+    try { localStorage.setItem(key, String(i + 1)); } catch {}
+  }
+  if (n) console.info(`[leaves] the leaf wallet reads its on-chain coins up to key ${had + n + 20} now (${n} key(s) handed to it)`);
+  return n;
+}
+
 async function boardArrivals() {
   if (!S.open || !S.defaultMode || Date.now() < S.quietUntil) return;
   if (!S.info) { try { S.info = (await call('run', { command: 'info' })).result; } catch { return; } }
+  await coverReceiveKeys();
   let balance;
   try { balance = (await call('run', { command: 'balance' })).result; } catch { return; }
   let boarded = false;
