@@ -1249,7 +1249,9 @@ async function relayPairBook(base, quote) {
     const j = await r.json();
     return (j.offers || []).map((o, i) => { const raw = JSON.parse(JSON.stringify(o)); seqob.normRelayOffer(o); return { ...o, _verified: seqob.verifyOffer(o), _relayJson: raw, _status: (j.statuses || [])[i] || null }; });
   };
+  const t0 = Date.now();
   const [a, b] = await Promise.all([get(base, quote), get(quote, base).catch(() => [])]);
+  console.log(`[trade] book: ${a.length + b.length} offers in ${Date.now() - t0} ms`);
   const seen = new Set();
   return [...a, ...b].filter((o) => { const k = (o.maker_pubkey || '') + ':' + (o.offer_id || ''); if (seen.has(k)) return false; seen.add(k); return true; });
 }
@@ -1257,6 +1259,12 @@ async function relayPairBook(base, quote) {
 // document: each method asked there (BigInt crosses as { $big }).
 const arkBtc = new Proxy({}, { get: (_, method) => async (arg) => fromWire(await rpc('default.ark', { method: String(method), args: toWire(arg) })) });
 let arkUp = false;
+async function fetchJsonOnce(url, init) {
+  const r = await fetch(url, init ? { ...init, headers: { 'content-type': 'application/json' } } : { cache: 'no-store', signal: AbortSignal.timeout(READ_TIMEOUT_MS) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+  return j;
+}
 async function renderTrade() {
   const root = $('userComposerRoot');
   if (!composer) {
@@ -1266,12 +1274,15 @@ async function renderTrade() {
     // Tickers and decimals from the registry the service worker holds.
     try { assetInfo = await rpc('default.assetMeta', { hexes: knownAssets() }); } catch {}
     userTrade = createUserTrade({
-      leaves: { command: (cmd, args) => rpc('default.leaf', { command: cmd, args: args || {} }) },
+      leaves: { command: async (cmd, args) => {
+        const t = Date.now();
+        console.log(`[trade] ${cmd} asked`);
+        try { return await rpc('default.leaf', { command: cmd, args: args || {} }); }
+        finally { console.log(`[trade] ${cmd}: ${Date.now() - t} ms`); }
+      } },
       fetchJson: async (url, init) => {
-        const r = await fetch(url, init ? { ...init, headers: { 'content-type': 'application/json' } } : { cache: 'no-store', signal: AbortSignal.timeout(READ_TIMEOUT_MS) });
-        const j = await r.json().catch(() => ({}));
-        if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
-        return j;
+        const t = Date.now();
+        try { return await fetchJsonOnce(url, init); } finally { console.log(`[trade] ${init ? 'POST' : 'GET'} ${url.replace(BASE, '')}: ${Date.now() - t} ms`); }
       },
       makers: () => LEAF_MAKERS,
       relayBook: (pay, receive) => relayPairBook(receive, pay),

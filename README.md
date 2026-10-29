@@ -393,9 +393,10 @@ git archive --format=zip -o ambra-extension.zip HEAD -- manifest.json background
   faucet pays it, it pays a second wallet's code, trades once in the composer
   (`TRADE_PAY`, `TRADE_GET`, `TRADE_AMOUNT`), its phrase is restored in a third
   profile with the same figures, and the second wallet is removed and made again
-  (BTC alone). Every default-mode tab is read against the forbidden words, and any
-  error in the extension's contexts fails it. The faucet pays each address once an
-  hour.
+  (BTC alone). One browser runs at a time. Every default-mode tab is read against the
+  forbidden words, and any error in the extension's contexts fails it. `FAUCET` names
+  the asset asked for (the faucet pays each asset once an hour to one address);
+  `ONLY_A=1` runs the first wallet alone (faucet and trade).
 - Icons: `node scripts/gen-icons.mjs`
 - Rebuild the SWK wasm (needs the SWK checkout + clang):
   ```sh

@@ -109,133 +109,161 @@ async function waitRow(w, ticker, pred, ms) {
   }
 }
 
+async function unlock(w) {
+  await w.pop.waitFor("!document.querySelector('#vUnlock').classList.contains('hide') || !document.querySelector('#vApp').classList.contains('hide')", 60000);
+  if (await w.pop.eval("!document.querySelector('#vApp').classList.contains('hide')")) return Date.now();
+  await w.pop.set('unlockPw', 'drive-password');
+  const t = Date.now();
+  await w.pop.click('#btnUnlock');
+  await w.pop.waitFor("!document.querySelector('#vApp').classList.contains('hide')", 120000);
+  return t;
+}
+// One browser at a time (the laptop's memory): each profile is opened, used and closed.
+let current = null;
+async function session(label, fn) {
+  const w = await open(label); current = w;
+  try { return await fn(w); } finally {
+    check(`${label}: no error or exception in the extension's contexts`, !w.b.problems.length, w.b.problems.slice(0, 10));
+    await w.b.close().catch(() => {}); current = null;
+  }
+}
+
 async function main() {
-  const live = [];
   try {
-    // ---- A: a new wallet joins by itself ----
-    const A = await open('A'); live.push(A);
-    const a = await create(A);
-    const ja = await joined(A, a.t);
-    check('A joined the operator by itself', ja.joined && ja.open, ja);
-    check('A holds BTC on the Bitcoin ark wallet (open)', !!ja.ark, ja);
-    const fresh = await rows(A);
-    check('a fresh wallet lists BTC alone', Object.keys(fresh).join() === 'BTC', Object.keys(fresh));
-    await A.pop.click('[data-tab=send]'); await sleep(800);
-    const sendList = await A.pop.eval("[...document.querySelectorAll('#sendDAsset option')].map(o=>o.textContent)");
-    check('a fresh wallet sends from BTC alone', sendList.join() === 'BTC', sendList);
-    await A.pop.click('[data-tab=receive]');
-    await A.pop.waitFor("/^bitcoin:/.test(document.querySelector('#recvDCode').innerText)", 120000);
-    const code = await A.pop.text('#recvDCode');
-    check('A shows one receive code with the ark and the Sequentia parts', /^bitcoin:tb1[0-9a-z]+\?/.test(code) && /[?&]ark=/.test(code) && /[?&]sequentia=/.test(code), code.slice(0, 60) + '…');
-    note(`     A: code shown ${secs(a.t)} after Create`);
-    await wordsCheck(A, 'fresh');
+    // ---- B: a new wallet, its receive code taken, then closed ----
+    const ONLY_A = !!process.env.ONLY_A;
+    const bcode = ONLY_A ? null : await session('B', async (B) => {
+      const bw = await create(B);
+      const jb = await joined(B, bw.t);
+      check('B joined the operator by itself', jb.joined && jb.open, jb);
+      await B.pop.click('[data-tab=receive]');
+      await B.pop.waitFor("/^bitcoin:.*sequentia=/.test(document.querySelector('#recvDCode').innerText)", 120000);
+      return await B.pop.text('#recvDCode');
+    });
 
-    // ---- the faucet pays the code ----
-    await A.pop.click('[data-tab=receive]'); await sleep(500);
-    const tf = Date.now();
-    await A.pop.click(`#faucetBtns [data-faucet="${FAUCET}"]`);
-    await A.pop.waitFor("/Received|could not/.test(document.querySelector('#faucetStatus').innerText)", 180000);
-    const fs = await A.pop.text('#faucetStatus');
-    check('the faucet paid', /^Received /.test(fs), `${fs} (${secs(tf)})`);
-    const got = await waitRow(A, FAUCET, (v) => v > 0n, 180000);
-    check(`A's ${FAUCET} figure shows it`, got && BigInt(got.total) > 0n, `${JSON.stringify(got)} ${secs(tf)} after the click`);
-    await A.pop.click('[data-tab=balance]'); await sleep(1500);
-    await A.pop.shot(join(out, 'screens', 'A-after-faucet.png'));
+    // ---- A: a new wallet joins by itself; faucet; pays B; trades once ----
+    const { a, aRows } = await session('A', async (A) => {
+      const a = await create(A);
+      const ja = await joined(A, a.t);
+      check('A joined the operator by itself', ja.joined && ja.open, ja);
+      check('A holds BTC on the Bitcoin ark wallet (open)', !!ja.ark, ja);
+      const fresh = await rows(A);
+      check('a fresh wallet lists BTC alone', Object.keys(fresh).join() === 'BTC', Object.keys(fresh));
+      await A.pop.click('[data-tab=send]'); await sleep(800);
+      const sendList = await A.pop.eval("[...document.querySelectorAll('#sendDAsset option')].map(o=>o.textContent)");
+      check('a fresh wallet sends from BTC alone', sendList.join() === 'BTC', sendList);
+      await A.pop.click('[data-tab=receive]');
+      await A.pop.waitFor("/^bitcoin:/.test(document.querySelector('#recvDCode').innerText)", 120000);
+      const code = await A.pop.text('#recvDCode');
+      check('A shows one receive code with the ark and the Sequentia parts', /^bitcoin:tb1[0-9a-z]+\?/.test(code) && /[?&]ark=/.test(code) && /[?&]sequentia=/.test(code), code.slice(0, 60) + '…');
+      note(`     A: code shown ${secs(a.t)} after Create`);
+      await wordsCheck(A, 'fresh');
 
-    // ---- B: a new wallet; A pays B's code ----
-    const B = await open('B'); live.push(B);
-    const bw = await create(B);
-    const jb = await joined(B, bw.t);
-    check('B joined the operator by itself', jb.joined && jb.open, jb);
-    await B.pop.click('[data-tab=receive]');
-    await B.pop.waitFor("/^bitcoin:.*sequentia=/.test(document.querySelector('#recvDCode').innerText)", 120000);
-    const bcode = await B.pop.text('#recvDCode');
-    await A.pop.click('[data-tab=send]'); await sleep(1000);
-    await A.pop.set('sendDTo', bcode);
-    const hex = await A.pop.eval(`[...document.querySelectorAll('#sendDAsset option')].find(o=>o.textContent===${JSON.stringify(FAUCET)})?.value`);
-    await A.pop.set('sendDAsset', hex); await A.pop.set('sendDAmt', '1');
-    await A.pop.click('#btnDReview');
-    await A.pop.waitFor("!!document.querySelector('.modal') || /\\S/.test(document.querySelector('#sendDErr').innerText)", 120000);
-    const review = await A.pop.eval("(document.querySelector('.modal')||{}).innerText||document.querySelector('#sendDErr').innerText");
-    check('the review reads "Send 1 …?" "It arrives in seconds."', /Send 1 \w+\?/.test(review) && /It arrives in seconds\./.test(review), review.replace(/\n/g, ' | '));
-    await A.pop.shot(join(out, 'screens', 'A-send-review.png'));
-    const ts = Date.now();
-    await A.pop.eval("[...document.querySelectorAll('.modal button')].find(b=>b.textContent==='Send').click(), true");
-    await A.pop.waitFor("/Sent |declined|Part of|can't|up to|Failed|nothing/i.test(document.querySelector('.modal .status').innerText)", 300000);
-    const sent = await A.pop.text('.modal .status');
-    check('A paid B\'s code', /^Sent 1 \w+ \([\d.]+ s\)\.$/.test(sent), `${sent} (${secs(ts)})`);
-    const bgot = await waitRow(B, FAUCET, (v) => v >= 100000000n, 180000);
-    check(`B's figure shows the ${FAUCET}`, bgot && BigInt(bgot.total) >= 100000000n, `${JSON.stringify(bgot)} ${secs(ts)} after Send`);
-    await A.pop.eval("document.querySelector('.modal')?.remove(); true");
-    await wordsCheck(B, 'paid');
+      // the faucet pays the code
+      await A.pop.click('[data-tab=receive]'); await sleep(500);
+      const tf = Date.now();
+      await A.pop.click(`#faucetBtns [data-faucet="${FAUCET}"]`);
+      await A.pop.waitFor("/Received|could not/.test(document.querySelector('#faucetStatus').innerText)", 180000);
+      const fs = await A.pop.text('#faucetStatus');
+      check('the faucet paid', /^Received /.test(fs), `${fs} (${secs(tf)})`);
+      const got = await waitRow(A, FAUCET, (v) => v > 0n, 180000);
+      check(`A's ${FAUCET} figure shows it`, got && BigInt(got.total) > 0n, `${JSON.stringify(got)} ${secs(tf)} after the click`);
+      await A.pop.click('[data-tab=balance]'); await sleep(1500);
+      await A.pop.shot(join(out, 'screens', 'A-after-faucet.png'));
 
-    // ---- one trade in the composer ----
-    await A.pop.click('[data-tab=trade]');
-    await A.pop.waitFor("!!document.querySelector('#ucPay')", 60000);
-    const pick = async (id, ticker) => {
-      const v = await A.pop.eval(`[...document.querySelectorAll('#${id} option')].find(o=>o.textContent===${JSON.stringify(ticker)})?.value`);
-      if (!v) return false;
-      await A.pop.set(id, v); await sleep(800); return true;
-    };
-    check(`You pay lists ${PAY}`, await pick('ucPay', PAY));
-    await A.pop.waitFor("!!document.querySelector('#ucGet')", 30000);
-    check(`You get lists ${GET}`, await pick('ucGet', GET));
-    await A.pop.set('ucAmount', process.env.TRADE_AMOUNT || '5');
-    const tq = Date.now();
-    await A.pop.click('#ucReview');
-    await A.pop.waitFor("!!document.querySelector('#ucConfirm') || /\\S/.test(document.querySelector('#ucNote').innerText) && !/Finding/.test(document.querySelector('#ucNote').innerText)", 300000);
-    const ticket = await A.pop.eval("(document.querySelector('#ucTicket')||{}).innerText + ' | ' + (document.querySelector('#ucNote')||{}).innerText");
-    note(`     ticket (${secs(tq)}): ${ticket.replace(/\n/g, ' | ')}`);
-    await A.pop.shot(join(out, 'screens', 'A-trade-ticket.png'));
-    if (await A.pop.eval("!!document.querySelector('#ucConfirm')")) {
-      const tc = Date.now();
-      await A.pop.click('#ucConfirm');
-      await A.pop.waitFor("!!document.querySelector('.uc-trade .uc-state') && !/Working/.test(document.querySelector('.uc-trade .uc-state').innerText)", 300000).catch(() => {});
-      const st = await A.pop.eval("[...document.querySelectorAll('.uc-trade')].map(d=>d.innerText.replace(/\\n/g,' ')).join(' ; ') + ' | ' + document.querySelector('#ucNote').innerText");
-      check('the trade was made', /Sent|Settled/.test(st), `${st} (${secs(tc)} after Trade)`);
-      for (let i = 0; i < 90 && !/Settled|Returned/.test(await A.pop.text('#ucTrades')); i++) await sleep(10000);
-      const fin = await A.pop.text('#ucTrades');
-      note(`     the trade after following it: ${fin.replace(/\n/g, ' | ')} (${secs(tc)} after Trade)`);
-      await A.pop.shot(join(out, 'screens', 'A-trade-after.png'));
-    } else check('the composer priced a trade', false, ticket);
-    const aRows = await rows(A);
-    note(`     A's figures: ${JSON.stringify(aRows)}`);
+      // A pays B's code
+      if (bcode) {
+      await A.pop.click('[data-tab=send]'); await sleep(1000);
+      await A.pop.set('sendDTo', bcode);
+      const hex = await A.pop.eval(`[...document.querySelectorAll('#sendDAsset option')].find(o=>o.textContent===${JSON.stringify(FAUCET)})?.value`);
+      await A.pop.set('sendDAsset', hex); await A.pop.set('sendDAmt', '1');
+      await A.pop.click('#btnDReview');
+      await A.pop.waitFor("!!document.querySelector('.modal') || /\\S/.test(document.querySelector('#sendDErr').innerText)", 120000);
+      const review = await A.pop.eval("(document.querySelector('.modal')||{}).innerText||document.querySelector('#sendDErr').innerText");
+      check('the review reads "Send 1 …?" "It arrives in seconds."', /Send 1 \w+\?/.test(review) && /It arrives in seconds\./.test(review), review.replace(/\n/g, ' | '));
+      await A.pop.shot(join(out, 'screens', 'A-send-review.png'));
+      if (await A.pop.eval("!!document.querySelector('.modal')")) {
+        const ts = Date.now();
+        await A.pop.eval("[...document.querySelectorAll('.modal button')].find(b=>b.textContent==='Send').click(), true");
+        await A.pop.waitFor("/Sent |declined|Part of|can't|up to|Failed|nothing/i.test(document.querySelector('.modal .status').innerText)", 300000);
+        const sent = await A.pop.text('.modal .status');
+        check('A paid B\'s code', /^Sent 1 \w+ \([\d.]+ s\)\.$/.test(sent), `${sent} (${secs(ts)})`);
+        await A.pop.shot(join(out, 'screens', 'A-sent.png'));
+        await A.pop.eval("document.querySelector('.modal')?.remove(); true");
+      }
+      }
+
+      // one trade in the composer
+      await A.pop.click('[data-tab=trade]');
+      await A.pop.waitFor("!!document.querySelector('#ucPay')", 60000);
+      const pick = async (id, ticker) => {
+        const v = await A.pop.eval(`[...document.querySelectorAll('#${id} option')].find(o=>o.textContent===${JSON.stringify(ticker)})?.value`);
+        if (!v) return false;
+        await A.pop.set(id, v); await sleep(800); return true;
+      };
+      check(`You pay lists ${PAY}`, await pick('ucPay', PAY));
+      await A.pop.waitFor("!!document.querySelector('#ucGet')", 30000);
+      check(`You get lists ${GET}`, await pick('ucGet', GET));
+      await A.pop.set('ucAmount', process.env.TRADE_AMOUNT || '5');
+      const tq = Date.now();
+      await A.pop.click('#ucReview');
+      await A.pop.waitFor("!!document.querySelector('#ucConfirm') || (/\\S/.test(document.querySelector('#ucNote').innerText) && !/Finding/.test(document.querySelector('#ucNote').innerText))", 900000);
+      const ticket = await A.pop.eval("(document.querySelector('#ucTicket')||{}).innerText + ' | ' + (document.querySelector('#ucNote')||{}).innerText");
+      note(`     ticket (${secs(tq)}): ${ticket.replace(/\n/g, ' | ')}`);
+      await A.pop.shot(join(out, 'screens', 'A-trade-ticket.png'));
+      if (await A.pop.eval("!!document.querySelector('#ucConfirm')")) {
+        const tc = Date.now();
+        await A.pop.click('#ucConfirm');
+        await A.pop.waitFor("!!document.querySelector('.uc-trade .uc-state') && !/Working/.test(document.querySelector('.uc-trade .uc-state').innerText)", 300000).catch(() => {});
+        const st = await A.pop.eval("[...document.querySelectorAll('.uc-trade')].map(d=>d.innerText.replace(/\\n/g,' ')).join(' ; ') + ' | ' + document.querySelector('#ucNote').innerText");
+        check('the trade was made', /Sent|Settled/.test(st), `${st} (${secs(tc)} after Trade)`);
+        for (let i = 0; i < 120 && !/Settled|Returned/.test(await A.pop.text('#ucTrades')); i++) await sleep(10000);
+        note(`     the trade after following it: ${(await A.pop.text('#ucTrades')).replace(/\n/g, ' | ')} (${secs(tc)} after Trade)`);
+        await A.pop.shot(join(out, 'screens', 'A-trade-after.png'));
+      } else check('the composer priced a trade', false, ticket);
+      await sleep(10000);
+      const aRows = await rows(A);
+      note(`     A's figures: ${JSON.stringify(aRows)}`);
+      return { a, aRows };
+    });
+
+    if (ONLY_A) { note(`${failures ? failures + ' FAILED' : 'all passed'}`); return; }
+    // ---- B again: paid; then Remove wallet, and a new wallet lists BTC alone ----
+    await session('B', async (B) => {
+      const t = await unlock(B);
+      const bgot = await waitRow(B, FAUCET, (v) => v >= 100000000n, 240000);
+      check(`B's figure shows the ${FAUCET} A sent`, bgot && BigInt(bgot.total) >= 100000000n, `${JSON.stringify(bgot)} ${secs(t)} after unlock`);
+      await wordsCheck(B, 'paid');
+      await B.pop.click('[data-tab=settings]'); await sleep(500);
+      await B.pop.set('removePw', 'drive-password');
+      await B.pop.click('#btnRemoveWallet');
+      await B.pop.waitFor("!document.querySelector('#vWelcome').classList.contains('hide')", 60000);
+      note(`     B after Remove wallet: ${JSON.stringify(await B.pop.ui('default.joined').catch((e) => ({ error: e.message })))}`);
+      const b2 = await create(B);
+      await joined(B, b2.t);
+      const b2rows = await rows(B);
+      check('after Remove wallet, a new wallet lists BTC alone at 0', Object.keys(b2rows).join() === 'BTC' && b2rows.BTC.total === '0', b2rows);
+      await B.pop.click('[data-tab=balance]'); await sleep(1000);
+      await B.pop.shot(join(out, 'screens', 'B2-after-remove.png'));
+    });
 
     // ---- C: A's phrase restored ----
-    const C = await open('C'); live.push(C);
-    const tr = await importPhrase(C, a.phrase);
-    const jc = await joined(C, tr);
-    check('C (A\'s phrase) joined by itself', jc.joined && jc.open, jc);
-    let cRows = {};
-    for (let i = 0; i < 60; i++) {
-      cRows = await rows(C);
-      if (Object.keys(aRows).every((k) => cRows[k] && cRows[k].total === aRows[k].total)) break;
-      await sleep(3000);
-    }
-    check('the restore shows A\'s figures', Object.keys(aRows).every((k) => cRows[k] && cRows[k].total === aRows[k].total), { A: aRows, C: cRows, after: secs(tr) });
-    await C.pop.click('[data-tab=balance]'); await sleep(1000);
-    await C.pop.shot(join(out, 'screens', 'C-restored.png'));
-
-    // ---- Remove wallet in B; a new wallet shows BTC alone ----
-    await B.pop.click('[data-tab=settings]'); await sleep(500);
-    await B.pop.set('removePw', 'drive-password');
-    await B.pop.click('#btnRemoveWallet');
-    await B.pop.waitFor("!document.querySelector('#vWelcome').classList.contains('hide')", 60000);
-    const hostAfter = await B.pop.ui('default.joined').catch((e) => ({ error: e.message }));
-    note(`     B after Remove wallet: ${JSON.stringify(hostAfter)}`);
-    const b2 = await create(B);
-    await sleep(15000);
-    const b2rows = await rows(B);
-    check('after Remove wallet, a new wallet lists BTC alone at 0', Object.keys(b2rows).join() === 'BTC' && b2rows.BTC.total === '0', b2rows);
-    note(`     B2 created ${secs(b2.t)} ago`);
-
-    // ---- the service worker's console ----
-    for (const w of live) check(`${w.label}: no error or exception in the extension's contexts`, !w.b.problems.length, w.b.problems.slice(0, 10));
-  } finally {
-    for (const w of live) await w.b.close().catch(() => {});
+    await session('C', async (C) => {
+      const tr = await importPhrase(C, a.phrase);
+      const jc = await joined(C, tr);
+      check('C (A\'s phrase) joined by itself', jc.joined && jc.open, jc);
+      const same = (c) => Object.keys(aRows).every((k) => c[k] && c[k].total === aRows[k].total);
+      let cRows = {};
+      for (let i = 0; i < 60; i++) { cRows = await rows(C); if (same(cRows)) break; await sleep(3000); }
+      check('the restore shows A\'s figures', same(cRows), { A: aRows, C: cRows, after: secs(tr) });
+      await C.pop.click('[data-tab=balance]'); await sleep(1000);
+      await C.pop.shot(join(out, 'screens', 'C-restored.png'));
+    });
     note(`${failures ? failures + ' FAILED' : 'all passed'}`);
+  } finally {
+    if (current) await current.b.close().catch(() => {});
     rmSync(work, { recursive: true, force: true });
   }
   process.exit(failures ? 1 : 0);
 }
-main().catch((e) => { note('drive error: ' + (e && e.stack || e)); process.exit(1); });
+main().catch((e) => { note('drive error: ' + (e && e.stack || e)); note('FAILED'); process.exit(1); });

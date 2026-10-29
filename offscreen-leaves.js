@@ -150,7 +150,10 @@ function holdsSupervised() {
 }
 const SCAN_BUSY = /Scan already in progress/;
 const READS = new Set(['info', 'address', 'balance', 'coins', 'record', 'boards', 'participations', 'schedule', 'refusals', 'quote', 'board_quote', 'exit_quote',
-  'take_quote', 'order_quote', 'orders', 'plans', 'claims', 'distributions']);
+  'take_quote', 'order_quote', 'orders', 'plans', 'claims', 'distributions',
+  // The trade composer's quotes and reads (vendor/user-trade.js): they move no coin.
+  'settle_quote', 'order_fill_resting_quote', 'swap_read', 'swaps', 'offboard_quote',
+  'lightning_pay_quote', 'lightning_receive_quote', 'lightning_payments', 'lightning_receives']);
 
 // The takes the service worker asked the host to watch (`watch`): while one waits on
 // the wallet (its forfeits not yet handed over), the host syncs every `watchMs`, so
