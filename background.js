@@ -30,6 +30,11 @@ import * as leafResting from './src/leaf-resting.js';
 import * as market from './src/market.js';
 import { takeRecords, updateTake } from './src/leaf-orders.js';
 import { MODE_WORDS, walletTag as walletTagNow } from './src/mode.js';
+import { createErrorLog, refusal as reportRefusal } from './vendor/problem-report.js';
+
+// The service worker's recent errors, scrubbed, for Report a problem (popup).
+const workerErrors = createErrorLog();
+workerErrors.install(self, console);
 import {
   vaultExists, vaultCreate, vaultUnlock, vaultLock, vaultDestroy, sessionMnemonic,
   armAutoLock, touchAutoLock,
@@ -551,6 +556,14 @@ const uiMethods = {
   'lnClose': async ({ kind }) => await ln.closeToChain({ kind }),
   // --- the wallet's mode, and leaves (developer mode) ---
   'getMode': async () => ({ mode: await leaves.mode(), words: MODE_WORDS }),
+  // Report a problem: what the popup adds to a report, and the phrase check, made here
+  // because only the unlocked worker holds the phrase. Neither answer carries it.
+  'reportContext': async () => {
+    let address = '';
+    try { await engine.ensureOpen(); address = engine.currentAddress(false).address; } catch {}
+    return { errors: workerErrors.list(), mode: await leaves.mode(), address };
+  },
+  'reportCheck': async ({ report }) => ({ refusal: reportRefusal(report || {}, await sessionMnemonic()) }),
   // --- default mode (src/default-mode.js) ---
   'default.receiveCode': async ({ sats, fresh }) => await dm.receiveCode({ sats, fresh }),
   'default.invoiceReceived': async ({ hash }) => await dm.invoiceReceived(hash),
