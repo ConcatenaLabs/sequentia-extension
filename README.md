@@ -43,7 +43,8 @@ confidential `tsqb1…` addresses are an explicit opt-in).
   from the ark first. Trade is the web wallet's composer: the pair's market (last
   price, a 1D/1W/1M chart, the best bid and ask, recent trades) above You pay and
   You receive, each a searchable asset chooser with your assets first, and an amount
-  on either side that shows the other. While the wallet has not joined yet,
+  on either side that shows the other. Every asset menu (Send's asset, the fee asset,
+  Lightning's, restricted assets', the reward conversion's) is the same chooser. While the wallet has not joined yet,
   Receive shows the address, and the code takes its place on the open screen once
   it can. Settings → Remove wallet closes the wallet's leaf and ark wallets
   before it removes the vault, so a wallet made next shows none of their coins.
