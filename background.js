@@ -26,6 +26,7 @@ import * as leaves from './src/leaves.js';
 import * as dm from './src/default-mode.js';
 import { issuerAssets } from './src/leaf-profiles.js';
 import * as leafTrade from './src/leaf-trade.js';
+import * as siteTrade from './src/site-trade.js';
 import * as leafResting from './src/leaf-resting.js';
 import * as market from './src/market.js';
 import { takeRecords, updateTake } from './src/leaf-orders.js';
@@ -600,6 +601,9 @@ const uiMethods = {
   'setMode': async ({ mode }) => {
     const m = await leaves.setMode(mode);
     emitToTabs('modeChanged', { mode: m }, null).catch(() => {});
+    // Told to the leaf host at once, open or still starting: a join under way read the mode
+    // before this change and must not board coins after it.
+    if (m === 'developer') { const st = await leaves.modeStamp(); leaves.tellDefaults(false, st.at).catch(() => {}); }
     dm.autoJoin().then(() => leaves.ensureRunning()).then(() => dm.syncDefaults()).catch(() => {});
     return { mode: m };
   },
@@ -699,6 +703,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     } else if (msg.event === 'leafSynced') {
       leafTrade.progressOrders().catch(() => {});
       leafResting.progressResting().catch(() => {});
+      siteTrade.follow().catch(() => {});
     }
     return false;
   }

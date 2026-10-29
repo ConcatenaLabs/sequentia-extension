@@ -69,7 +69,11 @@ confidential `tsqb1…` addresses are an explicit opt-in).
   builds and checks it, the approval window shows the template, the path, the
   parameters, every input and the wallet's balance change, and the wallet
   signs only what it showed.
-  Protocol spec: [doc/PROVIDER.md](doc/PROVIDER.md).
+  In user mode a site's orders (`placeOrder`) are settled as the Trade tab
+  settles a trade, from the wallet's leaves, and `getBalances` counts the leaves.
+  Protocol spec: [doc/PROVIDER.md](doc/PROVIDER.md); how a wallet that is not
+  injected into the page (the web wallet in another tab, a wallet on a phone)
+  serves the same protocol: [doc/PAIRING.md](doc/PAIRING.md).
 - **Report a problem** — at the top of Settings: what happened, an optional
   Emissio account code to be credited, and the address only when ticked. The
   report carries the extension's version, the mode and the recent errors of the
@@ -443,9 +447,11 @@ vendor/                modules copied from sequentia-web-wallet (btc.js,
                        default-arca.js, pay-code.js, btc-ark.js,
                        user-trade.js, user-trade-btc.js, user-composer.js,
                        problem-report.js,
+                       site-orders.js,
                        tooling/lsp/ single-step book and settlement router)
 pkg/                   SWK lwk_wasm build (committed)
 doc/PROVIDER.md        the website provider protocol
+doc/PAIRING.md         the same protocol over a channel or a relay
 ```
 
 Part of the Sequentia testnet ecosystem: https://sequentiatestnet.com
