@@ -158,8 +158,10 @@ async function main() {
   // One form, one button: fills the form as a user does and clicks it.
   async function trade(b, p, { type, side, amount, price }, name, expect) {
     await p.click('#type-' + type); await p.click('#side-' + side);
-    await p.set('fAmount', amount);
+    // The price first: You pay and You receive follow it. A sale pays the base, a purchase
+    // receives it.
     if (price != null) await p.set('fPrice', price);
+    await p.set(side === 'sell' ? 'fPay' : 'fReceive', amount);
     await p.eval("document.querySelector('#fStatus').textContent=''");
     await shot(p, `${b.name}-form-${name}`);
     await p.click('#fGo');
