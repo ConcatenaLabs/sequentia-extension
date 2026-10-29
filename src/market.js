@@ -212,8 +212,10 @@ const restsFor = (secs) => {
 async function prepareChain(origin, { type, base, quote, side, amount, price, opts = P.readOrderOptions({}, type) }) {
   const receive = side === 'buy' ? base : quote, payAsset = side === 'buy' ? quote : base;
   const all = await marketOffers(base, quote);
+  // Only the orders SeqDEX's book lists: covenant orders, and orders resting in the joined
+  // operator's tree. An interactive maker's offer is not listed there, so it is not taken here:
+  // a person is never sent to a price the book did not show them.
   const covs = all.filter((o) => P.covenantQuote(o, receive, payAsset));
-  const inters = all.filter((o) => P.interactiveQuote(o, receive, payAsset));
   // An order resting in the joined operator's tree, when it is where the best price
   // is, is filled from leaves: no on-chain coin moves.
   const leaf = await prepareResting(origin, { type, base, quote, side, amount, price, all, covs, receive, payAsset });
@@ -222,8 +224,8 @@ async function prepareChain(origin, { type, base, quote, side, amount, price, op
   // Coins are chosen from a scan begun now: one begun before the wallet's last trade
   // landed can still show a coin that trade spent.
   await engine.syncFresh();
-  const offers = [...await withChainAmounts(covs), ...inters];
-  const plan = P.planTrade({ offers, base, quote, side, amount, price, basePrecision: prec(base), interactive: true });
+  const offers = await withChainAmounts(covs);
+  const plan = P.planTrade({ offers, base, quote, side, amount, price, basePrecision: prec(base) });
   if (opts.postOnly && plan.slices.length) throw new Error(WOULD_TRADE);
   const rest = type === 'limit' && opts.rest
     ? P.withMinFill(P.restTerms({ base, quote, side, baseLeft: plan.baseLeft, price, basePrecision: prec(base) }), opts.minFill, { side, price, basePrecision: prec(base) })
@@ -274,7 +276,7 @@ async function prepareChain(origin, { type, base, quote, side, amount, price, op
   const display = {
     text,
     rows,
-    detail: (nOrders ? 'Each order is taken in one transaction that pays its maker and this wallet together, or does nothing. ' : '')
+    detail: (nOrders ? 'Each order is taken in one transaction that pays its maker and this wallet together, or does nothing; one that cannot be taken is replaced by the next order the book lists at these prices or better, for no more than shown. ' : '')
       + 'Every fee is paid in ' + tick(pay) + '.',
   };
 
@@ -295,10 +297,13 @@ async function prepareChain(origin, { type, base, quote, side, amount, price, op
         trade.fills.push({ ok: false, offer_id: s.offerId, error: String((e && e.message) || e) });
       }
     }
+    // An order that failed when taken leaves its part to the next orders the book lists, at
+    // the approved prices or better, for no more than was approved.
+    const fell = await fallThroughFills({ trade, plan, type, side, base, quote, price, receive, pay, fillFee });
     const done = trade.fills.filter((f) => f.ok);
     if (rest) {
       if (trade.fills.length) await engine.syncFresh().catch(() => {});
-      try { trade.order = (await placeRest(origin, { base, quote, side, price, baseLeft: plan.baseLeft + leftFromFailed(trade.fills, plan, side), opts }, rest, done.length !== trade.fills.length)).id; }
+      try { trade.order = (await placeRest(origin, { base, quote, side, price, baseLeft: plan.baseLeft + leftFromFailed(trade.fills, plan, side) - fell, opts }, rest, done.length !== trade.fills.length)).id; }
       catch (e) { trade.order_error = String((e && e.message) || e); }
     }
     if (done.length || trade.order) await R.rememberTrade(trade);
@@ -362,6 +367,45 @@ async function prepareResting(origin, { type, base, quote, side, amount, price, 
       ...(r.moved_from ? { moved_from: r.moved_from } : {}) };
   };
   return { display, exec };
+}
+
+// The orders taken in place of those that failed: re-planned from the book (the orders not yet
+// tried), at the approved worst price or better (a limit order's own price), giving no more than
+// the failed ones would have and taking no more orders than were approved. Two passes at most.
+// -> the base atoms they filled.
+async function fallThroughFills({ trade, plan, type, side, base, quote, price, receive, pay, fillFee }) {
+  let left = leftFromFailed(trade.fills, plan, side);
+  if (left <= 0n) return 0n;
+  const tried = new Set(trade.fills.map((f) => f.offer_id));
+  // A market order gives no more than the failed orders would have; a limit order no more than
+  // its price for the part they left, which is what its rest would hold.
+  let budget = type === 'limit' && side === 'buy'
+    ? (left * big(price) + 10n ** BigInt(prec(base)) - 1n) / 10n ** BigInt(prec(base))
+    : plan.slices.filter((s) => trade.fills.some((f) => !f.ok && f.offer_id === s.offerId)).reduce((a, s) => a + s.pays, 0n);
+  let room = plan.slices.length - trade.fills.filter((f) => f.ok).length;
+  const bound = type === 'limit' ? big(price) : P.worstPrice(plan, side, prec(base));
+  if (bound == null) return 0n;
+  let fell = 0n;
+  for (let pass = 0; pass < 2 && left > 0n && room > 0 && budget > 0n; pass++) {
+    await engine.syncFresh().catch(() => {});
+    const offers = await withChainAmounts((await marketOffers(base, quote)).filter((o) => P.covenantQuote(o, receive, pay)));
+    const fp = P.fallThrough({ offers, tried, base, quote, side, amount: left, price: bound, basePrecision: prec(base), budget, maxSlices: room });
+    if (!fp.slices.length) break;
+    for (const s of fp.slices) {
+      tried.add(s.offerId);
+      try {
+        planFillFromMatched(synthOf(s), s.offer._spk, { makerCancellableOK: true });
+        await engine.syncFresh();
+        const r = await fillOne(s, pay, fillFee);
+        trade.fills.push({ ok: true, txid: r.txid, offer_id: s.offerId, pair: s.offer.pair, filled: s.filled.toString(), pays: s.pays.toString(), in_place_of_failed: true });
+        const b = side === 'buy' ? s.filled : s.pays;
+        left -= b; fell += b; budget -= s.pays; room -= 1;
+      } catch (e) {
+        trade.fills.push({ ok: false, offer_id: s.offerId, error: String((e && e.message) || e), in_place_of_failed: true });
+      }
+    }
+  }
+  return fell;
 }
 
 // What a fill that failed did not take, in base atoms, so a limit order's rest covers it.
@@ -564,7 +608,13 @@ function answerTrade(t, plan) {
     failed: t.fills.filter((f) => !f.ok).map((f) => f.error),
     order: t.order || null,
     order_error: t.order_error || null,
-    ...(plan ? { gave: plan.gave.toString(), got: plan.got.toString() } : {}),
+    // What the fills that went through gave and got (an order taken in place of a failed one
+    // included); the plan's figures where no fill says.
+    ...(plan ? (() => {
+      const ok = t.fills.filter((f) => f.ok && f.pays != null && f.filled != null);
+      return ok.length ? { gave: ok.reduce((a, f) => a + big(f.pays), 0n).toString(), got: ok.reduce((a, f) => a + big(f.filled), 0n).toString() }
+        : { gave: plan.gave.toString(), got: plan.got.toString() };
+    })() : {}),
   };
 }
 

@@ -220,9 +220,10 @@ token (already public in sequentia-web-wallet) — not a secret.
   headless Chromium: `CHROME=… SEQUENTIAD=… SEQOBD=… SEQDEX_WEB=… node
   test/market/drive.mjs <evidence-dir> <work-dir>` (README, Development). The orders
   (`src/market.js`, planned by `src/market-plan.js`, records in `src/market-orders.js`)
-  take interactive makers' offers too, through `dex.liftSameChain` (the maker
-  co-signs; the fill's standing comes from the relay's `/fills`, like a covenant
-  fill's), and read what a covenant order holds from the chain, never from the relay's listing,
+  take only what SeqDEX's book lists (covenant orders, and orders resting in the joined
+  operator's tree), never an interactive maker's offer, and replace an order that fails
+  when taken with the next listed one inside the approval (`fallThrough` in
+  `src/market-plan.js`); they read what a covenant order holds from the chain, never from the relay's listing,
   and build every spend after a scan begun after the wallet's own last broadcast
   (`engine.syncFresh`). Maker credits arrive at BIP86 payouts the main wollet does not
   track: a second wollet over `covenantMakerDescriptor` watches them once the wallet

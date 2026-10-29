@@ -1049,11 +1049,11 @@ same way.
   a decimal string; the limit order trades at that price or better and rests the
   rest exactly at it.
 
-Between two Sequentia assets the orders taken are the on-chain book's covenant orders
-and its interactive makers' offers, cheapest first, each in one transaction that pays
-its maker and the wallet together: a covenant order with no maker online, an
-interactive maker's with the maker co-signing over the relay, the wallet checking that
-transaction against its own half before signing. Either way the wallet receives at its
+Between two Sequentia assets the orders taken are the ones SeqDEX's book lists: the
+on-chain book's covenant orders (and, with an operator joined, orders resting in its tree,
+above), cheapest first, each in one transaction that pays its maker and the wallet
+together, with no maker online. An interactive maker's offer is not listed on the book,
+so `placeOrder` does not take it; a site's room takes one with `dexFillOnchain`. The wallet receives at its
 usual address, in the clear; a balance held at a blinded address is first moved to it
 in one transfer, as part of the trade. A market order goes no further than 5% past the
 best order on the book and takes at most six orders; what the book does not reach near the best price is not traded, and
@@ -1061,8 +1061,11 @@ the approval says so. The approval lists what is given, what is got (now, and la
 as others fill a resting order), the fees, and the resting order with when it can be
 taken back, each amount also in the reference currency. Returns
 `{ trade, filled, failed, order, order_error, gave, got }`: `filled` is how many orders
-were taken (an order taken by someone else first is skipped, its error in `failed`, and
-nothing of the wallet moves for it), `order` the id of the order left resting or
+were taken (an order that cannot be taken, say taken by someone else first, is skipped,
+its error in `failed`, and nothing of the wallet moves for it; the next orders the book
+lists take its place, at the worst price approved or better (a limit order's own price),
+for no more than the approval gave for it and in no more orders than it showed), `gave`
+and `got` what the orders taken gave and got, `order` the id of the order left resting or
 `null`. Refused before any approval: an unknown or unpriced asset, a market with
 nothing to take, a limit order with no price, an amount and price too large to rest
 together, a balance short of the trade and its fees, and a trade against BTC the

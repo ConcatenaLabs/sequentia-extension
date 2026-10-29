@@ -276,3 +276,28 @@ test('min_fill becomes the resting order\'s smallest lot, at the price for a pur
   assert.equal(withMinFill(buy, 25000000n, { side: 'buy', price: 3800n * 10n ** 8n, basePrecision: 8 }).minLot, 950n * 10n ** 8n);
   assert.throws(() => withMinFill(sell, 3n * 10n ** 8n, { side: 'sell', price: 1n, basePrecision: 8 }), /smallest fill is more than the order/);
 });
+
+test('a failed order is replaced only within the approved price, budget and count', async () => {
+  const { worstPrice, fallThrough } = await import('../src/market-plan.js');
+  // Asks at 1.00, 1.01 and 1.03 U per G (atoms for atoms).
+  const a = cov(G, U, 100000, 100, 100), b = cov(G, U, 100000, 101, 100), c = cov(G, U, 100000, 103, 100);
+  const plan = planTrade({ offers: [a, b, c], base: G, quote: U, side: 'buy', amount: 150000, basePrecision: 8 });
+  assert.deepEqual(plan.slices.map((s) => s.offerId), [a.offer_id, b.offer_id]);
+  const worst = worstPrice(plan, 'buy', 8);
+  assert.equal(worst, 101000000n);   // 1.01 U per G, in U atoms per whole G
+  // a failed: its 100000 G go to the orders not tried, at 1.01 or better: none (b was tried, c is worse).
+  const tried = new Set(plan.slices.map((s) => s.offerId));
+  const args = { tried, base: G, quote: U, side: 'buy', amount: 100000n, price: worst, basePrecision: 8 };
+  assert.equal(fallThrough({ ...args, offers: [a, b, c], budget: 100000n, maxSlices: 1 }).slices.length, 0);
+  // Another ask at 1.00 appears: it takes a's place, for the same pay.
+  const d = cov(G, U, 100000, 100, 100);
+  const one = fallThrough({ ...args, offers: [a, b, c, d], budget: 100000n, maxSlices: 1 });
+  assert.deepEqual(one.slices.map((s) => [s.offerId, s.filled, s.pays]), [[d.offer_id, 100000n, 100000n]]);
+  // Never past the budget, nor the count.
+  assert.equal(fallThrough({ ...args, offers: [d], budget: 99999n, maxSlices: 1 }).slices.length, 0);
+  assert.equal(fallThrough({ ...args, offers: [d], budget: 100000n, maxSlices: 0 }).slices.length, 0);
+  // A sale's worst is its lowest: bids at 1.00 and 0.99 U per G.
+  const bids = planTrade({ offers: [cov(U, G, 100000, 1, 1), cov(U, G, 100000, 100, 99)], base: G, quote: U, side: 'sell', amount: 150000, basePrecision: 8 });
+  const ws = worstPrice(bids, 'sell', 8);
+  assert.ok(ws <= 99000000n && ws > 98900000n, String(ws));
+});
