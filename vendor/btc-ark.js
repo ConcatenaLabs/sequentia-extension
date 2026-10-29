@@ -46,6 +46,8 @@ export const BTC_WORDS = Object.freeze({
   paying: 'Paying…',
   paid: (amount, fee) => `Paid ✓ ${amount} BTC · fee ${fee} BTC`,
   payUpTo: (amount) => `You can pay up to ${amount} BTC this way now.`,
+  payHint: 'Paste an invoice',
+  notBtc: (ticker) => `This invoice asks for ${ticker}. Only invoices for BTC are paid here.`,
 })
 
 // How long a worker request may take before the page stops waiting on it (a payment waits for
@@ -56,6 +58,11 @@ export const PAY_TIMEOUT_MS = 180_000
 // how often the wallet is asked to sync with its server and the chain besides its daemon.
 export const REFRESH_MS = 3_000
 export const SYNC_MS = 30_000
+// How often the wallet asks its server what the phrase's other wallets did (`catch_up`: the coins
+// they made or received, a board once its wallet has registered it, and the coins of this store
+// they spent), besides once at each open. A browser that opened the phrase before another one
+// boarded or was paid learns of it this way.
+export const CATCH_UP_MS = 5 * 60_000
 // The least a board leaves the on-chain fee and the ark's board fee, over the ark's own least.
 export const BOARD_MARGIN_SATS = 1_000n
 // testnet4's fee floor for the board's funding (sat/vB).
@@ -158,6 +165,33 @@ export function mountBtcArk ({ makeWorker, mnemonic, config, decode, onChange = 
   }
   const run = (command, args = {}, timeout) => call('run', { command, args }, timeout)
 
+  // The other wallets of the phrase, caught up from the server; the figure follows.
+  function catchUp () {
+    const t0 = now()
+    return run('catch_up', {}, PAY_TIMEOUT_MS)
+      .then((r) => {
+        const got = (r && r.recovered) || [], gone = (r && r.spent_elsewhere) || []
+        log('[btc ark] caught up in', now() - t0, 'ms:', got.length, 'coin(s) taken in (', (r && r.recovered_sat) || '0', 'sat),', gone.length, 'spent elsewhere')
+        return refresh()
+      })
+      .catch((e) => log('[btc ark] catch up:', e && e.message))
+  }
+
+  // Bark's own refresh of the coins that are due (`refresh`: the wallet's coins near their
+  // expiry, renewed in the server's next round). A coin left past its expiry is swept by the
+  // server's watchman and nothing repays it, so the wallet renews its coins by itself: when it
+  // opens, and after each sync. One at a time; nothing is renewed when nothing is due.
+  let renewing = null
+  function renewDue () {
+    if (!isOpen || renewing) return renewing || Promise.resolve(null)
+    const t0 = now()
+    renewing = run('refresh', {}, PAY_TIMEOUT_MS)
+      .then((r) => { if (r && r.refreshed) { log('[btc ark] renewed', r.refreshed, 'coin(s) near their expiry in', now() - t0, 'ms'); return refresh().then(() => r) } return r })
+      .catch((e) => { log('[btc ark] renewing coins near their expiry:', e && e.message); return null })
+      .finally(() => { renewing = null })
+    return renewing
+  }
+
   async function refresh () {
     if (!isOpen) return figures
     const b = await run('balance')
@@ -178,10 +212,12 @@ export function mountBtcArk ({ makeWorker, mnemonic, config, decode, onChange = 
         info = await run('info')
         await refresh()
         log('[btc ark] open in', now() - t0, 'ms')
+        catchUp().then(() => renewDue())
         if (!timer) {
-          let lastSync = now()
+          let lastSync = now(), lastCatchUp = now()
           timer = setInterval(() => {
-            if (now() - lastSync >= SYNC_MS) { lastSync = now(); run('sync').then(() => refresh()).catch(() => {}) } else refresh().catch(() => {})
+            if (now() - lastCatchUp >= CATCH_UP_MS) { lastCatchUp = now(); catchUp() }
+            else if (now() - lastSync >= SYNC_MS) { lastSync = now(); run('sync').then(() => refresh()).then(() => renewDue()).catch(() => {}) } else refresh().catch(() => {})
           }, REFRESH_MS)
         }
         return true
@@ -318,7 +354,7 @@ export function mountBtcArk ({ makeWorker, mnemonic, config, decode, onChange = 
   }
 
   return {
-    open, isOpen: () => isOpen, refresh, figures: () => figures, info: () => info,
+    open, isOpen: () => isOpen, refresh, renewDue, figures: () => figures, info: () => info,
     route: (to) => routeOf(to, decode), quote, send, board, invoice, received, lightning, run,
     close () { if (timer) clearInterval(timer); timer = null; if (worker) worker.terminate(); worker = null; isOpen = false; opened = null },
   }

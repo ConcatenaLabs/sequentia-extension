@@ -20,7 +20,7 @@ import { ARCA, FAUCET_URL } from './config.js';
 import { stGet, stSet, parseAtoms, fmtAtoms } from './util.js';
 import { ensureOffscreen, offscreenUp } from './offscreen-doc.js';
 import { sessionMnemonic } from './vault.js';
-import { mode, walletTag } from './mode.js';
+import { mode, walletTag, modeStamp } from './mode.js';
 import * as leaves from './leaves.js';
 import * as engine from './engine.js';
 import * as A from './assets.js';
@@ -134,8 +134,9 @@ export async function autoJoin() {
 }
 // Tells the leaf host whether default mode's upkeep runs (boarding, the mailbox read).
 export async function syncDefaults() {
-  const on = (await isDefault()) && !!(await leaves.config());
-  await leaves.hostOp('defaults', { on }).catch(() => {});
+  const st = await modeStamp();
+  const on = st.mode === 'user' && !!(await leaves.config());
+  await leaves.hostOp('defaults', { on, at: st.at }).catch(() => {});
   return on;
 }
 

@@ -244,6 +244,17 @@ export function btcTrades ({ run, deps, put, log, now, settleStep, maxFeePpm, fi
     }
     if (rec.state === 'sent' && !rec.preimage) {
       let st = await B().payStatus(rec.hash).catch(() => ({ state: 'none' }))
+      // The asset is final only after Bitcoin blocks, which can outlast the maker's invoice: one
+      // that runs out soon is renewed by the maker under the same hash, for the same amount, on no
+      // longer a lock or a higher fee, or the trade comes back with nothing paid.
+      if (st.state === 'none') {
+        const fresh = await freshInvoice(rec)
+        if (!fresh) {
+          release(rec.maker, rec.swap)
+          rec.state = 'returned'; rec.returnedAt = now(); rec.why = 'the maker\'s invoice ran out while the trade waited'; rec.whyKind = 'lapsed'
+          return put(rec)
+        }
+      }
       if (st.state === 'none') st = await B().pay({ invoice: rec.invoiceBtc, maxFeeSats: big(rec.routeFee), maxDelay: Number(rec.routeDelay || rec.minFinalCltv || 18) + EXTRA_BLOCKS })
       if (st.state === 'failed') {
         // Nothing was paid: the leaf stays unclaimed and goes back to the maker.
@@ -263,6 +274,27 @@ export function btcTrades ({ run, deps, put, log, now, settleStep, maxFeePpm, fi
       if ((await settleStep(rec)) === 'settled') { rec.state = 'settled'; rec.settledAt = now() }
     }
     return put(rec)
+  }
+
+  // The maker's invoice for a purchase, renewed when it runs out within INVOICE_LEFT_SECONDS: the
+  // same hash and amount, a lock and fee no greater than the trade allowed. -> true when it can be
+  // paid now, false when it cannot (the maker gives no new one, or not one like it).
+  async function freshInvoice (rec) {
+    const left = async (inv) => { const d = await B().decode(inv); return { d, left: d.expires_at - now() / 1000 } }
+    let cur
+    try { cur = await left(rec.invoiceBtc) } catch { return false }
+    if (cur.left >= INVOICE_LEFT_SECONDS) return true
+    let o
+    try { o = await post(rec.maker + '/v1/btc/invoice', { swap: rec.swap }) } catch (e) { log('[user trade] the maker gave no new invoice:', e.message); return false }
+    let n
+    try { n = await left(o.invoice) } catch { return false }
+    if (n.d.payment_hash !== rec.hash || big(n.d.sats) !== big(rec.sats) || n.left < INVOICE_LEFT_SECONDS ||
+        Number(n.d.min_final_cltv || 18) > Number(rec.minFinalCltv || 18)) { log('[user trade] the maker\'s new invoice is not the trade\'s'); return false }
+    const rt = B().payRoute ? await B().payRoute(o.invoice).catch(() => null) : null
+    if (rt && (big(rt.fee) > big(rec.routeFee) || Number(rt.delay) > Number(rec.routeDelay || rec.minFinalCltv || 18))) { log('[user trade] the new invoice\'s route costs more than the trade allowed'); return false }
+    rec.invoiceBtc = o.invoice; put(rec)
+    log('[user trade] the maker renewed its invoice for', rec.swap)
+    return true
   }
 
   return { firm, confirm, advance, release }

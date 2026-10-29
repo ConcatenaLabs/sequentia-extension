@@ -168,3 +168,12 @@ export function careSummary(answer) {
     later: Number(a.not_yet_planned || 0),
   };
 }
+
+// Default mode's upkeep, as the host keeps it: the newer of what it has and what it is told,
+// by when the mode each was read from was set (`at`, ms; 0 for a mode never set). A tie takes
+// what it is told. -> { on, at }
+export function laterMode(cur, on, at) {
+  const t = Number.isFinite(Number(at)) ? Number(at) : 0;
+  if (t < cur.at) return cur;
+  return { on: !!on, at: t };
+}

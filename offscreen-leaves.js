@@ -69,7 +69,7 @@
 //        while nothing is asked, so a payment to the receive code shows at once
 // The mnemonic is handed to the worker and not kept here.
 
-import { inFlight, nextAskMs, freshRequestWaits, syncDecision, careDue, careSummary, careArgs, payThrough, CARE_EVERY_MS } from './src/leaf-schedule.js';
+import { inFlight, nextAskMs, freshRequestWaits, syncDecision, careDue, careSummary, careArgs, payThrough, CARE_EVERY_MS, laterMode } from './src/leaf-schedule.js';
 import { frozenAtoms } from './src/leaf-profiles.js';
 import { boardCandidates, boardAll } from './vendor/default-arca.js';
 
@@ -80,7 +80,7 @@ const pending = new Map();
 let failed = null;
 const S = { open: false, fp: null, timer: null, heldFor: null, schedule: null, coins: [], participations: [], lastSync: null, lastError: null, tickMs: TICK_MS,
   watch: new Set(), watchMs: 3000, seen: new Map(), scan: null, careAt: null, careMs: CARE_EVERY_MS, lastCare: null, releasing: null, bond: null, lastWatch: null,
-  defaultMode: false, quietUntil: 0, lastAsked: 0, info: null, boardRefused: new Map(), lastBoard: null, mailTimer: null };
+  defaultMode: false, defaultModeAt: -1, quietUntil: 0, lastAsked: 0, info: null, boardRefused: new Map(), lastBoard: null, mailTimer: null };
 
 function errorOf(e) {
   if (e && typeof e === 'object' && e.message) {
@@ -253,9 +253,32 @@ const MAILBOX_QUIET_MS = 20_000;
 // smallest leaf, is boarded whole less its fee (vendor/default-arca.js boardAll: the fee the
 // library quoted for that very board, in the asset boarded). Coins the library refused to
 // board are asked again only once they change.
+// The leaf wallet finds its on-chain coins by a gap of 20 unused keys past the last key it handed
+// out or saw holding an UNSPENT coin, where the kit wallet finds them by a gap past the last key
+// with any history: a coin at a key past the leaf wallet's window (keys used and spent before it
+// looked) is shown in the balance and never boarded. So the leaf wallet is handed keys (`address`,
+// each the next key) until its window covers every key the kit wallet handed out (`S.scan`, the
+// receive index and 20 more), once per key, remembered per wallet in this document's storage.
+async function coverReceiveKeys() {
+  const want = Number(S.scan || 0) - 20;
+  if (!(want > 0) || !S.fp) return 0;
+  const key = 'ext.leaves.window.' + S.fp;
+  let had = 0;
+  try { had = Number(localStorage.getItem(key) || 0); } catch {}
+  let n = 0;
+  for (let i = had; i < want; i++) {
+    try { await call('run', { command: 'address' }); } catch (e) { console.warn('[leaves] handing the leaf wallet its keys:', e && e.message); break; }
+    n++;
+    try { localStorage.setItem(key, String(i + 1)); } catch {}
+  }
+  if (n) console.info(`[leaves] the leaf wallet reads its on-chain coins up to key ${had + n + 20} now (${n} key(s) handed to it)`);
+  return n;
+}
+
 async function boardArrivals() {
   if (!S.open || !S.defaultMode || Date.now() < S.quietUntil) return;
   if (!S.info) { try { S.info = (await call('run', { command: 'info' })).result; } catch { return; } }
+  await coverReceiveKeys();
   let balance;
   try { balance = (await call('run', { command: 'balance' })).result; } catch { return; }
   let boarded = false;
@@ -373,6 +396,15 @@ async function runCommand(command, cargs) {
   }
 }
 
+// Default mode's upkeep follows the mode set last: each message carries when the mode it was read
+// from was set, and an older one than the host already has is ignored (a start that read the
+// mode before the person changed it arrives after the change).
+function setDefaultMode(on, at) {
+  const v = laterMode({ on: S.defaultMode, at: S.defaultModeAt }, on, at);
+  S.defaultMode = v.on;
+  S.defaultModeAt = v.at;
+}
+
 // Starts run one at a time, so two at once open the wallet once.
 let starting = Promise.resolve();
 
@@ -381,7 +413,7 @@ async function start(args) {
   if (args.tickMs) S.tickMs = Number(args.tickMs);
   if (args.careMs) S.careMs = Math.max(1000, Number(args.careMs));
   if (args.scan) S.scan = Number(args.scan);
-  if (args.defaultMode !== undefined) S.defaultMode = !!args.defaultMode;
+  if (args.defaultMode !== undefined) setDefaultMode(args.defaultMode, args.defaultModeAt);
   // Two callers may ask at once (an unlock, and a site's request): the wallet of
   // this mnemonic, already open, is left as it is. Only a digest of the mnemonic
   // is kept to tell.
@@ -458,7 +490,7 @@ async function handle(op, args) {
       return { watching: [...S.watch] };
     }
     case 'defaults':
-      S.defaultMode = !!args.on;
+      setDefaultMode(args.on, args.at);
       if (args.quietUntil) S.quietUntil = Math.max(S.quietUntil, Number(args.quietUntil));
       watchMailbox();
       return { defaultMode: S.defaultMode, quietUntil: S.quietUntil };

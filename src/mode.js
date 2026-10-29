@@ -24,6 +24,7 @@ export const MODE_WORDS = Object.freeze({
 });
 
 const MODES_KEY = 'ext.modes';     // { [walletTag]: 'developer' | 'user' }
+const MODES_AT_KEY = 'ext.modesAt'; // { [walletTag]: ms }: when the mode was last set
 const TAG_KEY = 'ext.walletTag';   // the tag of the wallet last opened
 const SETTINGS_KEY = 'ext.settings';
 
@@ -66,6 +67,19 @@ export async function setMode(m) {
   if (!tag) throw new Error('open the wallet first: the mode is kept for each wallet');
   const modes = (await stGet('local', MODES_KEY)) || {};
   modes[tag] = m;
+  const at = (await stGet('local', MODES_AT_KEY)) || {};
+  at[tag] = Date.now();
   await stSet('local', MODES_KEY, modes);
+  await stSet('local', MODES_AT_KEY, at);
   return m;
+}
+
+// The mode and when it was set (0 when it never was): the leaf host keeps the mode it was
+// told last by this time, not by when the message arrived, so a start that read the mode
+// before a change cannot undo the change (doc/PROVIDER.md, "The wallet's mode").
+export async function modeStamp() {
+  const m = await mode();
+  const tag = await walletTag();
+  const at = (await stGet('local', MODES_AT_KEY)) || {};
+  return { mode: m, at: (tag && Number(at[tag])) || 0 };
 }

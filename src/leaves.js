@@ -16,12 +16,12 @@
 import { ensureOffscreen, offscreenUp } from './offscreen-doc.js';
 import { stGet, stSet, stDel } from './util.js';
 import { sessionMnemonic } from './vault.js';
-import { mode, setMode, walletTag } from './mode.js';
+import { mode, setMode, walletTag, modeStamp } from './mode.js';
 import { claimScan } from './leaf-schedule.js';
 import { leafPerAsset } from './balance-view.js';
 import { arrivingAtoms } from '../vendor/default-arca.js';
 
-export { mode, setMode };
+export { mode, setMode, modeStamp };
 
 const LEGACY_CONFIG_KEY = 'ext.leaves';
 const CONFIGS_KEY = 'ext.leaves.byWallet';   // { [walletTag]: the operator joined }
@@ -124,7 +124,8 @@ export async function join(cfg) {
   for (const k of ['server', 'node_url', 'node_user', 'node_password', 'exit_delay_units', 'min_exit_delay_units', 'max_exit_delay_units', 'tick_ms', 'care_ms']) {
     if (cfg[k] !== undefined && cfg[k] !== null && cfg[k] !== '') clean[k] = cfg[k];
   }
-  const v = await host('start', { mnemonic, config: clean, nodePassword: clean.node_password, tickMs: clean.tick_ms, careMs: clean.care_ms, scan: scanNow(), defaultMode: (await mode()) === 'user' });
+  const st = await modeStamp();
+  const v = await host('start', { mnemonic, config: clean, nodePassword: clean.node_password, tickMs: clean.tick_ms, careMs: clean.care_ms, scan: scanNow(), defaultMode: st.mode === 'user', defaultModeAt: st.at });
   // A wallet created now answers its `info` as every command answers, { result, start }.
   const info = (v.info && v.info.result) || (await host('run', { command: 'info' })).result;
   await setConfig({ ...clean, operator: info && info.operator, joinedAt: Date.now() });
@@ -151,7 +152,8 @@ export async function ensureRunning() {
     if (st.scan !== scan) await host('scan', { scan });
     return true;
   }
-  await host('start', { mnemonic, nodePassword: cfg.node_password, tickMs: cfg.tick_ms, careMs: cfg.care_ms, scan: scanNow(), defaultMode: (await mode()) === 'user' });
+  const ms = await modeStamp();
+  await host('start', { mnemonic, nodePassword: cfg.node_password, tickMs: cfg.tick_ms, careMs: cfg.care_ms, scan: scanNow(), defaultMode: ms.mode === 'user', defaultModeAt: ms.at });
   return true;
 }
 
@@ -207,6 +209,12 @@ export async function runAny(command, args = {}) {
   if (!(await sessionMnemonic())) throw new Error('the wallet is locked');
   await ensureRunning();
   return (await host('run', { command, args })).result;
+}
+
+// Tells the offscreen host default mode's upkeep is on or off, with when the mode was set, whether
+// or not the leaf wallet is open yet (a start under way keeps what it is told here).
+export async function tellDefaults(on, at) {
+  return await host('defaults', { on: !!on, at });
 }
 
 // An operation of the offscreen host itself (`watch`: the takes to sync for).

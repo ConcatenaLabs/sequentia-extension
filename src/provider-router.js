@@ -21,6 +21,7 @@ import { readRequest, planSend, leafBalancesAnswer } from './leaf-request.js';
 import * as leafTrade from './leaf-trade.js';
 import * as leafSwap from './leaf-swap.js';
 import * as leafResting from './leaf-resting.js';
+import * as siteTrade from './site-trade.js';
 
 // ---- pending approvals ----
 const pending = new Map();
@@ -124,6 +125,12 @@ function leafAmount(atoms, hex) {
   return engine.fmt(String(atoms), hex) + ' ' + t + ' (' + atoms + ' atoms)';
 }
 
+// A site's orders go to the user composer's engine in user mode, once the wallet has joined the
+// operator its user mode runs on.
+async function userTrades() {
+  return (await leaves.mode()) === 'user' && !!(await leaves.config().catch(() => null));
+}
+
 // ---- the method table ----
 export async function handleDappRequest(origin, method, params = {}) {
   if (!origin || !/^https?:\/\//.test(origin)) throw new Error('bad origin');
@@ -159,8 +166,9 @@ export async function handleDappRequest(origin, method, params = {}) {
         // there with their makers away (restOrder, fillRestingOrder, cancelRestingOrder,
         // getRestingOrders).
         // 'orders' means the market and limit orders the wallet settles its own way
-        // (placeOrder, getOrders, cancelOrder), in either mode.
-        features: ['pset-site-built', 'contract-spend', 'leaves', 'leaf-orders', 'leaf-swaps', 'resting-orders', 'orders'],
+        // (placeOrder, getOrders, cancelOrder), in either mode. 'balances-total' means
+        // getBalances answers `total` and `arriving` (and `by_place` in developer mode).
+        features: ['pset-site-built', 'contract-spend', 'leaves', 'leaf-orders', 'leaf-swaps', 'resting-orders', 'orders', 'balances-total'],
         events: ['accountsChanged', 'disconnect', 'modeChanged', 'leafArrived', 'leafSyncDue', 'leafTake'],
       };
 
@@ -211,7 +219,11 @@ export async function handleDappRequest(origin, method, params = {}) {
       const b = await engine.balances();
       const oamp = {};
       for (const [id, atoms] of Object.entries(openamp.balancesMap())) oamp['oamp:' + id] = atoms;
-      return { assets: b.seq, btc: b.btc, openamp: oamp };
+      // What is held as leaves and spendable now, in either mode: in user mode the wallet's
+      // coins are boarded within a minute, so this is most of what it can trade.
+      const fig = await siteTrade.figures(b, (await leaves.mode()) === 'developer').catch(() => ({}));
+      const spendable = (await leaves.config().catch(() => null)) ? await siteTrade.spendable().catch(() => ({})) : {};
+      return { assets: b.seq, btc: b.btc, openamp: oamp, leaves: await siteTrade.leafBalances(), spendable, ...fig };
     }
 
     case 'getUtxos': {
@@ -268,17 +280,33 @@ export async function handleDappRequest(origin, method, params = {}) {
       // the trade settles and shows one approval (src/market.js). Either mode.
       await requireConnected(origin);
       if (!(await sessionMnemonic())) throw new Error('the wallet is locked; open the wallet popup and unlock first');
+      // User mode trades as the popup's Trade tab does, from the wallet's leaves (src/site-trade.js).
+      if (await userTrades()) {
+        const q = await siteTrade.quote(params || {}, origin);
+        try { return await requestApproval(origin, 'placeOrder', q.display, () => siteTrade.confirm(q.id, origin)); }
+        catch (e) { siteTrade.drop(q.id); throw e; }
+      }
       const prep = await market.prepareOrder(origin, params || {});
       return requestApproval(origin, 'placeOrder', prep.display, prep.exec);
     }
     case 'getOrders': {
       // Silent: this site's resting orders and trades, and where each stands.
       await requireUnlockedAndConnected(origin);
+      if (await userTrades()) {
+        // Both: orders a site placed in developer mode keep being followed in user mode.
+        const [a, b] = await Promise.all([siteTrade.orders(origin), market.ordersFor(origin).catch(() => ({ orders: [], trades: [] }))]);
+        return { orders: [...a.orders, ...(b.orders || [])], trades: [...a.trades, ...(b.trades || [])] };
+      }
       return await market.ordersFor(origin);
     }
     case 'cancelOrder': {
       await requireConnected(origin);
       if (!(await sessionMnemonic())) throw new Error('the wallet is locked; open the wallet popup and unlock first');
+      if (await userTrades()) {
+        let q = null;
+        try { q = await siteTrade.quoteCancel(params || {}, origin); } catch (e) { if (!/no such order of this site/.test(String(e && e.message))) throw e; }
+        if (q) return requestApproval(origin, 'cancelOrder', q.display, () => siteTrade.confirmCancel(q.id));
+      }
       const prep = await market.prepareCancel(origin, params || {});
       return requestApproval(origin, 'cancelOrder', prep.display, prep.exec);
     }

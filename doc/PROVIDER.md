@@ -10,6 +10,9 @@ the user must confirm.
 This document is the contract between the extension
 (`src/provider-router.js`) and site authors. Keep the two in sync.
 
+A wallet that is not injected into the page (the web wallet in another tab, a wallet on
+a phone) serves this same protocol through a channel or a relay: see `doc/PAIRING.md`.
+
 ## Detection
 
 ```js
@@ -73,8 +76,28 @@ not connected or locked. Use it to restore a session without prompting.
 ```js
 { assets: { '<assetHexId>': '<atoms>' },   // Sequentia on-chain, tSEQ included under its id
   btc: '<sats>',                           // parent-chain Bitcoin testnet4
-  openamp: { 'oamp:<id>': '<atoms>' } }    // restricted assets
+  openamp: { 'oamp:<id>': '<atoms>' },     // restricted assets
+  leaves: { '<assetHexId>': '<atoms>' },   // held as leaves and spendable now, in either mode
+  total: { '<assetHexId>'|'BTC': '<atoms>' },     // one figure per asset wherever it is held
+  arriving: { '<assetHexId>'|'BTC': '<atoms>' },  // of it, received but not spendable yet
+  by_place: { '<assetHexId>'|'BTC': { chain, leaves, lightning, ark } },  // developer mode only
+  spendable: { '<assetHexId>'|'BTC': '<atoms>' } }  // what a trade can pay from now
 ```
+`total` is the figure the wallet itself shows: for a Sequentia asset its coins on the
+chain, its leaves and its Lightning balance; for BTC the chain, the Bitcoin ark and
+Lightning. `arriving` is the part of it received and not yet spendable (default mode's
+"<amount> <TICKER> arriving"). `by_place` splits `total` by where it is held and is
+answered in developer mode only. `spendable` is what the wallet's own trades can pay from
+at this moment (in user mode its leaves that are live and the BTC on its Bitcoin ark), so
+a site offers no more than that ("Max", a share of the balance): a coin just received, or
+on the chain and not yet moved into the tree, counts in `total` and not yet here, and an
+order for it is refused with "Your <TICKER> is not ready to trade yet…", never with "You
+have none". A wallet that answers these three lists
+`balances-total` in `getCapabilities().features`; a site falls back to `assets`, `btc`
+and `leaves` when it does not.
+What the wallet can trade of a Sequentia asset is `assets` and `leaves` together: in user
+mode the wallet boards its coins into the operator's tree within about a minute, so most of
+it is `leaves`. A site shows the sum as one figure and names neither part.
 
 ### `getAddress({ confidential? })` — silent, requires connection
 `{ address, index }`. Default is the standard `tb1…` form (identical on both
@@ -428,8 +451,8 @@ leaves, Lightning), and a developer-mode one: in user mode every method in this
 section refuses, and no leaf event reaches a site. A wallet that joined an
 operator keeps its leaf wallet open and syncing in either mode all the same,
 since its coins have dates to keep, and their value counts in each asset's
-figure and in the headline (`getBalances` is unchanged: it answers the
-on-chain and Lightning rails).
+figure and in the headline (`getBalances` answers them under `leaves`, in either
+mode, as one more part of what the wallet can trade).
 
 What the wallet does by itself, in either mode and with no window: once after
 the leaf wallet opens, and after a sync at most every ten minutes, it runs the
@@ -1002,6 +1025,22 @@ nothing else to trade. The wallet takes only orders it can settle in one step:
   approval, with what they hold.
 
 ### `placeOrder({ type, base, quote, side, amount, price? })` — approval per request
+
+**In user mode**, once the wallet has joined the operator its user mode runs on, the order
+is settled the way the popup's Trade tab settles a trade, from the wallet's leaves (the web
+wallet's `site-orders.js` over its user composer engine, `user-trade.js`): a market order
+is one trade at the best price the single-step book offers (an order resting in the tree,
+a maker's in-tree swap, a covenant order taken in a round, or BTC over the wallet's
+Lightning), a purchase of a base amount being priced first for what it costs; a limit order
+is that trade when its price meets the limit, and otherwise rests whole on the book as an
+order placed from the wallet's leaves, listed on the relay once it rests and taken back by
+its refund once its time has run out (`cancelOrder`). Against BTC a limit order only
+trades. The approval shows what is paid, what is got and the fees, in default mode's
+words, and the answer has the same shape (`filled` is 1 for a trade). Every other wallet
+that serves `placeOrder` through a channel or a relay (`doc/PAIRING.md`) settles it the
+same way.
+
+**In developer mode**, and in user mode before the wallet has joined an operator:
 
 - `type`: `'market'` or `'limit'`.
 - `base`: 32-byte hex asset id. `quote`: 32-byte hex asset id, or `'BTC'`.
