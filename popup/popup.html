@@ -254,6 +254,30 @@
 
     <!-- settings -->
     <div id="tSettings" class="hide">
+      <!-- Report a problem (vendor/problem-report.js, the web wallet's module and words). -->
+      <div class="card" id="reportCard">
+        <h2 id="reportTitle"></h2>
+        <p class="sub" id="reportIntro"></p>
+        <label class="sub" for="reportText" id="reportTextLabel"></label>
+        <textarea id="reportText" rows="4" maxlength="4000"></textarea>
+        <label class="sub" for="reportCode" id="reportCodeLabel"></label>
+        <input id="reportCode" autocomplete="off" spellcheck="false" maxlength="64">
+        <p class="sub" id="reportCodeHint"></p>
+        <p class="sub" id="reportIncludes"></p>
+        <label style="display:flex;gap:8px;align-items:center;margin:6px 0;cursor:pointer">
+          <input type="checkbox" id="reportAddr" style="width:16px;height:16px;flex:0 0 auto;margin:0">
+          <span class="sub" id="reportAddrLabel"></span>
+        </label>
+        <div id="reportAddrList" class="hide">
+          <p class="sub" id="reportAddrWill"></p>
+          <div class="addr" id="reportAddrValue"></div>
+        </div>
+        <details id="reportPreview" style="margin:6px 0"><summary class="sub" id="reportPreviewLabel"></summary>
+          <pre class="addr" id="reportPayload" style="white-space:pre-wrap;word-break:break-all;font-size:11px"></pre>
+        </details>
+        <button id="btnReport" class="ghost tiny"></button>
+        <div id="reportStatus" class="status"></div>
+      </div>
       <div class="card">
         <h2>Connected sites</h2>
         <div id="siteList"><p class="sub">No sites connected.</p></div>

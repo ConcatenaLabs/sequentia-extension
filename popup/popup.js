@@ -12,6 +12,18 @@ import { admittedReceives } from '../vendor/tooling/lsp/single-step-book.mjs';
 import * as seqob from '../vendor/seqob.js';
 import { toWire, fromWire } from '../src/wire.js';
 import { BASE, ESPLORA, USER_PAIRS_URL, LEAF_MAKERS } from '../src/config.js';
+import { REPORT_WORDS, createErrorLog, buildReport, sendReport, sentWords } from '../vendor/problem-report.js';
+
+// The popup's recent errors: what it threw and every error it showed (.status.err).
+const popupErrors = createErrorLog();
+popupErrors.install(window, console);
+new MutationObserver((ms) => {
+  for (const m of ms) {
+    const t = m.target.nodeType === 1 ? m.target : m.target.parentElement;
+    const e = t && t.closest && t.closest('.status.err');
+    if (e && e.id !== 'reportStatus' && e.textContent.trim()) popupErrors.note(e.textContent.trim());
+  }
+}).observe(document.documentElement, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['class'] });
 
 const $ = (id) => document.getElementById(id);
 const el = (t, c, txt) => { const e = document.createElement(t); if (c) e.className = c; if (txt != null) e.textContent = txt; return e; };
@@ -45,7 +57,7 @@ function tab(name) {
   for (const b of document.querySelectorAll('.tabs [data-tab]')) b.classList.toggle('on', b.dataset.tab === name);
   if (name === 'receive') { if (isDefault()) renderDefaultReceive(); else renderReceive(); }
   if (name === 'history') renderHistory();
-  if (name === 'settings') renderSettings();
+  if (name === 'settings') { renderSettings(); paintReport(); }
   if (name === 'send') { if (isDefault()) fillDefaultSend(); else fillSendSelectors(); }
   if (name === 'trade') renderTrade();
   if (name === 'stake') { renderStakes(); renderStake(); renderRewards(); }
@@ -1323,3 +1335,55 @@ $('btnRemoveWallet').onclick = async () => {
   } catch (e) { $('removeStatus').className = 'status err'; $('removeStatus').textContent = e.message; }
   finally { $('btnRemoveWallet').disabled = false; }
 };
+
+// ==== Report a problem (vendor/problem-report.js; the words are the web wallet's) ====
+// The report carries the extension's version, the mode and the recent errors of the popup and
+// the service worker. The address goes only when ticked; the exact payload is shown as it changes.
+let reportCtx = { errors: [], mode: 'user', address: '' };
+function reportNow() {
+  const errors = [...popupErrors.list(), ...reportCtx.errors].sort((a, b) => a.at.localeCompare(b.at));
+  return buildReport({
+    wallet: 'ambra-browser', version: chrome.runtime.getManifest().version, mode: reportCtx.mode === 'developer' ? 'developer' : 'default',
+    description: $('reportText').value, accountCode: $('reportCode').value, errors,
+    context: { platform: navigator.platform, user_agent: navigator.userAgent, network: 'testnet' },
+    addresses: $('reportAddr').checked && reportCtx.address ? [reportCtx.address] : [],
+  });
+}
+function paintReportNow() {
+  const ticked = $('reportAddr').checked;
+  $('reportAddrList').classList.toggle('hide', !ticked);
+  $('reportAddrValue').textContent = ticked ? reportCtx.address : '';
+  $('reportPayload').textContent = JSON.stringify(reportNow(), null, 2);
+}
+async function paintReport() {
+  try { reportCtx = await rpc('reportContext'); } catch {}
+  paintReportNow();
+}
+(function mountReport() {
+  const W = REPORT_WORDS;
+  const set = (id, t) => { $(id).textContent = t; };
+  set('reportTitle', W.title); set('reportIntro', W.intro); set('reportTextLabel', W.descriptionLabel);
+  set('reportCodeLabel', W.codeLabel); set('reportCodeHint', W.codeHint); set('reportIncludes', W.includes);
+  set('reportAddrLabel', W.addressesBox); set('reportAddrWill', W.addressesWill); set('reportPreviewLabel', W.preview);
+  set('btnReport', W.send);
+  $('reportText').placeholder = W.descriptionHint;
+  const clearRefusal = () => { if ($('reportStatus').classList.contains('err')) { $('reportStatus').className = 'status'; $('reportStatus').textContent = ''; } paintReportNow(); };
+  $('reportText').addEventListener('input', clearRefusal);
+  $('reportCode').addEventListener('input', clearRefusal);
+  $('reportAddr').addEventListener('change', paintReportNow);
+  $('reportPreview').addEventListener('toggle', paintReport);
+  $('btnReport').onclick = async () => {
+    const st = $('reportStatus');
+    await paintReport();
+    const r = reportNow();
+    let no = r.description ? null : W.needDescription;
+    if (!no) { try { no = (await rpc('reportCheck', { report: r })).refusal; } catch {} }
+    if (no) { st.className = 'status err'; st.textContent = no; return; }
+    $('btnReport').disabled = true; st.className = 'status'; st.textContent = W.sending;
+    const res = await sendReport(r, { url: BASE + '/emissio/api/problem-reports' });
+    $('btnReport').disabled = false;
+    if (!res.ok) { st.className = 'status err'; st.textContent = res.message; return; }
+    st.className = 'status ok'; st.textContent = sentWords(res);
+    $('reportText').value = ''; $('reportAddr').checked = false; paintReportNow();
+  };
+})();

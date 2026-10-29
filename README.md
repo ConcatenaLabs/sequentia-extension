@@ -70,6 +70,13 @@ confidential `tsqb1…` addresses are an explicit opt-in).
   parameters, every input and the wallet's balance change, and the wallet
   signs only what it showed.
   Protocol spec: [doc/PROVIDER.md](doc/PROVIDER.md).
+- **Report a problem** — at the top of Settings: what happened, an optional
+  Emissio account code to be credited, and the address only when ticked. The
+  report carries the extension's version, the mode and the recent errors of the
+  popup and the service worker (scrubbed of addresses, keys and invoices),
+  shows exactly what will be sent, and goes to Emissio's intake. The service
+  worker refuses a description that carries words of the phrase. The module and
+  its words are the web wallet's (`vendor/problem-report.js`).
 - **Mode, and leaves** — one setting (Settings → Mode), kept for each wallet.
   User mode: one figure per asset, and the wallet chooses how value moves.
   Developer mode: every rail by name, side by side (on-chain, leaves and
@@ -435,6 +442,7 @@ vendor/                modules copied from sequentia-web-wallet (btc.js,
                        lnupgrade.js, own-txs.js, lightning/ signer SDK,
                        default-arca.js, pay-code.js, btc-ark.js,
                        user-trade.js, user-trade-btc.js, user-composer.js,
+                       problem-report.js,
                        tooling/lsp/ single-step book and settlement router)
 pkg/                   SWK lwk_wasm build (committed)
 doc/PROVIDER.md        the website provider protocol
