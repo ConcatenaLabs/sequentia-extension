@@ -1024,7 +1024,7 @@ nothing else to trade. The wallet takes only orders it can settle in one step:
   is not placed. A trade the wallet's channels cannot carry is refused before any
   approval, with what they hold.
 
-### `placeOrder({ type, base, quote, side, amount, price? })` — approval per request
+### `placeOrder({ type, base, quote, side, amount, price?, post_only?, rest?, min_fill?, take_back_after? })` — approval per request
 
 **In user mode**, once the wallet has joined the operator its user mode runs on, the order
 is settled the way the popup's Trade tab settles a trade, from the wallet's leaves (the web
@@ -1067,6 +1067,28 @@ nothing of the wallet moves for it), `order` the id of the order left resting or
 nothing to take, a limit order with no price, an amount and price too large to rest
 together, a balance short of the trade and its fees, and a trade against BTC the
 wallet's channels cannot carry.
+
+**Limit order options**, in either mode, each listed in `getCapabilities().features`
+when the wallet serves it (a site shows an option only then):
+
+- `post_only: true` (`order-post-only`): the order only rests. One that would take any
+  order on the book now is refused before any approval ("This order would trade at
+  once. Nothing was placed."), and so is one against BTC, which never rests.
+- `rest: false` (`order-no-rest`): the order only trades what meets its price now, and
+  nothing of it rests. One the book does not meet is refused before any approval. It
+  cannot be asked with `post_only`.
+- `min_fill` (`order-min-fill`): base atoms, the smallest part of the resting order one
+  fill may take; for a purchase the order holds the quote, so its smallest fill is that
+  amount at the price, rounded up. More than the order is refused. Without it, a tenth of
+  the order in user mode and a thousandth in developer mode.
+- `take_back_after` (`order-take-back-after`): whole seconds from now, from 3600 (an hour)
+  to 604800 (a week), after which what is left of the order can be taken back. Without
+  it, a day. In user mode the operator takes an order resting from leaves only some hours
+  ahead of its refund, so a shorter time becomes the earliest it allows; the approval
+  shows the time it is.
+
+A market order refuses all four. `min_fill` and `take_back_after` shape only what rests,
+so beside `rest: false` they change nothing.
 
 ### `getOrders()` — silent, requires connection
 
