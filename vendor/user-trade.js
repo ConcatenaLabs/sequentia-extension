@@ -75,13 +75,17 @@ export function forbiddenIn (text) {
 // all of them (user-trade.test.mjs).
 export const USER_WORDS = Object.freeze({
   pay: 'You pay',
-  get: 'You get',
+  get: 'You receive',
   amount: 'Amount',
+  max: 'Max',
+  balance: (x) => `balance ${x}`,
+  // What the book can fill now, when less than asked: said beside the amounts as they are typed.
+  bookUpTo: (x) => `The book can fill up to ${x} now.`,
   review: 'Review',
   confirm: 'Trade',
   cancel: 'Cancel',
   amountIn: 'You pay',
-  amountOut: 'You get',
+  amountOut: 'You receive',
   fees: 'Fees',
   included: 'included above',
   noFees: 'No fees',
@@ -473,6 +477,49 @@ export function createEngine (deps) {
     return [...new Set(found.filter(Boolean))]
   }
 
+  // Indicative terms in either direction, for the two amounts while a person types: the book's
+  // best single-step source for paying `pay`, or the least paid to receive `receive`. No maker is
+  // asked for firm terms (a firm offer holds the maker's coins); Review does that, fees and all.
+  // The book's entries are read once every few seconds per pair.
+  // -> { ok: true, pay, receive, short: { pay, receive } | null (the most one source fills now) }
+  //  | { ok: false, why: 'not-listed'|'not-offered'|'too-small' }
+  const estimates = new Map()
+  async function estimate ({ payAsset, receiveAsset, pay, receive }) {
+    const ad = deps.admitted ? await deps.admitted() : { pairs: null, genesis: null }
+    const sources = admittedSources(ad.pairs, ad.genesis, payAsset, receiveAsset)
+    if (!sources.length) return { ok: false, why: 'not-listed' }
+    const key = payAsset + '>' + receiveAsset
+    let c = estimates.get(key)
+    if (!c || now() - c.at > 8000) {
+      c = { at: now(), es: await entries(payAsset, receiveAsset, sources).catch(() => []) }
+      estimates.set(key, c)
+    }
+    const es = c.es.filter((e) => (e.source !== 'btc-gateway' || deps.btc) && big(e.maxReceive) > 0n)
+    if (!es.length) return { ok: false, why: 'not-offered' }
+    const cdiv = (a, b) => (a + b - 1n) / b
+    let most = null
+    for (const e of es) { const r = big(e.maxReceive); if (!most || r > most.receive) most = { receive: r, pay: cdiv(r * e.rateNum, e.rateDen) } }
+    const out = (p, r, short) => ({ ok: true, pay: String(p), receive: String(r), short: short ? { pay: String(most.pay), receive: String(most.receive) } : null })
+    if (pay != null) {
+      const A = big(pay)
+      if (A <= 0n) return { ok: false, why: 'too-small' }
+      let best = null
+      for (const e of es) { const s = sizeEntry(e, A); if (s && (!best || s.receive > best.receive)) best = s }
+      if (!best) return { ok: false, why: 'too-small' }
+      return out(A, best.receive, best.pay < A)
+    }
+    const R = big(receive)
+    if (R <= 0n) return { ok: false, why: 'too-small' }
+    let best = null
+    for (const e of es) {
+      if (R > big(e.maxReceive) || R < big(e.minReceive || 0)) continue
+      const p = cdiv(R * e.rateNum, e.rateDen)
+      if (!best || p < best) best = p
+    }
+    if (best != null) return out(best, R, false)
+    return R > most.receive ? out(most.pay, most.receive, true) : { ok: false, why: 'too-small' }
+  }
+
   async function quote ({ payAsset, receiveAsset, amount }) {
     const A = big(amount)
     if (A <= 0n) return { ok: false, why: 'too-small' }
@@ -788,5 +835,5 @@ export function createEngine (deps) {
     return out
   }
 
-  return { quote, offered, confirm, advance, resume, records, spendable, release, drop }
+  return { quote, estimate, offered, confirm, advance, resume, records, spendable, release, drop }
 }

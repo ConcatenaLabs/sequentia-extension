@@ -22,8 +22,11 @@ confidential `tsqb1…` addresses are an explicit opt-in).
   unbonding output not yet withdrawn, and the delegation record); the headline
   is the sum of every figure. User mode shows that one figure per asset, with
   "<amount> <TICKER> arriving" under it for what cannot be spent yet, and a tap on
-  a row opens what is staked of it; developer mode names every rail under the row,
-  with the controls that move an asset to and from Lightning.
+  a row opens what is staked of it and "Hide asset from list"; developer mode names
+  every rail under the row, with the controls that move an asset to and from
+  Lightning. A hidden asset leaves the list for a folded "Hidden assets (N)" at its
+  foot (with Unhide), still counts in the total, and is left out of the trade
+  pickers' first rows, which still find it by search; hiding is kept for each wallet.
 - **Default mode on the operator's tree and the Bitcoin ark** — user mode follows
   the default-mode contract of Concatena's wallets (the web wallet's
   `docs/DEFAULT_MODE.md`; its words and route rules are the web wallet's own
@@ -37,8 +40,12 @@ confidential `tsqb1…` addresses are an explicit opt-in).
   are moved into the tree (assets) or onto the ark (BTC) by themselves. Send takes a
   receive code, an address or an invoice: a code is paid in the tree in seconds,
   an address from the chain or else out of the tree, an invoice over Lightning, BTC
-  from the ark first. Trade is three inputs and one button (the web wallet's user
-  composer). Settings → Remove wallet closes the wallet's leaf and ark wallets
+  from the ark first. Trade is the web wallet's composer: the pair's market (last
+  price, a 1D/1W/1M chart, the best bid and ask, recent trades) above You pay and
+  You receive, each a searchable asset chooser with your assets first, and an amount
+  on either side that shows the other. While the wallet has not joined yet,
+  Receive shows the address, and the code takes its place on the open screen once
+  it can. Settings → Remove wallet closes the wallet's leaf and ark wallets
   before it removes the vault, so a wallet made next shows none of their coins.
 - **Send / receive** — on-chain sends on both chains with any-asset fees
   (fee rates in the fee asset's own units per vByte), OpenAMP transfers with
@@ -446,6 +453,8 @@ vendor/                modules copied from sequentia-web-wallet (btc.js,
                        lnupgrade.js, own-txs.js, lightning/ signer SDK,
                        default-arca.js, pay-code.js, btc-ark.js,
                        user-trade.js, user-trade-btc.js, user-composer.js,
+                       asset-picker.js, market-view.js, chart.js, indicators.js,
+                       vendor/lightweight-charts/ (the chart library),
                        problem-report.js,
                        site-orders.js,
                        tooling/lsp/ single-step book and settlement router)

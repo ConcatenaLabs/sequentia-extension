@@ -1025,8 +1025,8 @@ function __wbg_get_imports() {
             return ret;
         },
         __wbindgen_cast_0000000000000003: function(arg0, arg1) {
-            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 842, ret: Externref, inner_ret: Some(Externref) }, mutable: true }) -> Externref`.
-            const ret = makeMutClosure(arg0, arg1, wasm_bindgen__convert__closures_____invoke__h719a53bce74960bb);
+            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 843, ret: Externref, inner_ret: Some(Externref) }, mutable: true }) -> Externref`.
+            const ret = makeMutClosure(arg0, arg1, wasm_bindgen__convert__closures_____invoke__h6b65465b7952ea0a);
             return ret;
         },
         __wbindgen_cast_0000000000000004: function(arg0, arg1) {
@@ -1035,13 +1035,13 @@ function __wbg_get_imports() {
             return ret;
         },
         __wbindgen_cast_0000000000000005: function(arg0, arg1) {
-            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [NamedExternref("Event")], shim_idx: 841, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
-            const ret = makeMutClosure(arg0, arg1, wasm_bindgen__convert__closures_____invoke__h74687f99ab91d5b2);
+            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [NamedExternref("Event")], shim_idx: 842, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
+            const ret = makeMutClosure(arg0, arg1, wasm_bindgen__convert__closures_____invoke__h0a803293ac55fa02);
             return ret;
         },
         __wbindgen_cast_0000000000000006: function(arg0, arg1) {
-            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [NamedExternref("IDBVersionChangeEvent")], shim_idx: 843, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-            const ret = makeMutClosure(arg0, arg1, wasm_bindgen__convert__closures_____invoke__h2e60de373cf73846);
+            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [NamedExternref("IDBVersionChangeEvent")], shim_idx: 841, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
+            const ret = makeMutClosure(arg0, arg1, wasm_bindgen__convert__closures_____invoke__h6202342a772c020f);
             return ret;
         },
         __wbindgen_cast_0000000000000007: function(arg0, arg1) {
@@ -1110,12 +1110,12 @@ function wasm_bindgen__convert__closures_____invoke__h1b0fb8c68ed6b8c5(arg0, arg
     wasm.wasm_bindgen__convert__closures_____invoke__h1b0fb8c68ed6b8c5(arg0, arg1, arg2);
 }
 
-function wasm_bindgen__convert__closures_____invoke__h2e60de373cf73846(arg0, arg1, arg2) {
-    wasm.wasm_bindgen__convert__closures_____invoke__h2e60de373cf73846(arg0, arg1, arg2);
+function wasm_bindgen__convert__closures_____invoke__h6202342a772c020f(arg0, arg1, arg2) {
+    wasm.wasm_bindgen__convert__closures_____invoke__h6202342a772c020f(arg0, arg1, arg2);
 }
 
-function wasm_bindgen__convert__closures_____invoke__h719a53bce74960bb(arg0, arg1, arg2) {
-    const ret = wasm.wasm_bindgen__convert__closures_____invoke__h719a53bce74960bb(arg0, arg1, arg2);
+function wasm_bindgen__convert__closures_____invoke__h6b65465b7952ea0a(arg0, arg1, arg2) {
+    const ret = wasm.wasm_bindgen__convert__closures_____invoke__h6b65465b7952ea0a(arg0, arg1, arg2);
     return ret;
 }
 
@@ -1126,8 +1126,8 @@ function wasm_bindgen__convert__closures_____invoke__hd8f2a7b8acf89793(arg0, arg
     }
 }
 
-function wasm_bindgen__convert__closures_____invoke__h74687f99ab91d5b2(arg0, arg1, arg2) {
-    const ret = wasm.wasm_bindgen__convert__closures_____invoke__h74687f99ab91d5b2(arg0, arg1, arg2);
+function wasm_bindgen__convert__closures_____invoke__h0a803293ac55fa02(arg0, arg1, arg2) {
+    const ret = wasm.wasm_bindgen__convert__closures_____invoke__h0a803293ac55fa02(arg0, arg1, arg2);
     if (ret[1]) {
         throw takeFromExternrefTable0(ret[0]);
     }

@@ -1,0 +1,74 @@
+/* The asset chooser, the trade composer and the market view: the web wallet's rules for its
+   vendored modules (vendor/asset-picker.js, vendor/user-composer.js, vendor/market-view.js),
+   copied from its index.html. Change them there, then copy again. Its colours map onto this
+   popup's own. */
+:root { --panel: var(--card); --panel2: var(--bg2); --txt: var(--fg); --dim: var(--sub); --amber: var(--gold); --bad: var(--red); }
+/* user mode's Trade tab: the user composer only (user-composer.js) */
+  .uc-dev-hidden{display:none!important}
+.ucomp{display:flex;flex-direction:column;gap:12px;max-width:520px}
+.ucomp .uc-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.ucomp .uc-row .lbl{flex-basis:100%}
+.ucomp .uc-pick{min-width:120px;display:inline-flex;align-items:center;justify-content:space-between;gap:10px;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:9px 12px;color:var(--txt);font-weight:700;font-size:15px;cursor:pointer}
+.ucomp .uc-pick:hover{border-color:var(--amber)}
+.ucomp .uc-pick-caret{color:var(--dim);font-size:12px}
+.ucomp .uc-amount{flex:1;min-width:140px}
+.ucomp .uc-have{flex-basis:100%;display:flex;justify-content:space-between;align-items:center;gap:8px}
+.ucomp .uc-max{padding:2px 10px;font-size:12px}
+.ucomp .uc-ticket .kv{display:flex;justify-content:space-between;gap:12px;padding:4px 0}
+.ucomp .uc-note.err{color:var(--bad,#c33)}
+.ucomp .uc-trade{display:flex;justify-content:space-between;gap:12px}
+.ucomp .uc-group{margin-top:6px}
+/* a pair's market (market-view.js), in both modes' Trade tab */
+  .mv{display:flex;flex-direction:column;gap:8px;border:1px solid var(--line);border-radius:12px;padding:12px;background:var(--panel2)}
+.mv-head{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap}
+.mv-num{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.mv-pair{font-weight:700;font-size:15px}
+.mv-last{font-size:20px;font-weight:700;margin-top:2px}
+.mv-last .sub{font-size:13px;font-weight:500}
+.mv-up{color:#3ddc84}
+.mv-down{color:#f0a35e}
+.mv-last .mv-up,.mv-last .mv-down{font-size:14px}
+.mv-ranges{display:flex;gap:4px}
+.mv-range{padding:3px 9px;font-size:12px;background:transparent;color:var(--dim)}
+.mv-range.on{color:var(--txt);border-color:var(--amber)}
+.mv-chartbox{width:100%}
+.mv-chart{display:block;height:150px;position:relative}
+.mv-credit{display:block;font-size:10px;text-align:right;color:var(--dim)}
+.mv-ax{font-size:9px;fill:var(--dim)}
+.mv-book{display:flex;justify-content:space-between;gap:10px;font-size:13px}
+.mv-depth{display:flex;height:6px;border-radius:3px;overflow:hidden;background:var(--line)}
+.mv-depth-b{background:#3ddc84aa}
+.mv-depth-s{background:#f0a35eaa}
+.mv-depth-l{display:flex;justify-content:space-between;font-size:11px}
+.mv-sec{display:flex;flex-direction:column;gap:2px;margin-top:4px}
+.mv-row{display:grid;grid-template-columns:1fr 1fr auto;gap:8px;font-size:12px;padding:2px 0}
+.mv-row:has(> :nth-child(4)){grid-template-columns:1fr 1fr 1fr auto}
+.mv-row > :last-child{text-align:right}
+.mv-note{font-size:12px}
+/* asset-picker popover (searchable; quiet, not a second accent) */
+  .swpop{position:fixed;z-index:70;background:var(--panel);border:1px solid var(--line);border-radius:14px;
+         box-shadow:0 12px 40px #000b;width:min(360px,92vw);max-height:60vh;display:flex;flex-direction:column;overflow:hidden}
+.swpop-search{padding:12px 12px 8px}
+.swpop-search input{font-size:14px}
+.swpop-list{overflow:auto;padding:4px 6px 8px}
+.swopt{display:flex;align-items:center;gap:10px;width:100%;text-align:left;background:transparent;border:none;
+         border-radius:10px;padding:9px 10px;color:var(--txt);font:inherit}
+.swopt:hover,.swopt.kbd{background:#1d242d}
+.swopt[disabled]{opacity:.4;cursor:default}
+.swopt-cur{box-shadow:inset 2px 0 0 var(--amber);background:#1a2028}
+.swopt-tk{font-weight:700;font-size:15px;min-width:62px}
+.swopt-mid{flex:1 1 auto;min-width:0}
+.swopt-name{font-size:12px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.swopt-bal{margin-left:auto;text-align:right;white-space:nowrap;flex:0 0 auto;max-width:48%;overflow:hidden;text-overflow:ellipsis}
+.swopt-bal .b{font:13px ui-monospace,monospace;overflow:hidden;text-overflow:ellipsis}
+.swopt-bal .r{font-size:11px;color:var(--dim)}
+.swopt-empty{padding:14px 12px;color:var(--dim);font-size:13px}
+/* The OTHER side's asset, shown (not omitted) with a tap-to-swap-sides affordance (task 20). */
+  .swopt-other{border-left:2px solid var(--amber);background:rgba(255,198,41,.045)}
+.swopt-other:hover,.swopt-other.kbd{background:rgba(255,198,41,.1)}
+/* Grouped dropdown: "Your assets" (held) first, then "All assets", scalable to a big registry. */
+  .swopt-grp{padding:9px 12px 4px;font-size:10.5px;color:var(--dim);text-transform:uppercase;letter-spacing:.06em;font-weight:700}
+.swopt-grp:first-child{padding-top:3px}
+.swopt-split{font-size:11px;color:var(--dim);margin-top:1px}
+.swopt-split .z{color:var(--amber2)}
+.swopt-more{padding:9px 12px;color:var(--dim);font-size:11.5px;text-align:center;border-top:1px solid var(--line);margin-top:2px}

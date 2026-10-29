@@ -24,6 +24,7 @@ import * as perms from './src/permissions.js';
 import * as router from './src/provider-router.js';
 import * as leaves from './src/leaves.js';
 import * as dm from './src/default-mode.js';
+import { hiddenAssets, setHidden } from './src/hidden.js';
 import { issuerAssets } from './src/leaf-profiles.js';
 import * as leafTrade from './src/leaf-trade.js';
 import * as siteTrade from './src/site-trade.js';
@@ -350,6 +351,7 @@ async function overview({ withLn = false } = {}) {
     rows,
     mode: walletMode,
     tag: await walletTagNow(),
+    hidden: await hiddenAssets().catch(() => []),
     ref, refOptions: A.refOptions(),
     totalRefStr: anyPriced ? A.fmtRef(totalRef, ref) : null,
     pricesStale: A.pricesStale(),
@@ -578,6 +580,11 @@ const uiMethods = {
     catch (e) { throw ((await leaves.mode()) === 'developer' ? e : dm.userRefusal(e)); }
   },
   'default.leafInfo': async () => await leaves.runAny('info'),
+  // The composer asks for this when an asset is held but not payable yet: the leaf host syncs,
+  // which boards what is on the chain.
+  'default.prepare': async () => { leaves.hostOp('sync').catch(() => {}); return { ok: true }; },
+  // Hide an asset from the balance list and the pickers' first rows, or show it again.
+  'setHidden': async ({ hex, on }) => ({ hidden: await setHidden(String(hex || ''), !!on) }),
   'default.assetMeta': async ({ hexes }) => {
     const out = {};
     for (const h of hexes || []) if (/^[0-9a-f]{64}$/.test(h)) { const m = A.assetMeta(h); out[h] = { ticker: m.ticker, precision: m.precision }; }

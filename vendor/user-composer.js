@@ -10,14 +10,24 @@
 // ctx: { root (element), engine (createEngine's), assetMeta(hex) -> {ticker, precision},
 //   fmtAtoms(atoms, precision), parseAtoms(text, precision), knownAssets() -> [hex],
 //   held(hex) -> atoms the person holds (the figure the Balance tab shows), admittedReceives(pay)
-//   -> [hex] (optional: the receive picker lists those after what is offered now) }
+//   -> [hex] (optional: the receive picker lists those after what is offered now),
+//   market: { relay() -> the relay's base URL, pairOf(a, b) -> {base, quote} } (optional: the
+//   chosen pair's market above the inputs, market-view.js), isHidden(hex) -> the person hid it
+//   (optional), refValue(hex, atoms) -> its value in words, "≈ $…" (optional) }
+// Both pickers are the shared asset chooser (asset-picker.js): a search box, your assets first
+// with their balances, BTC always, what the book offers now next, the rest found by searching.
 // The receive picker lists BTC first, then every asset the book offers for what is paid in one
 // step now (engine.offered), then the admitted rest, then every other asset known; it starts on
 // the first one offered.
 
-import { USER_WORDS, pickerOrder, costLine } from './user-trade.js'
+import { USER_WORDS, pickerOrder, costLine, tradeStateWord } from './user-trade.js'
+import { mountMarketView } from './market-view.js'
+import { openPicker, PICKER_WORDS } from './asset-picker.js'
 
 const big = (v) => { try { return BigInt(v ?? 0) } catch { return 0n } }
+// The chooser button's marks (no words): what nothing chosen shows, and the arrow.
+const NONE = '…'
+const CARET = '▾'
 
 // How long a trade is followed every few seconds, and how often after that.
 export const FOLLOW_FAST_MS = 120_000
@@ -30,7 +40,8 @@ export function payAssets (known, held, current, name) {
 }
 
 export function mountUserComposer (ctx) {
-  const S = { pay: null, get: null, amount: '', ticket: null, choice: null, busy: false, note: '', error: '', timer: null,
+  const S = { pay: null, get: null, amount: '', recv: '', fixed: 'pay', ticket: null, choice: null, busy: false, note: '', error: '', timer: null,
+    estTimer: null, estSeq: 0,
     offered: { pay: null, list: [], at: 0, loading: false } }
   const OFFERS_MS = ctx.offersMs || 60000
   const doc = ctx.root.ownerDocument || document
@@ -72,16 +83,62 @@ export function mountUserComposer (ctx) {
     const gl = getList()
     const was = S.get
     if (!S.getChosen || !gl.includes(S.get)) S.get = S.ticket || S.busy ? S.get : defaultGet(gl)
-    old.replaceWith(select('ucGet', gl, S.get, pickGet))
+    old.replaceWith(chooser('ucGet', gl, S.get, pickGet))
     if (S.get !== was && !S.ticket) { S.error = ''; paintTicket() }
+    if (S.get !== was && S.market) S.market.refresh().catch(() => {})
   }
-  function pickGet (v) { S.get = v; S.getChosen = true; reset(); render() }
+  function pickGet (v) { S.get = v; S.getChosen = true; reset(); render(); schedule(0) }
 
-  function select (id, list, value, onchange) {
-    const s = el('select', 'uc-pick'); s.id = id
-    for (const a of list) { const o = el('option', null, name(a)); o.value = a; if (a === value) o.selected = true; s.appendChild(o) }
-    s.onchange = () => onchange(s.value)
-    return s
+  // ---- You pay and You receive, tethered ----
+  // The amount typed stays as typed; the other follows the book's best single-step price now
+  // (engine.estimate), again a moment after each keystroke and every few seconds while shown.
+  function schedule (ms = 350) {
+    clearTimeout(S.estTimer)
+    S.estTimer = setTimeout(() => { estimateNow().catch((e) => console.warn('[user composer] estimate:', e && e.message)) }, ms)
+  }
+  async function estimateNow () {
+    if (!ctx.engine.estimate || !S.pay || !S.get || S.ticket || S.busy) return
+    const typed = S.fixed === 'pay' ? S.amount : S.recv
+    const asset = S.fixed === 'pay' ? S.pay : S.get
+    let atoms
+    try { atoms = ctx.parseAtoms(String(typed || '').trim(), prec(asset)) } catch { atoms = 0n }
+    const other = ctx.root.querySelector(S.fixed === 'pay' ? '#ucReceive' : '#ucAmount')
+    if (!(big(atoms) > 0n)) { if (other && doc.activeElement !== other) { other.value = ''; if (S.fixed === 'pay') S.recv = ''; else S.amount = '' } S.note = ''; paintNote(); return }
+    const seq = ++S.estSeq
+    const e = await ctx.engine.estimate({ payAsset: S.pay, receiveAsset: S.get, ...(S.fixed === 'pay' ? { pay: String(atoms) } : { receive: String(atoms) }) })
+    if (seq !== S.estSeq || S.ticket) return
+    if (!e.ok) {
+      S.note = e.why === 'not-listed' ? USER_WORDS.notListed(name(S.get), name(S.pay)) : e.why === 'too-small' ? USER_WORDS.tooSmall : USER_WORDS.notOffered(name(S.get), name(S.pay))
+      if (other && doc.activeElement !== other) other.value = ''
+      paintNote(); return
+    }
+    const fill = S.fixed === 'pay' ? ctx.fmtAtoms(big(e.receive), prec(S.get)) : ctx.fmtAtoms(big(e.pay), prec(S.pay))
+    if (other && doc.activeElement !== other) other.value = fill
+    if (S.fixed === 'pay') S.recv = fill; else S.amount = fill
+    S.note = e.short ? USER_WORDS.bookUpTo(amt(S.get, e.short.receive)) : ''
+    paintNote()
+  }
+  function paintNote () {
+    const n = ctx.root.querySelector('#ucNote'); if (!n || S.ticket) return
+    n.textContent = S.error || S.note || ''; n.classList.toggle('err', !!S.error)
+  }
+
+  // A picker: a button naming the asset chosen, which opens the shared chooser over `list`.
+  function chooser (id, list, value, onchange) {
+    const b = el('button', 'uc-pick'); b.type = 'button'; b.id = id; b.dataset.value = value || ''
+    b.setAttribute('aria-haspopup', 'listbox'); b.setAttribute('aria-expanded', 'false')
+    b.appendChild(el('span', 'uc-pick-tk', value ? name(value) : NONE))
+    b.appendChild(el('span', 'uc-pick-caret', CARET))
+    const offered = new Set(offeredNow())
+    const tradable = new Set(ctx.admittedReceives && id === 'ucGet' ? ctx.admittedReceives(S.pay) : [])
+    b.onclick = () => openPicker(b, list.map((h) => {
+      const atoms = big(ctx.held(h) || 0n)
+      const m = ctx.assetMeta(h) || {}
+      return { hex: h, ticker: name(h), name: h === 'BTC' ? 'Bitcoin' : (m.name || ''), held: atoms > 0n,
+        hidden: !!(ctx.isHidden && ctx.isHidden(h)), offered: offered.has(h), tradable: tradable.has(h), cur: h === value,
+        bal: atoms > 0n ? { b: ctx.fmtAtoms(atoms, prec(h)), r: ctx.refValue ? ctx.refValue(h, atoms) : '' } : null }
+    }), (hex) => onchange(hex), { hint: PICKER_WORDS.hintSearch })
+    return b
   }
 
   function reset () { S.ticket = null; S.choice = null; S.note = ''; S.error = '' }
@@ -91,22 +148,32 @@ export function mountUserComposer (ctx) {
     if (!S.pay || !S.payChosen) S.pay = defaultPay()
     r.innerHTML = ''
     const box = el('div', 'ucomp'); box.id = 'userComposer'
+    // The chosen pair's market: its chart, price, book and recent trades.
+    const mk = el('div', 'uc-market'); mk.id = 'ucMarket'
+    if (ctx.market) box.appendChild(mk)
     // You pay
     const row1 = el('div', 'uc-row')
     row1.appendChild(el('label', 'lbl', USER_WORDS.pay))
-    row1.appendChild(select('ucPay', payList(), S.pay, (v) => { S.pay = v; S.payChosen = true; S.getChosen = false; S.get = null; reset(); render() }))
+    row1.appendChild(chooser('ucPay', payList(), S.pay, (v) => { S.pay = v; S.payChosen = true; S.getChosen = false; S.get = null; reset(); render() }))
     const inp = el('input', 'uc-amount'); inp.id = 'ucAmount'; inp.inputMode = 'decimal'; inp.placeholder = USER_WORDS.amount; inp.value = S.amount
-    inp.oninput = () => { S.amount = inp.value; if (S.ticket) { reset(); paintTicket() } }
+    inp.oninput = () => { S.amount = inp.value; S.fixed = 'pay'; S.error = ''; if (S.ticket) { reset(); paintTicket() } schedule() }
     row1.appendChild(inp)
-    const have = el('div', 'sub uc-have'); have.id = 'ucHave'; have.textContent = amt(S.pay, ctx.held(S.pay) || 0n)
+    const have = el('div', 'sub uc-have'); have.id = 'ucHave'
+    have.appendChild(el('span', null, USER_WORDS.balance(amt(S.pay, ctx.held(S.pay) || 0n))))
+    const max = el('button', 'ghost uc-max', USER_WORDS.max); max.type = 'button'; max.id = 'ucMax'
+    max.onclick = () => { const a = big(ctx.held(S.pay) || 0n); if (a <= 0n) return; S.amount = ctx.fmtAtoms(a, prec(S.pay)); inp.value = S.amount; S.fixed = 'pay'; if (S.ticket) { reset(); paintTicket() } schedule(0) }
+    have.appendChild(max)
     row1.appendChild(have)
     box.appendChild(row1)
-    // You get
+    // You receive
     const row2 = el('div', 'uc-row')
     row2.appendChild(el('label', 'lbl', USER_WORDS.get))
     const gl = getList()
     if (!S.get || !gl.includes(S.get)) S.get = defaultGet(gl)
-    row2.appendChild(select('ucGet', gl, S.get, pickGet))
+    row2.appendChild(chooser('ucGet', gl, S.get, pickGet))
+    const rin = el('input', 'uc-amount'); rin.id = 'ucReceive'; rin.inputMode = 'decimal'; rin.placeholder = USER_WORDS.amount; rin.value = S.recv
+    rin.oninput = () => { S.recv = rin.value; S.fixed = 'receive'; S.error = ''; if (S.ticket) { reset(); paintTicket() } schedule() }
+    row2.appendChild(rin)
     box.appendChild(row2)
     // The ticket and the button
     const t = el('div', 'uc-ticket'); t.id = 'ucTicket'; box.appendChild(t)
@@ -118,6 +185,14 @@ export function mountUserComposer (ctx) {
     paintTicket()
     paintTrades()
     loadOffered()
+    // The amount not typed follows the price every few seconds while the tab is shown.
+    if (!S.refresh) S.refresh = setInterval(() => { if (ctx.root.isConnected && doc.visibilityState !== 'hidden' && (!ctx.market || !ctx.market.visible || ctx.market.visible())) schedule(0) }, 10000)
+    schedule(0)
+    if (ctx.market) {
+      if (S.market) S.market.stop()
+      S.market = mountMarketView(mk, { meta: ctx.assetMeta, fmtAtoms: ctx.fmtAtoms, dev: false, relay: ctx.market.relay,
+        pair: () => (S.pay && S.get ? ctx.market.pairOf(S.pay, S.get) : null), visible: ctx.market.visible })
+    }
   }
 
   function paintTicket () {
@@ -154,7 +229,7 @@ export function mountUserComposer (ctx) {
     try {
       const q = await ctx.engine.quote({ payAsset: S.pay, receiveAsset: S.get, amount: String(atoms) })
       if (q.ok) { S.ticket = q.ticket; S.choice = q.choice }
-      else S.error = q.why === 'no-funds' ? USER_WORDS.noFunds(name(S.pay)) : q.why === 'too-small' ? USER_WORDS.tooSmall
+      else S.error = q.why === 'no-funds' ? USER_WORDS.noFunds(name(S.pay)) : q.why === 'not-ready' ? USER_WORDS.notReady(name(S.pay)) : q.why === 'too-small' ? USER_WORDS.tooSmall
         : q.why === 'not-listed' ? USER_WORDS.notListed(name(S.get), name(S.pay)) : USER_WORDS.notOffered(name(S.get), name(S.pay))
     } catch (e) {
       console.warn('[user composer] quote:', e && e.message)
@@ -167,8 +242,8 @@ export function mountUserComposer (ctx) {
     S.busy = true; paintTicket()
     try {
       await ctx.engine.confirm(S.choice, S.ticket)
-      reset(); S.amount = ''
-      const i = ctx.root.querySelector('#ucAmount'); if (i) i.value = ''
+      reset(); S.amount = ''; S.recv = ''
+      for (const id of ['#ucAmount', '#ucReceive']) { const i = ctx.root.querySelector(id); if (i) i.value = '' }
     } catch (e) {
       console.warn('[user composer] confirm:', e && e.message)
       // A price no longer held is priced again, and shown before anything is signed.
@@ -178,27 +253,28 @@ export function mountUserComposer (ctx) {
   }
 
   function stateWord (r) {
-    if (r.state === 'settled') return USER_WORDS.settled
     if (r.state === 'returned' && (r.feesPaid || []).length) return USER_WORDS.returnedFees(r.feesPaid.map((f) => amt(f.asset, f.atoms)).join(' and '))
-    if (r.state === 'returned' || r.state === 'failed') return USER_WORDS.returned
-    if (r.state === 'confirming') return USER_WORDS.working
-    // Buying with BTC: nothing has left the wallet until its asset is held for it.
-    if (r.state === 'waiting') return USER_WORDS.working
-    return USER_WORDS.sent
+    return tradeStateWord(r)
   }
 
   function paintTrades () {
     const list = ctx.root.querySelector('#ucTrades'); if (!list) return
     list.innerHTML = ''
     // A trade whose step did not answer is shown while it is looked for.
-    const recs = ctx.engine.records().filter((r) => (r.state !== 'confirming' || r.uncertain) && r.ticket).slice(-8).reverse()
+    const recs = ctx.engine.records().filter((r) => (r.state !== 'confirming' || r.uncertain) && r.ticket).slice(-12).reverse()
     if (!recs.length) return
     list.appendChild(el('label', 'lbl', USER_WORDS.recent))
-    for (const r of recs) {
-      const d = el('div', 'kv uc-trade'); d.dataset.trade = r.id; d.dataset.state = r.state
-      d.appendChild(el('span', 'k', `${amt(r.ticket.payAsset, r.ticket.amountIn)} → ${amt(r.ticket.receiveAsset, r.ticket.amountOut)}`))
-      d.appendChild(el('span', 'v uc-state', stateWord(r)))
-      list.appendChild(d)
+    // The person's open trades, then the past ones.
+    const done = (r) => ['settled', 'returned', 'failed'].includes(r.state)
+    for (const [word, group] of [[USER_WORDS.openTrades, recs.filter((r) => !done(r))], [USER_WORDS.pastTrades, recs.filter(done).slice(0, 8)]]) {
+      if (!group.length) continue
+      list.appendChild(el('div', 'sub uc-group', word))
+      for (const r of group) {
+        const d = el('div', 'kv uc-trade'); d.dataset.trade = r.id; d.dataset.state = r.state
+        d.appendChild(el('span', 'k', `${amt(r.ticket.payAsset, r.ticket.amountIn)} → ${amt(r.ticket.receiveAsset, r.ticket.amountOut)}`))
+        d.appendChild(el('span', 'v uc-state', stateWord(r)))
+        list.appendChild(d)
+      }
     }
   }
 
