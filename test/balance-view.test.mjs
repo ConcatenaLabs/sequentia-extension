@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { forbiddenIn } from '../vendor/user-trade.js';
 import { figureParts, figureOf, userSplit, developerSplit, developerWordsIn, DEVELOPER_WORDS, leafPerAsset } from '../src/balance-view.js';
 
 const fmt = (v) => String(v);
@@ -12,11 +13,13 @@ test('the figure counts on-chain, leaves, Lightning and staked', () => {
   assert.equal(figureOf({ onchain: '5', leaves: null, ln: undefined }), 5n);
 });
 
-test('user mode: the parts it holds, in plain words, only when there are several', () => {
-  assert.equal(userSplit(row, fmt), 'On-chain 100 · Off-chain 20 · Lightning 3 · Staked 4000');
-  assert.equal(userSplit({ onchain: '0', leaves: '20', ln: '0', staked: '9' }, fmt), 'Off-chain 20 · Staked 9');
-  assert.equal(userSplit({ onchain: '7', leaves: '0', ln: '0', staked: '0' }, fmt), null);
+test('user mode: never where an asset is held; what is staked, when the figure holds more', () => {
+  assert.equal(userSplit(row, fmt), 'Staked 4000');
+  assert.equal(userSplit({ onchain: '0', leaves: '20', ln: '0', staked: '9' }, fmt), 'Staked 9');
+  assert.equal(userSplit({ onchain: '7', leaves: '3', ln: '2', staked: '0' }, fmt), null);
+  assert.equal(userSplit({ onchain: '0', leaves: '0', ln: '0', staked: '9', total: '9' }, fmt), null);
   assert.deepEqual(developerWordsIn(userSplit(row, fmt)), []);
+  assert.deepEqual(forbiddenIn(userSplit(row, fmt)), []);
 });
 
 test('developer mode: every rail by name, staked when there is any', () => {

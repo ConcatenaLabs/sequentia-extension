@@ -70,6 +70,16 @@ export function makeCovenantHooks(ctx){
 
     // The funded UTXO's real scriptPubKey, so planFillFromMatched can enforce the
     // covenant equality check against the on-chain output (anti-relay-lie).
+    // The covenant coin's explicit value (a covenant output is never blinded), or null.
+    fetchUtxoValue: async (txid, vout) => {
+      try {
+        const res = await ctx.esploraFetch(`/tx/${txid}`);
+        if (!res.ok) return null;
+        const tx = await res.json();
+        const o = tx.vout && tx.vout[vout];
+        return o && o.value != null ? BigInt(o.value) : null;
+      } catch { return null; }
+    },
     fetchUtxoSpk: async (txid, vout) => {
       try {
         const res = await ctx.esploraFetch(`/tx/${txid}`);

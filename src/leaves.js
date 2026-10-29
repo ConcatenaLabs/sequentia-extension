@@ -19,6 +19,7 @@ import { sessionMnemonic } from './vault.js';
 import { mode, setMode, walletTag } from './mode.js';
 import { claimScan } from './leaf-schedule.js';
 import { leafPerAsset } from './balance-view.js';
+import { arrivingAtoms } from '../vendor/default-arca.js';
 
 export { mode, setMode };
 
@@ -82,7 +83,11 @@ export async function rememberLeafSum(balance, frozen) {
   const all = (await stGet('local', SUM_KEY)) || {};
   const fz = {};
   for (const [a, v] of Object.entries(frozen || {})) if (BigInt(v) > 0n) fz[a] = String(v);
-  all[tag] = { at: Date.now(), perAsset, frozen: fz };
+  // What is held but cannot be spent yet (a board not final, a payment not completed), which
+  // default mode shows under the figure as arriving.
+  const arriving = {};
+  for (const a of Object.keys((balance && balance.arca) || {})) { const n = arrivingAtoms(balance, a); if (n > 0n) arriving[a] = n.toString(); }
+  all[tag] = { at: Date.now(), perAsset, frozen: fz, arriving };
   await stSet('local', SUM_KEY, all);
 }
 
@@ -119,7 +124,7 @@ export async function join(cfg) {
   for (const k of ['server', 'node_url', 'node_user', 'node_password', 'exit_delay_units', 'min_exit_delay_units', 'max_exit_delay_units', 'tick_ms', 'care_ms']) {
     if (cfg[k] !== undefined && cfg[k] !== null && cfg[k] !== '') clean[k] = cfg[k];
   }
-  const v = await host('start', { mnemonic, config: clean, nodePassword: clean.node_password, tickMs: clean.tick_ms, careMs: clean.care_ms, scan: scanNow() });
+  const v = await host('start', { mnemonic, config: clean, nodePassword: clean.node_password, tickMs: clean.tick_ms, careMs: clean.care_ms, scan: scanNow(), defaultMode: (await mode()) === 'user' });
   // A wallet created now answers its `info` as every command answers, { result, start }.
   const info = (v.info && v.info.result) || (await host('run', { command: 'info' })).result;
   await setConfig({ ...clean, operator: info && info.operator, joinedAt: Date.now() });
@@ -146,7 +151,7 @@ export async function ensureRunning() {
     if (st.scan !== scan) await host('scan', { scan });
     return true;
   }
-  await host('start', { mnemonic, nodePassword: cfg.node_password, tickMs: cfg.tick_ms, careMs: cfg.care_ms, scan: scanNow() });
+  await host('start', { mnemonic, nodePassword: cfg.node_password, tickMs: cfg.tick_ms, careMs: cfg.care_ms, scan: scanNow(), defaultMode: (await mode()) === 'user' });
   return true;
 }
 
@@ -175,6 +180,24 @@ export async function requireLeaves() {
 export async function run(command, args = {}) {
   await requireLeaves();
   return (await host('run', { command, args, paying: true })).result;
+}
+// One command a person asks for in default mode (a receive code, a payment to a code or an
+// address, a trade): the same path as `run`, through the next round when the planned coins
+// cover it, without the developer-mode gate. Its refusals reach the person only in default
+// mode's words (src/default-mode.js userRefusal).
+export async function runUser(command, args = {}) {
+  if (!(await config())) throw new Error(NOT_JOINED);
+  if (!(await sessionMnemonic())) throw new Error('the wallet is locked');
+  await ensureRunning();
+  return (await host('run', { command, args, paying: true })).result;
+}
+// Forgets the operator this wallet joined (a join whose wallet named another key than the one
+// pinned), and closes the leaf wallet.
+export async function unjoin() {
+  const tag = await walletTag();
+  const all = (await stGet('local', CONFIGS_KEY)) || {};
+  if (tag && all[tag]) { delete all[tag]; await stSet('local', CONFIGS_KEY, all); }
+  await stop();
 }
 // One command of the library in either mode, for the work the wallet carries on by
 // itself (a take's forfeits, an order's listing): what was started in developer mode

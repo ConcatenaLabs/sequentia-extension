@@ -62,10 +62,16 @@
 //   'care'                                  -> runs `care` now, whenever it last ran
 //   'watchBond'                             -> reads the bond and runs `watch_bond` now
 //   'stop'                                  -> closes the wallet and stops the schedule
+//   'defaults' { on, quietUntil? }          -> default mode on the pinned operator, or not:
+//        while on, coins that land at the wallet's address on the chain are boarded by
+//        themselves (vendor/default-arca.js, never before `quietUntil`, when the kit wallet's
+//        own payment may still be spending them), and the mailbox is read every few seconds
+//        while nothing is asked, so a payment to the receive code shows at once
 // The mnemonic is handed to the worker and not kept here.
 
 import { inFlight, nextAskMs, freshRequestWaits, syncDecision, careDue, careSummary, careArgs, payThrough, CARE_EVERY_MS } from './src/leaf-schedule.js';
 import { frozenAtoms } from './src/leaf-profiles.js';
+import { boardCandidates, boardAll } from './vendor/default-arca.js';
 
 const TICK_MS = 60_000;
 let worker = null;
@@ -73,7 +79,8 @@ let next = 1;
 const pending = new Map();
 let failed = null;
 const S = { open: false, fp: null, timer: null, heldFor: null, schedule: null, coins: [], participations: [], lastSync: null, lastError: null, tickMs: TICK_MS,
-  watch: new Set(), watchMs: 3000, seen: new Map(), scan: null, careAt: null, careMs: CARE_EVERY_MS, lastCare: null, releasing: null, bond: null, lastWatch: null };
+  watch: new Set(), watchMs: 3000, seen: new Map(), scan: null, careAt: null, careMs: CARE_EVERY_MS, lastCare: null, releasing: null, bond: null, lastWatch: null,
+  defaultMode: false, quietUntil: 0, lastAsked: 0, info: null, boardRefused: new Map(), lastBoard: null, mailTimer: null };
 
 function errorOf(e) {
   if (e && typeof e === 'object' && e.message) {
@@ -143,7 +150,10 @@ function holdsSupervised() {
 }
 const SCAN_BUSY = /Scan already in progress/;
 const READS = new Set(['info', 'address', 'balance', 'coins', 'record', 'boards', 'participations', 'schedule', 'refusals', 'quote', 'board_quote', 'exit_quote',
-  'take_quote', 'order_quote', 'orders', 'plans', 'claims', 'distributions']);
+  'take_quote', 'order_quote', 'orders', 'plans', 'claims', 'distributions',
+  // The trade composer's quotes and reads (vendor/user-trade.js): they move no coin.
+  'settle_quote', 'order_fill_resting_quote', 'swap_read', 'swaps', 'offboard_quote',
+  'lightning_pay_quote', 'lightning_receive_quote', 'lightning_payments', 'lightning_receives']);
 
 // The takes the service worker asked the host to watch (`watch`): while one waits on
 // the wallet (its forfeits not yet handed over), the host syncs every `watchMs`, so
@@ -234,6 +244,54 @@ function plan(ms) {
   S.timer = setTimeout(() => { tick().catch(() => {}); }, ms);
 }
 
+
+// ---- default mode: coins on the chain go into the tree, payments show in seconds ----
+const MAILBOX_POLL_MS = 10_000;
+const MAILBOX_QUIET_MS = 20_000;
+
+// Each asset the operator serves, held at the phrase's keys on the chain at least at its
+// smallest leaf, is boarded whole less its fee (vendor/default-arca.js boardAll: the fee the
+// library quoted for that very board, in the asset boarded). Coins the library refused to
+// board are asked again only once they change.
+async function boardArrivals() {
+  if (!S.open || !S.defaultMode || Date.now() < S.quietUntil) return;
+  if (!S.info) { try { S.info = (await call('run', { command: 'info' })).result; } catch { return; } }
+  let balance;
+  try { balance = (await call('run', { command: 'balance' })).result; } catch { return; }
+  let boarded = false;
+  for (const c of boardCandidates(balance, S.info)) {
+    if (S.boardRefused.get(c.asset) === String(c.onchain)) continue;
+    try {
+      const v = await boardAll(async (cmd, a) => (await runCommand(cmd, a)).result, c);
+      if (v) { boarded = true; S.lastBoard = { at: Date.now(), asset: c.asset, value: v }; emit('leafArrived', { asset: c.asset, value: String(c.onchain), kind: 'board' }); }
+      else S.boardRefused.set(c.asset, String(c.onchain));
+      console.info(`[leaves] board of ${c.asset.slice(0, 8)}: ${v ? 'boarded' : 'nothing to board after the fee'}`);
+    } catch (e) {
+      S.boardRefused.set(c.asset, String(c.onchain));
+      S.lastBoard = { at: Date.now(), asset: c.asset, error: errorOf(e) };
+      console.warn(`[leaves] board of ${c.asset.slice(0, 8)} refused: ${e && e.message}`);
+    }
+  }
+  if (boarded) await reportBalance();
+}
+
+function watchMailbox() {
+  clearTimeout(S.mailTimer);
+  if (!S.open || !S.defaultMode) return;
+  S.mailTimer = setTimeout(async () => {
+    if (S.open && S.defaultMode && !ticking && Date.now() - S.lastAsked > MAILBOX_QUIET_MS) {
+      try {
+        const mb = (await call('run', { command: 'mailbox' })).result;
+        if (mb && ((mb.accepted || []).length || (mb.pending || []).length)) {
+          arrivals(mb);
+          await reportBalance();
+        }
+      } catch { /* the next read tries again */ }
+    }
+    watchMailbox();
+  }, MAILBOX_POLL_MS);
+}
+
 let ticking = false;
 async function tick() {
   if (!S.open || ticking) return;
@@ -276,6 +334,7 @@ async function tick() {
       S.coins = (await call('run', { command: 'coins' })).result || [];
       await reportBalance();
     }
+    if (S.defaultMode) await boardArrivals();
     S.lastError = null;
     wait = inFlight(S.coins, S.participations) ? Math.min(S.tickMs, 30_000) : nextAskMs(S.schedule, S.tickMs);
     if (takeWaits()) wait = Math.min(wait, S.watchMs);
@@ -322,6 +381,7 @@ async function start(args) {
   if (args.tickMs) S.tickMs = Number(args.tickMs);
   if (args.careMs) S.careMs = Math.max(1000, Number(args.careMs));
   if (args.scan) S.scan = Number(args.scan);
+  if (args.defaultMode !== undefined) S.defaultMode = !!args.defaultMode;
   // Two callers may ask at once (an unlock, and a site's request): the wallet of
   // this mnemonic, already open, is left as it is. Only a digest of the mnemonic
   // is kept to tell.
@@ -343,8 +403,11 @@ async function start(args) {
   S.careAt = null;      // care once after the wallet opens,
   S.syncOnOpen = true;  // after one sync
   console.info(`[leaves] the leaf wallet is open (${has ? 'from its store' : 'created'}); it syncs on its schedule`);
+  S.info = null;
+  S.boardRefused = new Map();
   await reportBalance();
   plan(0);
+  watchMailbox();
   return { created: !has, info };
 }
 
@@ -357,7 +420,7 @@ async function handle(op, args) {
   switch (op) {
     case 'status':
       return { open: S.open, lastSync: S.lastSync, lastError: S.lastError, schedule: S.schedule, lastCare: S.lastCare, scan: S.scan, releasing: S.releasing,
-        bond: S.bond, lastWatch: S.lastWatch };
+        bond: S.bond, lastWatch: S.lastWatch, defaultMode: S.defaultMode, lastBoard: S.lastBoard };
     case 'scan':
       if (args.scan) S.scan = Number(args.scan);
       return { scan: S.scan };
@@ -370,6 +433,7 @@ async function handle(op, args) {
     case 'run': {
       if (!S.open) throw { kind: 'refused', message: 'the leaf wallet is not open' };
       const command = String(args.command);
+      if (args.paying) S.lastAsked = Date.now();
       if (!args.paying) return await runCommand(command, args.args || {});
       return await payThrough(command, args.args || {}, {
         run: runCommand,
@@ -393,7 +457,13 @@ async function handle(op, args) {
       if (S.open && S.watch.size) { S.watchPending = true; plan(0); }
       return { watching: [...S.watch] };
     }
+    case 'defaults':
+      S.defaultMode = !!args.on;
+      if (args.quietUntil) S.quietUntil = Math.max(S.quietUntil, Number(args.quietUntil));
+      watchMailbox();
+      return { defaultMode: S.defaultMode, quietUntil: S.quietUntil };
     case 'stop':
+      clearTimeout(S.mailTimer);
       if (S.open) console.info('[leaves] the leaf wallet is closed');
       S.open = false;
       S.fp = null;

@@ -27,6 +27,25 @@ export const LSP = {
   hostPubkeyBtc: '020a749af93e2a5a4d67ad28585cec31b55a146969eb77ca3d076eb59ff111ed51',
 };
 
+// The operator default mode holds assets with (vendor/default-arca.js): its server, the node
+// its leaf wallet follows the chain through, and the operator's key, pinned. A wallet in default
+// mode that has joined none joins this one by itself, and only while its server shows this key.
+// The same operator and key as the web wallet's and Ambra's.
+export const ARCA = {
+  server: BASE + '/arca',
+  node_url: BASE + '/node-rpc',
+  operator: 'b6f4c5924ad81947658cf85bb93d9267efc54c7fcb2e4577e8c954c68fa087bb',
+};
+// The Bitcoin ark that holds default mode's BTC (vendor/btc-ark.js): its server (gRPC-web) and
+// the Esplora server its wallet reads testnet4 from.
+export const BTC_ARK = { server: BASE, esplora: T4_API, network: 'testnet4' };
+// The testnet faucet, which pays a receive code (or an address).
+export const FAUCET_URL = BASE + '/faucet';
+// The pairs the trade composer offers in default mode (the web wallet's user-mode/pairs.json).
+export const USER_PAIRS_URL = BASE + '/wallet/user-mode/pairs.json';
+// The live makers the trade composer asks for prices: in-tree swaps, and BTC.
+export const LEAF_MAKERS = [BASE + '/leafmaker', BASE + '/leafmaker-btc'];
+
 // The height from which the network signs stake records the second-generation
 // way (committing to the amount). null means the network's own, which the kit
 // carries per network and binds to its genesis; a number overrides it, for a

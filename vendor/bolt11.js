@@ -135,7 +135,7 @@ export function bolt11Asset(bolt11) {
 
 // decodeBolt11 — everything above in one reading:
 //   { ok: true, network, chain: 'seq'|'btc', asset (hex on 'seq', null on 'btc'), amountMsat (BigInt|null),
-//     paymentHash, minFinalCltv }
+//     paymentHash, minFinalCltv, timestamp (seconds), expiry (seconds) }
 // or { ok: false, error } for a string that is not an invoice the node would decode: an unknown
 // prefix, a broken checksum (unless { checksum: false }), no payment hash, or, on a Sequentia network,
 // no `a` field or one of the wrong length.
@@ -165,6 +165,10 @@ export function decodeBolt11(bolt11, { checksum = true } = {}) {
   }
   const paymentHash = bolt11PaymentHash(bolt11);
   if (!paymentHash) return { ok: false, error: 'the invoice carries no payment hash' };
+  // When it was made (seconds) and how long it runs (its `x` field, type 6; 3600 when absent).
+  let timestamp = 0; for (let i = 0; i < 7; i++) timestamp = timestamp * 32 + p.vals[i];
+  let expiry = 3600;
+  for (const f of fields(p.vals)) if (f.type === 6) { expiry = 0; for (const g of f.data) expiry = expiry * 32 + g; break; }
   return { ok: true, network: net.network, chain: net.chain, asset,
-    amountMsat: bolt11AmountMsat(bolt11), paymentHash, minFinalCltv: bolt11MinFinalCltv(bolt11) };
+    amountMsat: bolt11AmountMsat(bolt11), paymentHash, minFinalCltv: bolt11MinFinalCltv(bolt11), timestamp, expiry };
 }

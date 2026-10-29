@@ -13,7 +13,7 @@ import { join } from 'node:path';
 // temporary copies.
 const root = new URL('..', import.meta.url).pathname;
 const modules = [
-  'background.js', 'offscreen.js', 'offscreen-boot.js', 'offscreen-leaves.js', 'leaves/worker.js',
+  'background.js', 'offscreen.js', 'offscreen-boot.js', 'offscreen-leaves.js', 'offscreen-ark.js', 'leaves/worker.js', 'btc-ark/worker.js',
   ...readdirSync(join(root, 'src')).filter((f) => f.endsWith('.js')).map((f) => 'src/' + f),
 ];
 

@@ -301,6 +301,11 @@ function persistAddrIndex() {
 // The receive index the wallet hands out next (null before the first sync of a wallet
 // with nothing kept): what the leaf wallet's `care` scans claims up to, and 20 more.
 export function receiveIndex() { return addrIndex; }
+// The Bitcoin keys the kit wallet has used: how many of each chain to look at, and the next
+// change index (the Bitcoin ark's board reads the coins at those keys).
+export function btcWindow() {
+  return { lim: Math.max(btcScanState.externalNext, btcScanState.changeNext) + 20, changeNext: btcScanState.changeNext };
+}
 
 export function currentAddress(confidential = false) {
   if (!wollet) throw new Error('wallet is locked');

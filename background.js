@@ -23,17 +23,19 @@ import { btc as btcLib } from './vendor/btc.js';
 import * as perms from './src/permissions.js';
 import * as router from './src/provider-router.js';
 import * as leaves from './src/leaves.js';
+import * as dm from './src/default-mode.js';
 import { issuerAssets } from './src/leaf-profiles.js';
 import * as leafTrade from './src/leaf-trade.js';
 import * as leafResting from './src/leaf-resting.js';
 import * as market from './src/market.js';
 import { takeRecords, updateTake } from './src/leaf-orders.js';
-import { MODE_WORDS } from './src/mode.js';
+import { MODE_WORDS, walletTag as walletTagNow } from './src/mode.js';
 import {
-  vaultExists, vaultCreate, vaultUnlock, vaultLock, sessionMnemonic,
+  vaultExists, vaultCreate, vaultUnlock, vaultLock, vaultDestroy, sessionMnemonic,
   armAutoLock, touchAutoLock,
 } from './src/vault.js';
 import { stGet, stSet, parseAtoms } from './src/util.js';
+import { tagOf } from './src/mode.js';
 import { EXPLORER_TX, EXPLORER_T4_TX } from './src/config.js';
 
 // ---- crash breadcrumbs: record the worker's last breath so a death mid-
@@ -138,7 +140,11 @@ async function afterUnlock() {
     ln.resumePendingMove().catch(() => {});
     // The leaf wallet (developer mode, an operator joined): opened in the offscreen
     // document, which syncs it on the library's schedule from here on.
-    leaves.ensureRunning().then(() => resumeLeafTrades()).catch((e) => console.warn('[leaves] could not start:', (e && e.message) ?? e));
+    // Default mode: join the pinned operator when this wallet has joined none, and open the
+    // Bitcoin ark wallet of this phrase (src/default-mode.js).
+    dm.ensureArk().then(() => dm.boardBtcSoon()).catch((e) => console.warn('[btc ark]', (e && e.message) ?? e));
+    await dm.autoJoin().catch(() => {});
+    leaves.ensureRunning().then(() => dm.syncDefaults()).then(() => resumeLeafTrades()).catch((e) => console.warn('[leaves] could not start:', (e && e.message) ?? e));
   })().catch(() => {});
 }
 
@@ -146,6 +152,7 @@ async function doLock() {
   await vaultLock();
   engine.closeWallet();
   await leaves.stop();
+  await dm.stopArk();
   emitToAll('accountsChanged', { accounts: [] });
   chrome.runtime.sendMessage({ scope: 'ui-event', event: 'locked' }).catch(() => {});
 }
@@ -165,7 +172,8 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   if (await sessionMnemonic()) {
     await engine.ensureOpen().catch(() => {});
     if (await ln.pendingMove()) ln.resumePendingMove().catch(() => {});
-    leaves.ensureRunning().then(() => resumeLeafTrades()).catch(() => {});
+    dm.ensureArk().catch(() => {});
+    dm.autoJoin().then(() => leaves.ensureRunning()).then(() => dm.syncDefaults()).then(() => resumeLeafTrades()).catch(() => {});
   } else {
     markTakesWaiting().catch(() => {});
   }
@@ -213,7 +221,10 @@ try {
 try {
   chrome.alarms.create('leafHost', { periodInMinutes: 1 });
   chrome.alarms.onAlarm.addListener((a) => {
-    if (a && a.name === 'leafHost') leaves.ensureRunning().then((up) => (up ? resumeLeafTrades() : null)).catch(() => {});
+    if (a && a.name === 'leafHost') {
+      dm.autoJoin().then(() => leaves.ensureRunning()).then((up) => (up ? dm.syncDefaults().then(() => resumeLeafTrades()) : null)).catch(() => {});
+      sessionMnemonic().then((m) => (m ? dm.ensureArk().then(() => dm.boardBtcSoon()) : null)).catch(() => {});
+    }
   });
 } catch { /* alarms unavailable in this context */ }
 
@@ -260,6 +271,12 @@ async function overview({ withLn = false } = {}) {
   // (a supervised asset's leaves and the coins they landed): said under the figure in
   // both modes.
   const frozenPer = leafKept.frozen || {};
+  // What is held but cannot be spent yet ("arriving"): the tree's, and BTC's on the ark.
+  const arrivingPer = { ...(leafKept.arriving || {}) };
+  // BTC on the Bitcoin ark counts in BTC's one figure, in both modes.
+  const arkKept = (await dm.arkSum().catch(() => null)) || null;
+  const arkAtoms = arkKept ? BigInt(arkKept.total || 0) : 0n;
+  if (arkKept && BigInt(arkKept.arriving || 0) > 0n) arrivingPer.BTC = String(arkKept.arriving);
   // The Sequence token at the wallet's staking key (each stake still the holder's, under
   // either lock, and the delegation record) counts in its figure and the headline, in
   // both modes. The fast first paint uses what was last read; the second pass reads the
@@ -274,7 +291,8 @@ async function overview({ withLn = false } = {}) {
     const lnAtoms = lnEntry ? BigInt(lnEntry.units) : 0n;
     const leafAtoms = BigInt(leafPer[key] || 0);
     const staked = key === policy ? stakedAtoms : 0n;
-    const total = BigInt(onchainAtoms) + lnAtoms + leafAtoms + staked;
+    const ark = key === 'BTC' ? arkAtoms : 0n;
+    const total = BigInt(onchainAtoms) + lnAtoms + leafAtoms + staked + ark;
     if (!alwaysShow && total <= 0n) return;
     const m = A.assetMeta(key);
     rows.push({
@@ -283,6 +301,8 @@ async function overview({ withLn = false } = {}) {
       onchain: String(onchainAtoms), ln: lnAtoms.toString(), lnChannels: lnEntry ? lnEntry.channels : 0,
       leaves: key === 'BTC' ? null : leafAtoms.toString(),
       staked: staked.toString(),
+      ark: ark.toString(),
+      arriving: String(arrivingPer[key] || '0'),
       total: total.toString(),
       frozen: key === 'BTC' ? '0' : String(frozenPer[key] || '0'),
       refStr: A.refValueStr(key, total, ref),
@@ -323,6 +343,7 @@ async function overview({ withLn = false } = {}) {
   return {
     rows,
     mode: walletMode,
+    tag: await walletTagNow(),
     ref, refOptions: A.refOptions(),
     totalRefStr: anyPriced ? A.fmtRef(totalRef, ref) : null,
     pricesStale: A.pricesStale(),
@@ -364,7 +385,9 @@ async function prepareSend({ rows, feeAsset, feeRate }) {
 
 async function confirmSend({ id, kind }) {
   if (kind === 'oamp') return await openamp.completeTransfer(id);
-  return await engine.confirmSend(id);
+  const r = await engine.confirmSend(id);
+  dm.noteOwnPayment(r.chain);
+  return r;
 }
 
 // ---- the UI method table ----
@@ -391,7 +414,7 @@ const uiMethods = {
   },
   'lock': async () => { await doLock(); return { ok: true }; },
   'revealMnemonic': async ({ password }) => ({ mnemonic: await vaultUnlock(password) }),
-  'sync': async () => { await engine.ensureOpen(); await engine.sync(); await openamp.refreshBalances().catch(() => {}); return { ok: true }; },
+  'sync': async () => { await engine.ensureOpen(); await engine.sync(); await openamp.refreshBalances().catch(() => {}); dm.boardBtcSoon().catch(() => {}); return { ok: true }; },
   'overview': async (p) => overview(p || {}),
   'receive': async ({ confidential, fresh }) => {
     await engine.ensureOpen();
@@ -528,12 +551,43 @@ const uiMethods = {
   'lnClose': async ({ kind }) => await ln.closeToChain({ kind }),
   // --- the wallet's mode, and leaves (developer mode) ---
   'getMode': async () => ({ mode: await leaves.mode(), words: MODE_WORDS }),
+  // --- default mode (src/default-mode.js) ---
+  'default.receiveCode': async ({ sats, fresh }) => await dm.receiveCode({ sats, fresh }),
+  'default.invoiceReceived': async ({ hash }) => await dm.invoiceReceived(hash),
+  'default.faucet': async ({ asset }) => await dm.faucet(asset || ''),
+  'default.prepareSend': async (p) => await dm.prepareSend(p || {}),
+  'default.confirmSend': async (p) => { const r = await dm.confirmSend(p || {}); engine.sync().catch(() => {}); return r; },
+  'default.joined': async () => ({ joined: !!(await leaves.config()), open: !!((await leaves.status().catch(() => ({}))).open), ark: await dm.arkIsOpen() }),
+  // The trade composer (popup) asks the leaf library and the ark through these.
+  'default.leaf': async ({ command, args }) => {
+    try { return await leaves.runUser(String(command), args || {}); }
+    catch (e) { throw ((await leaves.mode()) === 'developer' ? e : dm.userRefusal(e)); }
+  },
+  'default.leafInfo': async () => await leaves.runAny('info'),
+  'default.assetMeta': async ({ hexes }) => {
+    const out = {};
+    for (const h of hexes || []) if (/^[0-9a-f]{64}$/.test(h)) { const m = A.assetMeta(h); out[h] = { ticker: m.ticker, precision: m.precision }; }
+    return out;
+  },
+  'default.ark': async ({ method, args }) => await dm.arkLightning(String(method), args),
+  // Removes the wallet from this browser: its leaf and ark wallets are closed first, so a
+  // wallet made next shows none of their coins. The phrase is the way back.
+  'removeWallet': async ({ password }) => {
+    await vaultUnlock(password);
+    const tag = tagOf(engine.getWollet() ? engine.getWollet().descriptor().toString() : '');
+    await dm.closeWallets();
+    engine.closeWallet();
+    await vaultDestroy(password);
+    await dm.forgetWallet(tag).catch(() => {});
+    emitToAll('accountsChanged', { accounts: [] });
+    return { ok: true };
+  },
   // The leaf wallet keeps running in user mode (its coins have dates to keep); only
   // what is shown and what a site may reach follows the mode.
   'setMode': async ({ mode }) => {
     const m = await leaves.setMode(mode);
     emitToTabs('modeChanged', { mode: m }, null).catch(() => {});
-    leaves.ensureRunning().catch(() => {});
+    dm.autoJoin().then(() => leaves.ensureRunning()).then(() => dm.syncDefaults()).catch(() => {});
     return { mode: m };
   },
   'leaves.state': async () => {
@@ -601,6 +655,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // connected sites (an open wallet page hears the same message itself).
   // Leaf events reach sites only in developer mode; the balance is kept for the popup in
   // either mode.
+  // The Bitcoin ark wallet's balance, from its host: kept for the popup's BTC figure.
+  if (msg && msg.scope === 'ark-event' && sender.id === chrome.runtime.id) {
+    if (msg.event === 'arkBalance') {
+      dm.rememberArkSum(msg.data)
+        .then(() => chrome.runtime.sendMessage({ scope: 'ui-event', event: 'leaves-changed' }).catch(() => {}))
+        .catch(() => {});
+    }
+    return false;
+  }
   if (msg && msg.scope === 'leaf-event' && sender.id === chrome.runtime.id) {
     if (msg.event === 'leafBalance') {
       leaves.rememberLeafSum(msg.data && msg.data.balance, msg.data && msg.data.frozen)

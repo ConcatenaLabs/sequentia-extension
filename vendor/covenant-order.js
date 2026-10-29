@@ -255,6 +255,7 @@ export function planFillFromMatched(matched, onchainSpkHex, opts){
 // taker's own asset-B funding inputs.
 //
 //   hooks.fetchUtxoSpk(txid, vout) -> Promise<spkHex|null>   (explorer lookup; optional)
+//   hooks.fetchUtxoValue(txid, vout) -> Promise<atoms|null>   (the coin's explicit value; optional)
 //   hooks.buildCovenantFillTx(recipe) -> Promise<{rawHex, txid?}>   THE wasm seam
 //   hooks.broadcast(rawHex) -> Promise<txid>
 //   hooks.onStatus(msg)     -> progress (optional)
@@ -264,6 +265,19 @@ export async function settleFill(matched, hooks){
   let onchainSpk = null;
   if (hooks.fetchUtxoSpk){
     try { onchainSpk = await hooks.fetchUtxoSpk(pickCt(matched)._txid, pickCt(matched)._vout); } catch {}
+  }
+  // The locked amount is read from the coin, never taken on the relay's word. An order the relay
+  // re-pointed at its remainder after a partial fill can still advertise its earlier size, and a
+  // fill sized against that pays the covenant's asset out unbalanced: consensus refuses it as
+  // "bad-txns-in-ne-out, value in != value out", after the user has confirmed.
+  if (hooks.fetchUtxoValue){
+    let held = null;
+    try { held = await hooks.fetchUtxoValue(pickCt(matched)._txid, pickCt(matched)._vout); } catch {}
+    if (held != null && BigInt(held) !== BigInt(pick(matched, 'covenant_locked', 'covenantLocked') || 0)){
+      if (BigInt(pick(matched, 'fill_base_amount', 'fillBaseAmount') || 0) > BigInt(held))
+        throw new Error('this resting order holds less than the fill now (part of it was taken); nothing was sent, take another offer');
+      matched = { ...matched, covenant_locked: String(BigInt(held)) };
+    }
   }
   const recipe = planFillFromMatched(matched, onchainSpk, hooks.opts);
   if (!hooks.buildCovenantFillTx)
