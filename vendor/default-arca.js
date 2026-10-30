@@ -19,6 +19,8 @@
 // module reads its answers (balance, info) and names the route. It has no DOM, so it runs under
 // Node (default-arca.test.mjs).
 
+import { expandRequest } from './pay-code.js'
+
 // The words default mode shows for all of this. None is in user-trade.js's
 // USER_MODE_FORBIDDEN_WORDS (default-arca.test.mjs checks it). They are the kit's default-mode
 // contract (docs/DEFAULT_MODE.md), the same in every Concatena wallet: change it there first.
@@ -40,6 +42,9 @@ export const DEFAULT_WORDS = Object.freeze({
   addressTip: 'Your address, the same tb1 address on both chains. For BTC, and for senders that ask for an address.',
   sendTitle: (amount, ticker) => `Send ${amount} ${ticker}?`,
   sendLine: 'It arrives in seconds.',
+  // A receive code paid at its address, because nothing the wallet holds pays it in seconds.
+  byAddress: (arrives) => `This can't arrive in seconds from what you hold now, so it goes to the address. ${arrives}`,
+  arrivesNextBlock: 'It arrives after the next block, in about a minute.',
   send: 'Send',
   sending: 'Sending\u2026',
   sent: (amount, ticker, seconds) => `Sent ${amount} ${ticker} (${seconds} s).`,
@@ -123,10 +128,11 @@ export function parseReceiveCode (text) {
   return v
 }
 
-// Whether a payment to `text` goes in the tree: it is a receive code naming the operator and the
-// chain this wallet's leaf wallet holds its coins with (`info`, the library's answer).
+// Whether a payment to `text` goes in the tree: it is a receive request (short, as a receive code
+// carries it, or in the library's spelling) naming the operator and the chain this wallet's leaf
+// wallet holds its coins with (`info`, the library's answer).
 export function treeRoute (text, info) {
-  const r = parseReceiveCode(text)
+  const r = parseReceiveCode(expandRequest(text, info) || text)
   if (!r || !info) return null
   if (!info.operator || !info.genesis_hash) return null
   if (r.operator !== info.operator || r.genesis_hash !== info.genesis_hash) return null

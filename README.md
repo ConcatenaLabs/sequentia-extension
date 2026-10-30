@@ -34,7 +34,8 @@ confidential `tsqb1…` addresses are an explicit opt-in).
   `src/config.js` (`ARCA`) by itself, only while its server shows the pinned key,
   and tries again every two minutes when it cannot. BTC is held on the Bitcoin ark
   (`BTC_ARK`, Bark's wallet in `btc-ark/`, opened in both modes). Receive shows one
-  receive code, `bitcoin:<tb1>?ark=<ark address>&sequentia=<receive request>`, with
+  receive code, `BITCOIN:<TB1>?ark=<ARK ADDRESS>&sequentia=<SQR1…>` (the web wallet's
+  `pay-code.js`, kept in `vendor/`), with
   an optional "Amount in BTC" that adds `amount=` and an ark invoice as
   `lightning=`; the testnet faucet pays the code. Coins that arrive at the address
   are moved into the tree (assets) or onto the ark (BTC) by themselves. Send takes a
