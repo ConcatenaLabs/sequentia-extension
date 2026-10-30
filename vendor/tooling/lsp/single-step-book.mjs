@@ -126,16 +126,33 @@ export function sizeEntry (entry, payAtoms) {
 
 // The best of the candidates (design 3.2): the most received, then the fewest parties, then the
 // lower id. A candidate is { source, id, receive (atoms, net of fees taken from it) }.
-export function chooseCandidate (cands) {
-  const list = (cands || []).filter((c) => c && big(c.receive) > 0n)
-  list.sort((a, b) => {
+// Sources whose coin is the person's only once a round or a block is final, which waits on Bitcoin
+// blocks (minutes, or longer when Bitcoin is slow): a take of a covenant order is paid in the
+// operator's round, a fill on the chain in a block. The others hand the coin over in seconds.
+export const SLOW_SOURCES = new Set(['covenant-round', 'onchain-fill'])
+// How much more a slow source must give than the best fast one to be chosen, in basis points.
+export const SLOW_PREMIUM_BPS = 50n
+
+function bestOf (list) {
+  const l = [...list]
+  l.sort((a, b) => {
     const d = big(b.receive) - big(a.receive)
     if (d !== 0n) return d > 0n ? 1 : -1
     const p = (SOURCE_PARTIES[a.source] ?? 9) - (SOURCE_PARTIES[b.source] ?? 9)
     if (p) return p
     return String(a.id).localeCompare(String(b.id))
   })
-  return list[0] || null
+  return l[0] || null
+}
+
+// The candidate a trade takes: the one that gives the most, except that one whose coin waits on
+// Bitcoin blocks is taken over one handed over in seconds only when it gives SLOW_PREMIUM_BPS more.
+export function chooseCandidate (cands) {
+  const list = (cands || []).filter((c) => c && big(c.receive) > 0n)
+  const fast = bestOf(list.filter((c) => !SLOW_SOURCES.has(c.source)))
+  const slow = bestOf(list.filter((c) => SLOW_SOURCES.has(c.source)))
+  if (!fast || !slow) return fast || slow
+  return big(slow.receive) * 10000n > big(fast.receive) * (10000n + SLOW_PREMIUM_BPS) ? slow : fast
 }
 
 // The pairs and sources the drill has admitted on a chain (user-mode/pairs.json): the sources a
