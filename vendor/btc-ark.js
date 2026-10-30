@@ -45,6 +45,10 @@ export const BTC_WORDS = Object.freeze({
   paySub: 'Paste an invoice to pay it with your BTC.',
   paying: 'Paying…',
   paid: (amount, fee) => `Paid ✓ ${amount} BTC · fee ${fee} BTC`,
+  // The payee holds the payment and has not taken it yet (a hold invoice): it is not paid until
+  // they do, and comes back if they do not.
+  payWaiting: 'On its way: waiting for the other side to accept it.',
+  payCameBack: 'Not paid: the payment came back, and the BTC is in your balance again.',
   payUpTo: (amount) => `You can pay up to ${amount} BTC this way now.`,
   payHint: 'Paste an invoice',
   notBtc: (ticker) => `This invoice asks for ${ticker}. Only invoices for BTC are paid here.`,
@@ -269,9 +273,26 @@ export function mountBtcArk ({ makeWorker, mnemonic, config, decode, onChange = 
     else if (q.route === 'invoice') {
       r = await run('pay', { invoice: dest, max_fee_sats: String(q.fee), wait: true }, PAY_TIMEOUT_MS)
       if (r.state === 'failed') throw new Error(r.reason || 'the payment failed')
+      // 'complete' once the payee took it; 'pending' while they hold it (payOutcome follows it).
+      const d = decode(dest)
+      r = { ...r, hash: d && d.ok ? d.paymentHash : null }
     } else r = await run('offboard', { address: dest, sats: String(q.sats) }, PAY_TIMEOUT_MS)
     refresh().catch(() => {})
     return { route: q.route, fee: q.fee, sats: q.sats, ...r }
+  }
+
+  // A payment the payee holds, followed to its end: 'complete' when they take it, 'came-back' when
+  // it fails back (the wallet's coins are its own again), or 'pending' still at `untilMs`.
+  async function payOutcome (hash, { untilMs = 30 * 60_000, everyMs = 3000 } = {}) {
+    const t0 = now()
+    for (;;) {
+      let r = null
+      try { r = await run('pay_status', { hash, drive: true }) } catch (e) { log('[btc ark] payment status:', e && e.message) }
+      if (r && r.state === 'complete') { refresh().catch(() => {}); return { state: 'complete', preimage: r.preimage } }
+      if (r && (r.state === 'none' || r.state === 'failed')) { refresh().catch(() => {}); return { state: 'came-back' } }
+      if (now() - t0 >= untilMs) return { state: 'pending' }
+      await new Promise((resolve) => setTimeout(resolve, everyMs))
+    }
   }
 
   // Boards the page's confirmed on-chain BTC, signed by the page's own key. `chain`:
@@ -365,7 +386,7 @@ export function mountBtcArk ({ makeWorker, mnemonic, config, decode, onChange = 
 
   return {
     open, isOpen: () => isOpen, refresh, renewDue, figures: () => figures, info: () => info,
-    route: (to) => routeOf(to, decode), quote, send, board, invoice, received, lightning, run,
+    route: (to) => routeOf(to, decode), quote, send, payOutcome, board, invoice, received, lightning, run,
     close () { if (timer) clearInterval(timer); timer = null; if (worker) worker.terminate(); worker = null; isOpen = false; opened = null },
   }
 }
