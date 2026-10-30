@@ -177,15 +177,25 @@ export function mountBtcArk ({ makeWorker, mnemonic, config, decode, onChange = 
       .catch((e) => log('[btc ark] catch up:', e && e.message))
   }
 
-  // Bark's own refresh of the coins that are due (`refresh`: the wallet's coins near their
-  // expiry, renewed in the server's next round). A coin left past its expiry is swept by the
-  // server's watchman and nothing repays it, so the wallet renews its coins by itself: when it
-  // opens, and after each sync. One at a time; nothing is renewed when nothing is due.
+  // A coin left past its expiry is swept by the server's watchman. Bark's server still takes it in
+  // a round when the wallet refreshes it later, but by its own choice, so the wallet has its coins
+  // renewed before they expire, whether or not the page is open. When it opens and after
+  // each sync it schedules, for every coin that has none yet, a renewal the server runs by
+  // itself shortly before the coin's expiry (`schedule_refreshes`), and the wallet takes the
+  // renewed coin in at its next sync. Then Bark's own refresh renews, in the server's next round,
+  // a coin that is due and has no renewal scheduled (`refresh`), an expired one included. One
+  // pass at a time; nothing is renewed when nothing is due.
   let renewing = null
   function renewDue () {
     if (!isOpen || renewing) return renewing || Promise.resolve(null)
     const t0 = now()
-    renewing = run('refresh', {}, PAY_TIMEOUT_MS)
+    renewing = run('schedule_refreshes', {}, PAY_TIMEOUT_MS)
+      .then((s) => {
+        const n = ((s && s.scheduled) || []).reduce((k, r) => k + ((r.vtxos && r.vtxos.length) || 0), 0)
+        if (n) log('[btc ark] renewal scheduled for', n, 'coin(s), heights', s.scheduled.map((r) => r.height).join(','))
+      })
+      .catch((e) => log('[btc ark] scheduling renewals:', e && e.message))
+      .then(() => run('refresh', {}, PAY_TIMEOUT_MS))
       .then((r) => { if (r && r.refreshed) { log('[btc ark] renewed', r.refreshed, 'coin(s) near their expiry in', now() - t0, 'ms'); return refresh().then(() => r) } return r })
       .catch((e) => { log('[btc ark] renewing coins near their expiry:', e && e.message); return null })
       .finally(() => { renewing = null })

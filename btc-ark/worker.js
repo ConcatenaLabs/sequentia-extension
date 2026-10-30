@@ -5,8 +5,10 @@
 // reaches its ark server over gRPC-web and reads the chain from an Esplora server; its
 // daemon runs here for as long as the page is open: it claims Lightning payments the
 // server holds for the wallet, takes in payments sent to it in the ark, follows its boards
-// to the chain. Its coins near their expiry are renewed in the server's rounds when the page asks
-// (`refresh`, btc-ark.js renewDue: at open and after each sync).
+// to the chain. When the page asks (btc-ark.js renewDue: at open and after each sync) it schedules
+// with the server a renewal of each coin that the server runs by itself shortly before the coin's
+// expiry, page open or not (`schedule_refreshes`), and renews in the server's next round a coin
+// that is due and has none scheduled (`refresh`).
 //
 // Messages, one at a time, in order: { id, op, args } with op
 //   'open' { network, mnemonic, server, esplora, log? } -> opens (or creates) the wallet
