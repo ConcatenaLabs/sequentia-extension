@@ -18,6 +18,20 @@ export function supervisedAssets(info) {
   return servedAssets(info).filter((a) => a && a.supervised && typeof a.asset === 'string').map((a) => a.asset);
 }
 
+// Default mode's pairs (user-mode/pairs.json) as the operator serves them: a pair with a
+// supervised asset keeps only the in-tree swap with a live maker, since the operator serves no
+// take, no resting order and no Lightning payment in such an asset (the web wallet's servedPairs).
+export function servedPairs(pairs, supervised) {
+  const sup = new Set(supervised || []);
+  if (!pairs || !pairs.chains || !sup.size) return pairs;
+  const chains = {};
+  for (const [g, c] of Object.entries(pairs.chains)) {
+    chains[g] = { ...c, pairs: (c.pairs || []).map((p) => (sup.has(p.pay) || sup.has(p.receive))
+      ? { ...p, sources: (p.sources || []).filter((x) => x === 'leaf-maker') } : p) };
+  }
+  return { ...pairs, chains };
+}
+
 // The assets the operator serves issuer-operated (`info`'s `issuer` entry): their batches'
 // sweeps can only burn, and the issuer mints each round's float through a mint limiter.
 export function issuerAssets(info) {
