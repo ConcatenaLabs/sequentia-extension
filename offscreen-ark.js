@@ -20,6 +20,7 @@
 //   'status'                          -> { open, figures, lastBoard, lastError }
 //   'run'   { command, args }         -> the wallet's answer (e.g. 'address')
 //   'quote' { to, sats } / 'send' { to, sats } -> vendor/btc-ark.js quote/send, amounts as strings
+//   'payOutcome' { hash, untilMs? }        -> a held payment followed to 'complete', 'came-back' or 'pending'
 //   'invoice' { sats, description }   -> { invoice, payment_hash, expires_at }
 //   'received' { hash }               -> the receive's state, claimed when paid
 //   'ln'    { method, args }          -> the trade composer's BTC (`lightning()`), BigInt as { $big }
@@ -133,6 +134,8 @@ async function handle(op, args) {
     case 'run': return await need().run(String(args.command), args.args || {});
     case 'quote': return toWire(await need().quote(String(args.to), BigInt(args.sats || 0)));
     case 'send': return toWire(await need().send(String(args.to), BigInt(args.sats || 0)));
+    // A payment the payee holds, followed to its end (vendor/btc-ark.js payOutcome).
+    case 'payOutcome': return toWire(await need().payOutcome(String(args.hash), { untilMs: Math.min(120000, Number(args.untilMs) || 60000) }));
     case 'invoice': await need(); return await A.ark.invoice(String(args.sats), args.description || 'Receive');
     case 'received': return await need().received(String(args.hash));
     case 'ln': {

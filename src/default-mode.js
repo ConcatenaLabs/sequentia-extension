@@ -383,7 +383,14 @@ export async function confirmSend({ id }) {
     }
     if (p.kind === 'ark') {
       const r = fromWire(await arkHost('send', { to: p.to, sats: String(p.sats) }));
-      console.info(`[btc ark] sent by ${r.route} in ${Date.now() - t0} ms`);
+      console.info(`[btc ark] sent by ${r.route} (${r.state || 'done'}) in ${Date.now() - t0} ms`);
+      // An invoice whose payee holds the payment is not paid until they take it: followed for a
+      // minute, then said as it stands ("On its way…"), never "Sent" before it is.
+      if (r.route === 'invoice' && r.state && r.state !== 'complete' && r.hash) {
+        const out = fromWire(await arkHost('payOutcome', { hash: r.hash, untilMs: 60000 }))
+        if (out.state === 'came-back') throw new Error(BTC_WORDS.payCameBack)
+        if (out.state !== 'complete') return { text: BTC_WORDS.payWaiting, ms: Date.now() - t0 }
+      }
       return { text: p.route === 'chain' ? BTC_WORDS.sentBlock(p.amt) : BTC_WORDS.sent(p.amt, secs()), ms: Date.now() - t0 };
     }
     if (p.kind === 'ln') {
