@@ -32,7 +32,7 @@ import {
   pinnedOperator, checkPinned, treeRoute, parseReceiveCode, arrivingAtoms, addressRoute, arrivalMinutes,
   DEFAULT_WORDS, JOIN_RETRY_MS, BOARD_QUIET_MS,
 } from '../vendor/default-arca.js';
-import { buildPayCode, readPayCode } from '../vendor/pay-code.js';
+import { buildPayCode, readPayCode, expandRequest } from '../vendor/pay-code.js';
 import { BTC_WORDS, destination } from '../vendor/btc-ark.js';
 import { decodeBolt11 } from '../vendor/bolt11.js';
 import { forbiddenIn } from '../vendor/user-trade.js';
@@ -270,7 +270,9 @@ export async function prepareSend({ to, amtS, asset }) {
   // A receive code of this wallet's operator and chain: in the tree, in seconds.
   if (request && (await leafOpen())) {
     const info = await leafInfo();
+    // A code carries the request short: the library is handed its own spelling of it.
     if (treeRoute(request, info)) {
+      request = expandRequest(request, info) || request;
       const { held, arriving } = await treeHeld(asset);
       if (atoms > held - arriving) {
         if (atoms <= held) throw new Error(DEFAULT_WORDS.stillArriving(m.ticker));
@@ -291,7 +293,8 @@ export async function prepareSend({ to, amtS, asset }) {
     if (prep) {
       const lines = [];
       if (prep.review.feeEst) lines.push(DEFAULT_WORDS.fee(fmtAtoms(big(prep.review.feeEst), meta(prep.review.feeAssetHex).precision || 0), meta(prep.review.feeAssetHex).ticker));
-      lines.push(DEFAULT_WORDS.arrivesWithin(1));
+      if (request) lines.unshift(DEFAULT_WORDS.byAddress(DEFAULT_WORDS.arrivesNextBlock));
+      else lines.push(DEFAULT_WORDS.arrivesWithin(1));
       return { id: stash({ kind: 'engine', prepId: prep.id, chain: 'sequentia', amt, ticker: m.ticker }), title: DEFAULT_WORDS.sendTitle(amt, m.ticker), lines, button: DEFAULT_WORDS.send };
     }
   }
