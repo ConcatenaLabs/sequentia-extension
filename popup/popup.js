@@ -5,7 +5,8 @@ import { userSplit, developerSplit } from '../src/balance-view.js';
 import { partitionHidden } from '../src/hidden.js';
 import { canonicalPair } from '../src/pair.js';
 import { plannedCoins } from '../src/leaf-schedule.js';
-import { frozenSentence, plainRefusal, batchLine } from '../src/leaf-profiles.js';
+import { frozenSentence, plainRefusal, batchLine, servedPairs, supervisedAssets } from '../src/leaf-profiles.js';
+import { chainGenesis } from '../src/chain-genesis.js';
 import { DEFAULT_WORDS, heldAssetList } from '../vendor/default-arca.js';
 import { BTC_WORDS } from '../vendor/btc-ark.js';
 import { createEngine as createUserTrade } from '../vendor/user-trade.js';
@@ -1288,7 +1289,9 @@ function defaultReview(plan) {
 }
 
 // ---- trade: the user composer (vendor/user-composer.js), the web wallet's own ----
-let composer = null, userTrade = null, pairs = { chains: {} }, genesis = null, assetInfo = {};
+let composer = null, userTrade = null, pairs = { chains: {} }, genesis = null, assetInfo = {}, supervised = [];
+// The pairs as the operator serves them (a supervised asset's only by the in-tree swap).
+const served = () => servedPairs(pairs, supervised);
 const READ_TIMEOUT_MS = 20_000;
 seqob.setSeqobBase(BASE + '/seqob');
 function metaOf(h) {
@@ -1361,7 +1364,7 @@ async function renderTrade() {
         const r = await fetch(`${ESPLORA}/tx/${txid}`, { cache: 'no-store' }); if (!r.ok) return null;
         const o = ((await r.json()).vout || [])[vout]; return o && o.value != null ? String(o.value) : null;
       },
-      admitted: async () => ({ pairs, genesis }),
+      admitted: async () => ({ pairs: served(), genesis }),
       // What the balance shows of an asset, so one held but not payable yet reads as not ready,
       // never as none; and the board of what is on the chain, asked for at once.
       held: (a) => held(a),
@@ -1376,26 +1379,44 @@ async function renderTrade() {
       knownAssets, held,
       isHidden: (h) => !!(OV && (OV.hidden || []).includes(h)),
       refValue,
-      admittedReceives: (pay) => admittedReceives(pairs, genesis, pay),
+      admittedReceives: (pay) => admittedReceives(served(), genesis, pay),
       // The chosen pair's market above the inputs, from the relay's one trade log.
       market: { relay: () => seqob.seqobBase(), pairOf: (a, b) => canonicalPair(a, b, (h) => metaOf(h).ticker),
         visible: () => !$('tTrade').classList.contains('hide') },
     });
   }
-  // The tab draws at once; the pairs admitted, the chain, the Bitcoin ark and the registry's
-  // tickers come in behind it, and it draws again with them.
-  if (!tradeLoad) tradeLoad = loadTradeContext().then(() => { if (composer) composer.render(); }).catch(() => {}).finally(() => { tradeLoad = null; });
+  // The tab draws at once; what it lists comes in behind it, and it draws again with it.
+  if (!tradeLoad) tradeLoad = loadTradeContext().catch(() => {}).finally(() => { tradeLoad = null; });
   composer.render();
   composer.follow();
 }
 let tradeLoad = null;
+// What the tab lists, in two steps, each drawn as soon as it is in. First what lists anything:
+// the pairs admitted, their assets' tickers from the registry the service worker holds, and the
+// chain the pairs are for (from esplora, so it never waits on the leaf wallet, whose one worker
+// runs its commands in turn behind whatever it is doing). Then what refines it: whether the
+// Bitcoin ark is open, and which assets the operator supervises.
+const tradeKey = () => JSON.stringify([Object.keys((pairs && pairs.chains) || {}), genesis, Object.keys(assetInfo).length, arkUp, supervised]);
 async function loadTradeContext() {
-  if (!pairs || !Object.keys(pairs.chains || {}).length) { try { pairs = await (await fetch(USER_PAIRS_URL, { cache: 'no-store' })).json(); } catch { pairs = pairs || { chains: {} }; } }
-  if (!genesis) { try { genesis = (await rpc('default.leafInfo')).genesis_hash; } catch {} }
-  try { const j = await rpc('default.joined'); arkUp = !!j.ark; } catch {}
-  // Tickers and decimals from the registry the service worker holds.
-  try { assetInfo = { ...assetInfo, ...(await rpc('default.assetMeta', { hexes: knownAssets() })) }; } catch {}
+  let drawn = tradeKey();
+  const redraw = () => { const k = tradeKey(); if (k !== drawn && composer) { drawn = k; composer.render(); } };
+  await Promise.all([
+    (async () => {
+      if (!Object.keys((pairs && pairs.chains) || {}).length) {
+        try { const r = await fetch(USER_PAIRS_URL, { cache: 'no-store', signal: AbortSignal.timeout(READ_TIMEOUT_MS) }); if (r.ok) pairs = await r.json(); } catch {}
+      }
+      try { assetInfo = { ...assetInfo, ...(await rpc('default.assetMeta', { hexes: knownAssets() })) }; } catch {}
+    })(),
+    (async () => { if (!genesis) genesis = await chainGenesis({ esplora: ESPLORA, info: () => rpc('default.leafInfo') }); })(),
+  ]);
+  redraw();
+  // The second step is not waited on: a slow leaf wallet holds back no retry of the first.
+  if (!tradeRefine) tradeRefine = Promise.all([
+    rpc('default.joined').then((j) => { arkUp = !!j.ark; }, () => {}),
+    rpc('default.leafInfo').then((i) => { supervised = supervisedAssets(i); }, () => {}),
+  ]).then(redraw).finally(() => { tradeRefine = null; });
 }
+let tradeRefine = null;
 
 // ---- remove the wallet ----
 $('btnRemoveWallet').onclick = async () => {

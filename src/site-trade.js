@@ -21,6 +21,8 @@ import { BASE, ESPLORA, USER_PAIRS_URL, LEAF_MAKERS } from './config.js';
 import { stGet, stSet, fmtAtoms } from './util.js';
 import { walletTag } from './mode.js';
 import * as engineMod from './engine.js';
+import { servedPairs, supervisedAssets } from './leaf-profiles.js';
+import { chainGenesis } from './chain-genesis.js';
 
 // The kit wallet's own balances, for the figures.
 async function engineBalances() { const b = await engineMod.balances(); return { seq: b.seq, btc: b.btc }; }
@@ -58,7 +60,7 @@ async function relayPairBook(base, quote) {
   return [...a, ...b].filter((o) => { const k = (o.maker_pubkey || '') + ':' + (o.offer_id || ''); if (seen.has(k)) return false; seen.add(k); return true; });
 }
 
-let pairs = null, pairsAt = 0, genesis = null, arkUp = false;
+let pairs = null, pairsAt = 0, genesis = null, arkUp = false, sup = [], supAt = 0;
 const arkBtc = new Proxy({}, { get: (_, method) => (arg) => dm.arkLightning(String(method), arg) });
 
 let S = null;
@@ -82,8 +84,10 @@ async function siteOrders() {
     },
     admitted: async () => {
       if (!pairs || Date.now() - pairsAt > 300_000) { try { pairs = await (await fetch(USER_PAIRS_URL, { cache: 'no-store' })).json(); pairsAt = Date.now(); } catch { pairs = pairs || { chains: {} }; } }
-      if (!genesis) { try { genesis = (await leaves.runAny('info')).genesis_hash; } catch {} }
-      return { pairs, genesis };
+      if (!genesis) genesis = await chainGenesis({ esplora: ESPLORA, info: () => leaves.runAny('info') });
+      // Which assets the operator supervises, read behind the quote (never in its way) and kept.
+      if (Date.now() - supAt > 300_000) { supAt = Date.now(); leaves.runAny('info').then((i) => { sup = supervisedAssets(i); }, () => { supAt = 0; }); }
+      return { pairs: servedPairs(pairs, sup), genesis };
     },
     get btc() { return arkUp ? arkBtc : null; },
     onchain: null,
@@ -108,7 +112,7 @@ async function siteOrders() {
   return S;
 }
 // Another wallet opened (or this one removed): its records are another's.
-export async function reset() { S = null; mem = null; genesis = null; }
+export async function reset() { S = null; mem = null; genesis = null; sup = []; supAt = 0; }
 
 async function fresh() {
   const s = await siteOrders();

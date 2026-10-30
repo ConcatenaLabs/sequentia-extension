@@ -224,7 +224,7 @@ export function mountUserComposer (ctx) {
     let atoms
     try { atoms = ctx.parseAtoms(String(S.amount || '').trim(), prec(S.pay)) } catch { atoms = 0n }
     if (!(big(atoms) > 0n)) { S.error = USER_WORDS.enter; paintTicket(); return }
-    if (!S.get) { S.error = USER_WORDS.notListed('', name(S.pay)); paintTicket(); return }
+    if (!S.get) { S.error = USER_WORDS.nothingOffered(name(S.pay)); paintTicket(); return }
     S.busy = true; paintTicket()
     try {
       const q = await ctx.engine.quote({ payAsset: S.pay, receiveAsset: S.get, amount: String(atoms) })
