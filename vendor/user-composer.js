@@ -34,6 +34,8 @@ const CARET = '▾'
 // times at most (about ten minutes: a round and its block).
 export const READY_RETRY_MS = 20_000
 export const READY_TRIES = 30
+// How long Trade waits for the trade's step before the screen is free again.
+export const CONFIRM_SHOWN_MS = 1500
 export const FOLLOW_FAST_MS = 120_000
 export const FOLLOW_SLOW_MS = 30_000
 
@@ -130,6 +132,7 @@ export function mountUserComposer (ctx) {
     if (S.fixed === 'pay') S.recv = fill; else S.amount = fill
     S.note = e.short ? USER_WORDS.bookUpTo(amt(S.get, e.short.receive)) : ''
     paintNote()
+    paintAbout()
   }
   function paintNote () {
     const n = ctx.root.querySelector('#ucNote'); if (!n || S.ticket) return
@@ -154,7 +157,14 @@ export function mountUserComposer (ctx) {
     return b
   }
 
-  function reset () { S.ticket = null; S.choice = null; S.note = ''; S.error = '' }
+  function reset () { S.ticket = null; S.choice = null; S.note = ''; S.error = ''; S.moving = false }
+
+  // "about" beside the amount that follows the price, while it is an estimate.
+  function paintAbout () {
+    const pa = ctx.root.querySelector('#ucPayAbout'), ra = ctx.root.querySelector('#ucRecvAbout')
+    if (pa) pa.textContent = S.fixed === 'receive' && !S.ticket && String(S.amount || '').trim() ? USER_WORDS.about : ''
+    if (ra) ra.textContent = S.fixed !== 'receive' && !S.ticket && String(S.recv || '').trim() ? USER_WORDS.about : ''
+  }
 
   function render () {
     const r = ctx.root
@@ -169,7 +179,9 @@ export function mountUserComposer (ctx) {
     row1.appendChild(el('label', 'lbl', USER_WORDS.pay))
     row1.appendChild(chooser('ucPay', payList(), S.pay, (v) => { S.pay = v; S.payChosen = true; S.getChosen = false; S.get = null; reset(); render() }))
     const inp = el('input', 'uc-amount'); inp.id = 'ucAmount'; inp.inputMode = 'decimal'; inp.placeholder = USER_WORDS.amount; inp.value = S.amount
+    const payAbout = el('span', 'sub uc-about'); payAbout.id = 'ucPayAbout'
     inp.oninput = () => { S.amount = inp.value; S.fixed = 'pay'; S.error = ''; keep(); if (S.ticket) { reset(); paintTicket() } schedule() }
+    row1.appendChild(payAbout)
     row1.appendChild(inp)
     const have = el('div', 'sub uc-have'); have.id = 'ucHave'
     have.appendChild(el('span', null, USER_WORDS.balance(amt(S.pay, ctx.held(S.pay) || 0n))))
@@ -197,6 +209,10 @@ export function mountUserComposer (ctx) {
     if (!S.get || !gl.includes(S.get)) S.get = defaultGet(gl)
     row2.appendChild(chooser('ucGet', gl, S.get, pickGet))
     const rin = el('input', 'uc-amount'); rin.id = 'ucReceive'; rin.inputMode = 'decimal'; rin.placeholder = USER_WORDS.amount; rin.value = S.recv
+    // The amount not typed follows the book's price now: an estimate until Review, so it reads as
+    // one ("about"); Review's ticket gives the exact amounts.
+    const recvAbout = el('span', 'sub uc-about'); recvAbout.id = 'ucRecvAbout'
+    row2.appendChild(recvAbout)
     rin.oninput = () => { S.recv = rin.value; S.fixed = 'receive'; S.error = ''; keep(); if (S.ticket) { reset(); paintTicket() } schedule() }
     row2.appendChild(rin)
     box.appendChild(row2)
@@ -227,6 +243,7 @@ export function mountUserComposer (ctx) {
     t.innerHTML = ''; act.innerHTML = ''
     note.textContent = S.error || S.note || ''
     note.classList.toggle('err', !!S.error)
+    paintAbout()
     const btn = (text, id, f, cls) => { const b = el('button', cls || '', text); b.type = 'button'; b.id = id; b.disabled = S.busy; b.onclick = f; return b }
     if (!S.ticket) {
       act.appendChild(btn(S.busy ? USER_WORDS.pricing : USER_WORDS.review, 'ucReview', review, 'primary'))
@@ -241,7 +258,8 @@ export function mountUserComposer (ctx) {
     cost.textContent = costText
     t.appendChild(cost)
     if (k.upTo) t.appendChild(el('div', 'sub', USER_WORDS.upTo(amt(k.payAsset, k.upTo))))
-    act.appendChild(btn(S.busy ? USER_WORDS.working : USER_WORDS.confirm, 'ucConfirm', confirm, 'primary'))
+    if (S.moving) { const mv = el('div', 'sub', USER_WORDS.btcMore(ctx.btcMoveBlocks ? ctx.btcMoveBlocks() : 2)); mv.id = 'ucMoving'; t.appendChild(mv) }
+    act.appendChild(btn(S.busy ? USER_WORDS.sending : USER_WORDS.confirm, 'ucConfirm', confirm, 'primary'))
     act.appendChild(btn(USER_WORDS.cancel, 'ucCancel', () => { ctx.engine.drop(S.choice); reset(); paintTicket() }, 'ghost'))
   }
 
@@ -254,13 +272,14 @@ export function mountUserComposer (ctx) {
     S.busy = true; paintTicket()
     try {
       const q = await ctx.engine.quote({ payAsset: S.pay, receiveAsset: S.get, amount: String(atoms) })
-      if (q.ok) { S.ticket = q.ticket; S.choice = q.choice }
+      if (q.ok) { S.ticket = q.ticket; S.choice = q.choice; S.moving = !!q.moving }
       else S.error = q.why === 'no-funds' ? USER_WORDS.noFunds(name(S.pay)) : q.why === 'not-ready' ? USER_WORDS.notReady(name(S.pay), q.soon) : q.why === 'redoing' ? USER_WORDS.redoing(name(S.pay)) : q.why === 'busy' ? USER_WORDS.busy(name(S.pay)) : q.why === 'freeing' ? USER_WORDS.freeing(name(S.pay), q.soon) : q.why === 'readying' ? USER_WORDS.readying(name(S.pay), q.soon) : q.why === 'part-ready' ? USER_WORDS.partReady(amt(S.pay, q.ready), name(S.pay), q.soon) : q.why === 'too-small' ? USER_WORDS.tooSmall
         : q.why === 'no-firm-offer' ? USER_WORDS.noFirmOffer
+        : q.why === 'btc-moving' ? USER_WORDS.btcMoving(ctx.btcMoveBlocks ? ctx.btcMoveBlocks() : 2)
         : q.why === 'not-listed' ? USER_WORDS.notListed(name(S.get), name(S.pay)) : USER_WORDS.notOffered(name(S.get), name(S.pay))
       // Coins being made ready for this trade: priced again by itself while the person waits,
       // every READY_RETRY_MS, as long as nothing they typed changed.
-      if (!q.ok && q.why === 'readying') readyAgain()
+      if (!q.ok && (q.why === 'readying' || q.why === 'btc-moving')) readyAgain()
     } catch (e) {
       console.warn('[user composer] quote:', e && e.message)
       S.error = USER_WORDS.notOffered(name(S.get), name(S.pay))
@@ -278,11 +297,17 @@ export function mountUserComposer (ctx) {
     }, READY_RETRY_MS)
   }
 
+  // Trade: the step is taken in the background. If it is not done within CONFIRM_SHOWN_MS, the
+  // screen is free again and the trade goes on in Open ("Sending…", then "Sent"), followed whether
+  // the person stays or leaves. A refusal that comes at once (the price moved) is said here.
   async function confirm () {
     if (!S.choice) return
     S.busy = true; paintTicket()
     try {
-      await ctx.engine.confirm(S.choice, S.ticket)
+      const done = ctx.engine.confirm(S.choice, S.ticket)
+      const later = Symbol('later')
+      const first = await Promise.race([done, new Promise((r) => setTimeout(() => r(later), ctx.confirmShownMs ?? CONFIRM_SHOWN_MS))])
+      if (first === later) done.catch((e) => console.warn('[user composer] confirm:', e && e.message)).finally(() => { paintTrades(); follow() })
       reset(); S.amount = ''; S.recv = ''
       for (const id of ['#ucAmount', '#ucReceive']) { const i = ctx.root.querySelector(id); if (i) i.value = '' }
     } catch (e) {
@@ -295,14 +320,15 @@ export function mountUserComposer (ctx) {
 
   function stateWord (r) {
     if (r.state === 'returned' && (r.feesPaid || []).length) return USER_WORDS.returnedFees(r.feesPaid.map((f) => amt(f.asset, f.atoms)).join(' and '))
-    return tradeStateWord(r, Date.now(), !!(ctx.engine.soon && ctx.engine.soon()))
+    return tradeStateWord(r, Date.now())
   }
 
   function paintTrades () {
     const list = ctx.root.querySelector('#ucTrades'); if (!list) return
     list.innerHTML = ''
     // A trade whose step did not answer is shown while it is looked for.
-    const recs = ctx.engine.records().filter((r) => (r.state !== 'confirming' || r.uncertain) && r.ticket).slice(-12).reverse()
+    // A trade being sent shows at once, as "Sending…".
+    const recs = ctx.engine.records().filter((r) => (r.state !== 'confirming' || r.uncertain || Date.now() - (r.at || 0) < 10 * 60_000) && r.ticket).slice(-12).reverse()
     if (!recs.length) return
     list.appendChild(el('label', 'lbl', USER_WORDS.recent))
     // The person's open trades, then the past ones.

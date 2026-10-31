@@ -111,6 +111,19 @@ export async function boardBtcSoon() {
   return r;
 }
 
+// A trade paying more BTC than the ark holds asks for BTC at the address to be moved onto the ark
+// now, whatever the quiet after a payment: the trade waits on it, and says so.
+export async function boardBtcFor(sats) {
+  if (!(await isDefault())) return null;
+  if (engine.availableFor('BTC') <= 0n) return null;
+  boardAskedAt = Date.now();
+  const r = await arkHost('board', engine.btcWindow());
+  if (r) { console.info('[btc ark] boarded', r.amount, 'sat in', r.txid, 'for a trade asking', String(sats)); engine.sync().catch(() => {}); }
+  return r;
+}
+// BTC at the wallet's address (the kit wallet's figure), in default mode, as a string of sats.
+export async function btcAtAddress() { return (await isDefault()) ? String(engine.availableFor('BTC')) : '0'; }
+
 // ---- joining the pinned operator ----
 let joinTriedAt = 0;
 export async function autoJoin() {

@@ -608,6 +608,8 @@ const uiMethods = {
     return out;
   },
   'default.ark': async ({ method, args }) => await dm.arkLightning(String(method), args),
+  'default.boardBtcFor': async ({ sats }) => { dm.boardBtcFor(sats).catch((e) => console.warn('[btc ark] board:', (e && e.message) ?? e)); return { ok: true }; },
+  'default.btcAtAddress': async () => ({ sats: await dm.btcAtAddress() }),
   // Removes the wallet from this browser: its leaf and ark wallets are closed first, so a
   // wallet made next shows none of their coins. The phrase is the way back.
   'removeWallet': async ({ password }) => {
@@ -693,7 +695,7 @@ const uiMethods = {
 // ---- message dispatch ----
 // The popup's reads, which a person opening it does not count as asking for anything.
 const PASSIVE_UI = new Set(['state', 'overview', 'stakingOverview', 'rewardsOverview', 'stakes', 'history', 'feeAssets', 'getMode',
-  'default.joined', 'default.leafInfo', 'default.assetMeta', 'leaves.state', 'getSettings', 'sites', 'sync']);
+  'default.joined', 'default.leafInfo', 'default.assetMeta', 'default.btcAtAddress', 'leaves.state', 'getSettings', 'sites', 'sync']);
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // The leaf wallet's events, from its host in the offscreen document: relayed to
   // connected sites (an open wallet page hears the same message itself).

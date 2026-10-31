@@ -131,7 +131,15 @@ export const USER_WORDS = Object.freeze({
     : `Getting your ${pay} ready for this trade: it is ready once the next Bitcoin blocks settle it. Nothing has moved.`,
   freeing: (pay, soon) => soon ? `Your ${pay} is being made ready to trade: it is ready in a minute or two. Nothing has moved.`
     : `Your ${pay} is being made ready to trade: it is ready once the next Bitcoin blocks settle it. Nothing has moved.`,
-  pricing: 'Finding the best price…',
+  // The amount not typed, while it follows the book's price now: an estimate, said as one.
+  about: 'about',
+  // Review, while the sources are asked for terms they hold to: the amount shown is the estimate.
+  pricing: 'Getting the exact price…',
+  // BTC held at the wallet's address, which a trade cannot pay from until the wallet has moved it
+  // where trades pay BTC from (the Bitcoin ark): a move confirmed by `blocks` Bitcoin blocks (no
+  // time: Bitcoin's blocks keep none).
+  btcMoving: (blocks) => `Your BTC is being moved so it can be traded. It is ready after ${btcBlocks(blocks)}. Nothing has moved yet.`,
+  btcMore: (blocks) => `More of your BTC is being moved so it can be traded, ready after ${btcBlocks(blocks)}.`,
   priceMoved: 'The price moved. Here is the new one.',
   sent: 'Sent',
   settled: 'Settled',
@@ -139,19 +147,23 @@ export const USER_WORDS = Object.freeze({
   waitingOther: 'Waiting for the other side. Nothing has left your wallet yet.',
   // A purchase of BTC whose payment is made: the BTC comes once the other side pays it out.
   btcOnItsWay: 'Paid. Your BTC is on its way.',
-  receivedSettling: 'Received. Settled after the next Bitcoin blocks.',
-  receivedSoon: 'Received. Settled in a minute or two.',
+  // What the trade brings is the wallet's; only its settling with the network is left. One word on
+  // every surface, with no time: how long settling takes is the network's, not the trade's.
+  received: 'Received, settling',
   receivedSlow: 'Received, and yours to use. Settling with the network is taking longer than usual.',
   minutes: (word, n) => `${word} (${n} min)`,
   returned: 'Returned: nothing traded.',
   returnedFees: (fees) => `Returned: nothing traded. Fees of ${fees} were paid.`,
   returnedLapsed: 'Returned: nothing traded. The other side\'s offer ran out while the trade waited.',
-  working: 'Working…',
+  // A trade confirmed and being sent: the screen is free at once, the trade goes on in Open.
+  sending: 'Sending…',
   failed: 'This trade could not be made. Nothing moved.',
   recent: 'Your trades',
   openTrades: 'Open',
   pastTrades: 'Past',
 })
+
+function btcBlocks (n) { return Number(n) === 1 ? 'a Bitcoin block' : `${Number(n) || 2} Bitcoin blocks` }
 
 // Whether what an open trade brings is held already, and only its settling is left: a purchase
 // with BTC once the BTC is paid and the asset claimed, a sale for BTC once the BTC came, a swap once
@@ -165,15 +177,15 @@ export function heldAlready (r) {
 }
 
 // What the list of trades says of one: Sent, then Settled; a trade waiting on the other side or on
-// its settling says so, with the minutes it has waited once it has waited one. `soon`: the
-// operator calls a coin settled once its block is certified (anchor depth 0).
-export function tradeStateWord (r, now = Date.now(), soon = false) {
+// its settling says so, with the minutes it has waited once it has waited one. The same words in the
+// Trade tab's Open trades, in History and on every other surface: none of them promises a time.
+export function tradeStateWord (r, now = Date.now()) {
   const W = USER_WORDS
   if (r.state === 'settled') return W.settled
   if (r.state === 'returned' && (r.feesPaid || []).length) return null
   if (r.state === 'returned' && r.whyKind === 'lapsed') return W.returnedLapsed
   if (r.state === 'returned' || r.state === 'failed') return W.returned
-  if (r.state === 'confirming') return W.working
+  if (r.state === 'confirming') return W.sending
   const since = (t) => Math.floor((now - (t || r.at || now)) / 60000)
   // Buying with BTC: nothing has left the wallet until its asset is held for it.
   if (r.state === 'waiting') { const m = since(r.waitingSince); return m >= 1 ? W.minutes(W.waitingOther, m) : W.waitingOther }
@@ -181,7 +193,7 @@ export function tradeStateWord (r, now = Date.now(), soon = false) {
   // Received, its settling still waiting with the network after ten minutes (the network had no
   // room for it yet): said so, the coins being the wallet's all along.
   const held = heldAlready(r)
-  const word = held ? (m >= SLOW_SETTLE_MIN && (r.settleState || []).some((x) => x && x !== 'released') ? W.receivedSlow : soon ? W.receivedSoon : W.receivedSettling)
+  const word = held ? (m >= SLOW_SETTLE_MIN && (r.settleState || []).some((x) => x && x !== 'released') ? W.receivedSlow : W.received)
     : r.source === 'btc-gateway' && r.dir === 'sell' ? W.btcOnItsWay : W.sent
   return m >= 1 ? W.minutes(word, m) : word
 }
@@ -788,6 +800,16 @@ export function createEngine (deps) {
     const haveLeaf = payAsset === 'BTC'
       ? (deps.btc ? big(await Promise.resolve(deps.btc.balance()).catch(() => 0n)) : 0n)
       : (await spendable()).get(payAsset) || 0n
+    // BTC the wallet holds at its address, which a trade cannot pay from until it is moved where
+    // trades pay BTC from: moved for the trade by itself (deps.btcMove), and said so; never "no BTC".
+    let moving = false
+    if (payAsset === 'BTC' && haveLeaf < A && deps.btcMove && deps.btcAtAddress) {
+      const atAddress = big(await Promise.resolve(deps.btcAtAddress()).catch(() => 0n))
+      if (atAddress > 0n) {
+        try { deps.btcMove(A - haveLeaf); moving = true } catch (e) { log('[user trade] btc move:', e && e.message) }
+        if (haveLeaf <= 0n) return { ok: false, why: 'btc-moving', moving: true }
+      }
+    }
     const haveChain = payAsset !== 'BTC' && deps.onchain && sources.includes('onchain-fill')
       ? big(await Promise.resolve(deps.onchain.balance(payAsset)).catch(() => 0n)) : 0n
     // A coin not ready yet is ready in a minute or two when the operator calls it ready once its
@@ -828,6 +850,7 @@ export function createEngine (deps) {
     // rest of what it holds is not ready yet (coins waiting on their blocks). Said so, never
     // "too small".
     if (!ind.length && es.some((e) => haveOf(e) < A && sizeEntry(e, A))) {
+      if (payAsset === 'BTC' && moving) return { ok: false, why: 'btc-moving', moving: true }
       // The rest may be held in coins an offline-refresh plan keeps: those are freed through the
       // wallet's next round, whatever the free coins hold, never left waiting for nothing.
       if (payAsset !== 'BTC' && await freePlanned(payAsset)) return { ok: false, why: 'freeing', held: String(haveLeaf), soon: soonNow }
@@ -863,7 +886,7 @@ export function createEngine (deps) {
       fees: best.fees.map((f) => ({ asset: f.asset, atoms: String(f.atoms) })), source: best.source }
     const have = haveOf(best.entry)
     if (have < A && best.give <= have) ticket.upTo = String(have)
-    return { ok: true, ticket, choice: best }
+    return { ok: true, ticket, choice: best, moving }
   }
 
   // Confirms a ticket's choice: writes the trade's record, then takes the one step. Answers the
