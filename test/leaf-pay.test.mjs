@@ -2,14 +2,13 @@
 // planning reach. The host (offscreen-leaves.js) runs these rules over the library.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { careArgs, releaseDone, plannedCoins, payThrough, PLAN_EVERY_ROUND_LEAF, RELEASE_POLL_MS, RELEASE_WAIT_MS, RELEASE_TRIES, RELEASE_TIMEOUT } from '../src/leaf-schedule.js';
+import { careArgs, releaseDone, plannedCoins, payThrough, RELEASE_POLL_MS, RELEASE_WAIT_MS, RELEASE_TRIES, RELEASE_TIMEOUT } from '../src/leaf-schedule.js';
 
 const X = 'aa'.repeat(32);
 
-test('care plans every leaf of a round: its arguments', () => {
-  assert.equal(PLAN_EVERY_ROUND_LEAF, 4294967295);
-  assert.deepEqual(careArgs(), { plan_within: 4294967295 });
-  assert.deepEqual(careArgs(21), { plan_within: 4294967295, scan: 21 });
+test('care plans with the library\'s own reach: its arguments', () => {
+  assert.deepEqual(careArgs(), {});
+  assert.deepEqual(careArgs(21), { scan: 21 });
   assert.equal(RELEASE_POLL_MS, 15_000);
   assert.equal(RELEASE_WAIT_MS, 3 * 3600_000);
   assert.equal(RELEASE_TRIES, 3);

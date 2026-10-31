@@ -53,20 +53,16 @@ export function freshRequestWaits(schedule, windowSecs = FRESH_REQUEST_SECS) {
 // What the wallet does by itself, in either mode, is the library's `care`: after a sync,
 // at most every CARE_EVERY_MS and once after the leaf wallet opens. It takes up every
 // open claim named for one of the wallet's receive keys, cancels each refresh plan whose
-// coin has moved, plans every coin of a round at the first `care` after the coin is made
-// (`plan_within`: PLAN_EVERY_ROUND_LEAF), and asks a refresh in a round for a coin no
+// coin has moved, plans a coin of a round once its first step could run within ten days
+// (the library's own reach, so the coin is free to trade and pay until then), and asks a refresh in a round for a coin no
 // round made (a board, a coin received or claimed out of round) once that refresh could
 // run within ten days, since it costs a fee, so that a later `care` can plan the new one.
 // The web wallet's leaves.js holds the same rules.
 export const CARE_EVERY_MS = 10 * 60_000;
 
-// `care`'s planning reach: every leaf of a round is planned at the first care after it is
-// made (the library's PLAN_EVERY_ROUND_LEAF).
-export const PLAN_EVERY_ROUND_LEAF = 4294967295;
-
-// The arguments `care` runs with: the claim scan, and every leaf of a round planned.
+// The arguments `care` runs with: the claim scan. Its planning reach is the library's own.
 export function careArgs(scan) {
-  const a = { plan_within: PLAN_EVERY_ROUND_LEAF };
+  const a = {};
   if (scan) a.scan = scan;
   return a;
 }

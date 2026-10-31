@@ -702,6 +702,19 @@ export function createEngine (deps) {
   // The wallet's own upkeep waits too, for the whole of it, not only while a command runs: a sync
   // started between the steps of a quote (while a maker answers) held the next step for its whole
   // length (deps.leaves.hold, leaves.js asking).
+  // Asks the wallet to free the live coins of `asset` an open offline-refresh plan keeps, in its
+  // next round (deps.release): the library pays such a coin out of round only once a round has
+  // freed it. Whether it asked. `mine`: the wallet's coins of the asset, when already read.
+  async function freePlanned (asset, mine) {
+    if (!deps.release) return false
+    const coins = mine || ((await run('coins').catch(() => [])) || []).filter((c) => c && c.asset === asset)
+    const planned = plannedCoins(await run('plans').catch(() => ({ plans: [] })))
+    const kept = coins.filter((c) => c.state === 'live' && planned.has(c.leaf_id)).map((c) => c.leaf_id)
+    if (!kept.length) return false
+    try { await Promise.resolve(deps.release(asset, kept)) } catch (e) { log('[user trade] release:', e && e.message) }
+    return true
+  }
+
   // Whether the operator calls a coin ready once its block is certified (anchor depth 0).
   function soon () {
     try { const d = deps.anchorDepth ? deps.anchorDepth() : null; return d !== null && d !== undefined && Number(d) === 0 } catch { return false }
@@ -740,12 +753,7 @@ export function createEngine (deps) {
         const mine = ((await run('coins').catch(() => [])) || []).filter((c) => c && c.asset === payAsset)
         // Live coins kept by an open offline-refresh plan are freed through the wallet's next round
         // (deps.release, the page's plan_release), as a payment from them is.
-        const planned = plannedCoins(await run('plans').catch(() => ({ plans: [] })))
-        const kept = mine.filter((c) => c.state === 'live' && planned.has(c.leaf_id)).map((c) => c.leaf_id)
-        if (kept.length && deps.release) {
-          try { await Promise.resolve(deps.release(payAsset, kept)) } catch (e) { log('[user trade] release:', e && e.message) }
-          return { ok: false, why: 'freeing', held: String(held), soon: soonNow }
-        }
+        if (await freePlanned(payAsset, mine)) return { ok: false, why: 'freeing', held: String(held), soon: soonNow }
         const busy = !mine.some((c) => c.state === 'pending') && mine.some((c) => BUSY_STATES.includes(c.state))
         // Coins a Bitcoin reorganisation took back out of the chain, being redone: never a loss.
         if (!busy && mine.some((c) => c.redoing === true)) return { ok: false, why: 'redoing', held: String(held) }
@@ -769,6 +777,9 @@ export function createEngine (deps) {
     // rest of what it holds is not ready yet (coins waiting on their blocks). Said so, never
     // "too small".
     if (!ind.length && es.some((e) => haveOf(e) < A && sizeEntry(e, A))) {
+      // The rest may be held in coins an offline-refresh plan keeps: those are freed through the
+      // wallet's next round, whatever the free coins hold, never left waiting for nothing.
+      if (payAsset !== 'BTC' && await freePlanned(payAsset)) return { ok: false, why: 'freeing', held: String(haveLeaf), soon: soonNow }
       const ready = es.reduce((m, e) => (haveOf(e) > m ? haveOf(e) : m), 0n)
       return { ok: false, why: 'part-ready', ready: String(ready), soon: soonNow }
     }

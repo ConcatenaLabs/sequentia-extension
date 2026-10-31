@@ -36,8 +36,8 @@
 // the wallet opens and after a sync or a tick of the schedule at most every ten minutes
 // (`careDue`): it takes up every open claim named for one of the wallet's receive keys
 // (`scan`: the kit wallet's next receive index and 20 more, which the service worker
-// keeps current), cancels each refresh plan whose coin has moved, plans every coin of a
-// round (`plan_within`: PLAN_EVERY_ROUND_LEAF), and asks a round's refresh for a coin no
+// keeps current), cancels each refresh plan whose coin has moved, plans a coin of a round
+// once its first step could run within ten days, and asks a round's refresh for a coin no
 // round made once that refresh could run within ten days. A claim taken up counts in the
 // balance like any leaf. Each run is reported as `leafCared` and kept for developer mode
 // (`status`).
