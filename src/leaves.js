@@ -76,7 +76,7 @@ export async function leafSum() {
   const all = (await stGet('local', SUM_KEY)) || {};
   return (tag && all[tag]) || null;
 }
-export async function rememberLeafSum(balance, frozen) {
+export async function rememberLeafSum(balance, frozen, redoing) {
   const tag = await walletTag();
   if (!tag) return;
   const perAsset = leafPerAsset(balance);
@@ -87,7 +87,10 @@ export async function rememberLeafSum(balance, frozen) {
   // default mode shows under the figure as arriving.
   const arriving = {};
   for (const a of Object.keys((balance && balance.arca) || {})) { const n = arrivingAtoms(balance, a); if (n > 0n) arriving[a] = n.toString(); }
-  all[tag] = { at: Date.now(), perAsset, frozen: fz, arriving };
+  // Of what is arriving, the coins a Bitcoin reorganisation took back out of the chain.
+  const rd = {};
+  for (const [a, v] of Object.entries(redoing || {})) if (BigInt(v) > 0n) rd[a] = String(v);
+  all[tag] = { at: Date.now(), perAsset, frozen: fz, arriving, redoing: rd };
   await stSet('local', SUM_KEY, all);
 }
 

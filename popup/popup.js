@@ -7,7 +7,7 @@ import { canonicalPair } from '../src/pair.js';
 import { plannedCoins } from '../src/leaf-schedule.js';
 import { frozenSentence, plainRefusal, batchLine, servedPairs, supervisedAssets } from '../src/leaf-profiles.js';
 import { chainGenesis } from '../src/chain-genesis.js';
-import { DEFAULT_WORDS, heldAssetList } from '../vendor/default-arca.js';
+import { DEFAULT_WORDS, heldAssetList, anchorDepth } from '../vendor/default-arca.js';
 import { BTC_WORDS } from '../vendor/btc-ark.js';
 import { createEngine as createUserTrade } from '../vendor/user-trade.js';
 import { mountUserComposer } from '../vendor/user-composer.js';
@@ -181,7 +181,12 @@ function renderOverview() {
     // never hidden.
     if (BigInt(r.frozen || 0) > 0n) row.appendChild(el('div', 'sub frozen-line', frozenSentence(fmtAtoms(r.frozen, r.precision), r.ticker)));
     // Default mode: what is held but cannot be spent yet, under the figure.
-    if (!(OV.mode === 'developer') && BigInt(r.arriving || 0) > 0n) row.appendChild(el('div', 'sub arriving-line', DEFAULT_WORDS.arriving(fmtAtoms(r.arriving, r.precision), r.ticker)));
+    // Of it, what a Bitcoin reorganisation took back out of the chain is said apart: never a loss.
+    if (!(OV.mode === 'developer')) {
+      const arr = BigInt(r.arriving || 0), rd0 = BigInt(r.redoing || 0), rd = rd0 > arr ? arr : rd0;
+      if (arr - rd > 0n) row.appendChild(el('div', 'sub arriving-line', DEFAULT_WORDS.arriving(fmtAtoms(arr - rd, r.precision), r.ticker)));
+      if (rd > 0n) row.appendChild(el('div', 'sub redoing-line', DEFAULT_WORDS.redoing(fmtAtoms(rd, r.precision), r.ticker)));
+    }
 
     if (r.restricted && r.legend) {
       const meta = el('div', 'ln-meta'); meta.appendChild(el('div', null, r.legend)); row.appendChild(meta);
@@ -1289,6 +1294,7 @@ function defaultReview(plan) {
 }
 
 // ---- trade: the user composer (vendor/user-composer.js), the web wallet's own ----
+let leafAnchorDepth = null;
 let composer = null, userTrade = null, pairs = { chains: {} }, genesis = null, assetInfo = {}, supervised = [];
 // The pairs as the operator serves them (a supervised asset's only by the in-tree swap).
 const served = () => servedPairs(pairs, supervised);
@@ -1342,6 +1348,7 @@ async function fetchJsonOnce(url, init) {
 async function renderTrade() {
   const root = $('userComposerRoot');
   if (!composer) {
+    rpc('default.leafInfo').then((i) => { leafAnchorDepth = anchorDepth(i); }).catch(() => {});
     userTrade = createUserTrade({
       leaves: { command: async (cmd, args) => {
         const t = Date.now();
@@ -1371,6 +1378,9 @@ async function renderTrade() {
       prepare: () => { rpc('default.prepare').catch(() => {}); },
       get btc() { return arkUp ? arkBtc : null; },
       onchain: null,
+      // The operator's anchor depth, as the leaf library follows it: at 0 what is not ready yet
+      // is on its way, ready a minute or two after its block.
+      anchorDepth: () => leafAnchorDepth,
       store: localStorage, tag: () => OV && OV.tag ? OV.tag : 'default',
       log: (...a) => console.log(...a),
     });

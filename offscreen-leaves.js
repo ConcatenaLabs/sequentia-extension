@@ -71,6 +71,7 @@
 
 import { inFlight, nextAskMs, freshRequestWaits, syncDecision, careDue, careSummary, careArgs, payThrough, CARE_EVERY_MS, laterMode } from './src/leaf-schedule.js';
 import { frozenAtoms } from './src/leaf-profiles.js';
+import { redoingAtoms } from './vendor/default-arca.js';
 import { boardCandidates, boardAll } from './vendor/default-arca.js';
 
 const TICK_MS = 60_000;
@@ -139,7 +140,10 @@ async function reportBalance() {
     const frozen = {};
     for (const [a, v] of frozenAtoms(S.coins, b)) frozen[a] = v.toString();
     S.frozenShown = Object.keys(frozen).length > 0;
-    emit('leafBalance', { balance: b, frozen });
+    // What of each asset a Bitcoin reorganisation took back out of the chain and is being redone.
+    const redoing = {};
+    for (const c of S.coins || []) if (c && c.asset && redoing[c.asset] === undefined) { const n = redoingAtoms(S.coins, c.asset); if (n > 0n) redoing[c.asset] = n.toString(); }
+    emit('leafBalance', { balance: b, frozen, redoing });
   } catch { /* the next change reports it again */ }
 }
 // Whether the wallet holds a leaf of a supervised asset (one that lands at its key), or

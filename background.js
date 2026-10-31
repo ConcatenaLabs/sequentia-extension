@@ -280,6 +280,8 @@ async function overview({ withLn = false } = {}) {
   const frozenPer = leafKept.frozen || {};
   // What is held but cannot be spent yet ("arriving"): the tree's, and BTC's on the ark.
   const arrivingPer = { ...(leafKept.arriving || {}) };
+  // Of it, what a Bitcoin reorganisation took back out of the chain, being redone: said apart.
+  const redoingPer = leafKept.redoing || {};
   // BTC on the Bitcoin ark counts in BTC's one figure, in both modes.
   const arkKept = (await dm.arkSum().catch(() => null)) || null;
   const arkAtoms = arkKept ? BigInt(arkKept.total || 0) : 0n;
@@ -310,6 +312,7 @@ async function overview({ withLn = false } = {}) {
       staked: staked.toString(),
       ark: ark.toString(),
       arriving: String(arrivingPer[key] || '0'),
+      redoing: key === 'BTC' ? '0' : String(redoingPer[key] || '0'),
       total: total.toString(),
       frozen: key === 'BTC' ? '0' : String(frozenPer[key] || '0'),
       refStr: A.refValueStr(key, total, ref),
@@ -690,7 +693,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   if (msg && msg.scope === 'leaf-event' && sender.id === chrome.runtime.id) {
     if (msg.event === 'leafBalance') {
-      leaves.rememberLeafSum(msg.data && msg.data.balance, msg.data && msg.data.frozen)
+      leaves.rememberLeafSum(msg.data && msg.data.balance, msg.data && msg.data.frozen, msg.data && msg.data.redoing)
         .then(() => chrome.runtime.sendMessage({ scope: 'ui-event', event: 'leaves-changed' }).catch(() => {}))
         .catch(() => {});
     } else if (msg.event === 'leafArrived' || msg.event === 'leafSyncDue') {

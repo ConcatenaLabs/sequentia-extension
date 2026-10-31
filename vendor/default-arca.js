@@ -32,6 +32,9 @@ function arrivesWords (minutes) {
 
 export const DEFAULT_WORDS = Object.freeze({
   arriving: (amount, ticker) => `${amount} ${ticker} arriving`,
+  // Held, spendable before, and taken back out of the chain with the Bitcoin block it rested on:
+  // still the wallet's, and counted, while the network takes it in again.
+  redoing: (amount, ticker) => `${amount} ${ticker} being redone after a Bitcoin reorganisation`,
   codeLabel: 'Receive code',
   receiveTip: 'Any asset, any amount. A payment from another Sequentia wallet arrives in seconds. Each code is paid once; a new one shows when it is.',
   receiveWait: 'Making your receive code\u2026',
@@ -145,6 +148,22 @@ export function arrivingAtoms (balance, asset) {
   let n = 0n
   for (const s of ARRIVING_STATES) n += big(states[s])
   return n
+}
+
+// What of an asset is being redone: coins the library marks `redoing` (spendable once, then taken
+// out of the chain with the Bitcoin block their round's block anchors to), in atoms. Part of what
+// is arriving, and shown apart from it.
+export function redoingAtoms (coins, asset) {
+  let n = 0n
+  for (const c of coins || []) if (c && c.asset === asset && c.redoing === true) n += big(c.value)
+  return n
+}
+
+// The Bitcoin blocks the operator waits for after a block is certified before a coin in it is
+// spendable (the library's `info` `anchor_depth`), or null when the library does not say.
+export function anchorDepth (info) {
+  const d = info && info.anchor_depth
+  return d === null || d === undefined || !Number.isFinite(Number(d)) ? null : Number(d)
 }
 
 // The assets whose on-chain coins are boarded by themselves: each asset the operator serves (its

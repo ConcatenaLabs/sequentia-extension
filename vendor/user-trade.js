@@ -33,6 +33,10 @@
 //                                 broadcasts the FILL at the fee shown; onTxid(txid) before the
 //                                 broadcast),
 //                                 status(txid) -> 'final' | 'confirmed' | 'pending' | 'unknown' }
+//   anchorDepth()              -> the Bitcoin blocks the operator waits for after a block is certified
+//                                 before a coin in it can be traded (the library's `info`
+//                                 `anchor_depth`), or null; optional: at 0 a coin not ready yet is
+//                                 on its way and ready in a minute or two
 //   held(asset)                -> what the wallet shows it holds of an asset, wherever it is; optional:
 //                                 with it, a pay asset held but not payable now is 'not-ready', not
 //                                 'no-funds'
@@ -105,14 +109,21 @@ export const USER_WORDS = Object.freeze({
   noFirmOffer: 'Nobody could confirm a price for this just now. Nothing has moved: try again in a moment.',
   noFunds: (pay) => `You have no ${pay} to trade.`,
   // Held, and shown in the balance, but not where a trade can pay it from yet (just arrived, or
-  // still being moved in by the wallet): never "you have none".
-  notReady: (pay) => `Your ${pay} is not ready to trade yet: it is once the next Bitcoin blocks settle it. Nothing has moved.`,
+  // still being moved in by the wallet): never "you have none". `soon`: the operator calls a coin
+  // ready once its block is certified (anchor depth 0), so it is ready in a minute or two.
+  notReady: (pay, soon) => soon ? `Your ${pay} is on its way: it is ready to trade in a minute or two. Nothing has moved.`
+    : `Your ${pay} is not ready to trade yet: it is once the next Bitcoin blocks settle it. Nothing has moved.`,
   // Part of what is paid can be traded now, too little for any offer; the rest settles first.
-  partReady: (ready, pay) => `Only ${ready} of your ${pay} can be traded now, too little for any offer: the rest is ready once the next Bitcoin blocks settle it. Nothing has moved.`,
+  partReady: (ready, pay, soon) => soon ? `Only ${ready} of your ${pay} can be traded now, too little for any offer: the rest is on its way, ready in a minute or two. Nothing has moved.`
+    : `Only ${ready} of your ${pay} can be traded now, too little for any offer: the rest is ready once the next Bitcoin blocks settle it. Nothing has moved.`,
+  // A coin that was ready, taken back out of the chain with its Bitcoin block: still the wallet's,
+  // and in its balance, while the network takes it in again.
+  redoing: (pay) => `Your ${pay} is being redone after a Bitcoin reorganisation: it is still yours, and ready to trade again once that settles. Nothing has moved.`,
   busy: (pay) => `Your ${pay} is held by an order you placed or a move your wallet is making, and can be traded once that completes. Nothing has moved.`,
   // Kept by the wallet's plan to refresh it while the wallet is closed, which only a round can end:
   // the wallet gives it up in its next round for a coin it can trade.
-  freeing: (pay) => `Your ${pay} is being made ready to trade: it is ready once the next Bitcoin blocks settle it. Nothing has moved.`,
+  freeing: (pay, soon) => soon ? `Your ${pay} is being made ready to trade: it is ready in a minute or two. Nothing has moved.`
+    : `Your ${pay} is being made ready to trade: it is ready once the next Bitcoin blocks settle it. Nothing has moved.`,
   pricing: 'Finding the best price…',
   priceMoved: 'The price moved. Here is the new one.',
   sent: 'Sent',
@@ -122,6 +133,7 @@ export const USER_WORDS = Object.freeze({
   // A purchase of BTC whose payment is made: the BTC comes once the other side pays it out.
   btcOnItsWay: 'Paid. Your BTC is on its way.',
   receivedSettling: 'Received. Settled after the next Bitcoin blocks.',
+  receivedSoon: 'Received. Settled in a minute or two.',
   receivedSlow: 'Received, and yours to use. Settling with the network is taking longer than usual.',
   minutes: (word, n) => `${word} (${n} min)`,
   returned: 'Returned: nothing traded.',
@@ -146,8 +158,9 @@ export function heldAlready (r) {
 }
 
 // What the list of trades says of one: Sent, then Settled; a trade waiting on the other side or on
-// its settling says so, with the minutes it has waited once it has waited one.
-export function tradeStateWord (r, now = Date.now()) {
+// its settling says so, with the minutes it has waited once it has waited one. `soon`: the
+// operator calls a coin settled once its block is certified (anchor depth 0).
+export function tradeStateWord (r, now = Date.now(), soon = false) {
   const W = USER_WORDS
   if (r.state === 'settled') return W.settled
   if (r.state === 'returned' && (r.feesPaid || []).length) return null
@@ -161,7 +174,7 @@ export function tradeStateWord (r, now = Date.now()) {
   // Received, its settling still waiting with the network after ten minutes (the network had no
   // room for it yet): said so, the coins being the wallet's all along.
   const held = heldAlready(r)
-  const word = held ? (m >= SLOW_SETTLE_MIN && (r.settleState || []).some((x) => x && x !== 'released') ? W.receivedSlow : W.receivedSettling)
+  const word = held ? (m >= SLOW_SETTLE_MIN && (r.settleState || []).some((x) => x && x !== 'released') ? W.receivedSlow : soon ? W.receivedSoon : W.receivedSettling)
     : r.source === 'btc-gateway' && r.dir === 'sell' ? W.btcOnItsWay : W.sent
   return m >= 1 ? W.minutes(word, m) : word
 }
@@ -624,7 +637,8 @@ export function createEngine (deps) {
 
   // The ticket for paying `amount` atoms of `payAsset` for `receiveAsset`.
   // -> { ok: true, ticket: { payAsset, receiveAsset, amountIn, amountOut, fees, upTo? }, choice }
-  //  | { ok: false, why: 'not-listed'|'not-offered'|'no-funds'|'not-ready'|'busy'|'freeing'|'too-small'|'no-firm-offer' }
+  //  | { ok: false, why: 'not-listed'|'not-offered'|'no-funds'|'not-ready'|'redoing'|'busy'|'freeing'|'too-small'|'no-firm-offer',
+  //      soon? } (soon: what is not ready yet is ready in a minute or two)
   //  | { ok: false, why: 'part-ready', ready } (atoms payable now, too few for any offer)
   // What can be received for `payAsset` in one step now: each admitted pair's asset that some
   // source in the book offers, whatever the wallet holds. BTC counts only with the wallet's
@@ -688,6 +702,11 @@ export function createEngine (deps) {
   // The wallet's own upkeep waits too, for the whole of it, not only while a command runs: a sync
   // started between the steps of a quote (while a maker answers) held the next step for its whole
   // length (deps.leaves.hold, leaves.js asking).
+  // Whether the operator calls a coin ready once its block is certified (anchor depth 0).
+  function soon () {
+    try { const d = deps.anchorDepth ? deps.anchorDepth() : null; return d !== null && d !== undefined && Number(d) === 0 } catch { return false }
+  }
+
   const personWaits = (f) => async (...a) => {
     asked++
     try { return await (deps.leaves && deps.leaves.hold ? deps.leaves.hold(() => f(...a)) : f(...a)) } finally { asked-- }
@@ -707,6 +726,9 @@ export function createEngine (deps) {
       : (await spendable()).get(payAsset) || 0n
     const haveChain = payAsset !== 'BTC' && deps.onchain && sources.includes('onchain-fill')
       ? big(await Promise.resolve(deps.onchain.balance(payAsset)).catch(() => 0n)) : 0n
+    // A coin not ready yet is ready in a minute or two when the operator calls it ready once its
+    // block is certified.
+    const soonNow = soon()
     if (haveLeaf <= 0n && haveChain <= 0n) {
       // What the wallet shows it holds, though no source can pay from it now: the wallet is asked to
       // make it ready (default mode boards coins on the chain into the tree by itself).
@@ -722,10 +744,12 @@ export function createEngine (deps) {
         const kept = mine.filter((c) => c.state === 'live' && planned.has(c.leaf_id)).map((c) => c.leaf_id)
         if (kept.length && deps.release) {
           try { await Promise.resolve(deps.release(payAsset, kept)) } catch (e) { log('[user trade] release:', e && e.message) }
-          return { ok: false, why: 'freeing', held: String(held) }
+          return { ok: false, why: 'freeing', held: String(held), soon: soonNow }
         }
         const busy = !mine.some((c) => c.state === 'pending') && mine.some((c) => BUSY_STATES.includes(c.state))
-        return { ok: false, why: busy ? 'busy' : 'not-ready', held: String(held) }
+        // Coins a Bitcoin reorganisation took back out of the chain, being redone: never a loss.
+        if (!busy && mine.some((c) => c.redoing === true)) return { ok: false, why: 'redoing', held: String(held) }
+        return { ok: false, why: busy ? 'busy' : 'not-ready', held: String(held), soon: soonNow }
       }
       return { ok: false, why: 'no-funds' }
     }
@@ -746,7 +770,7 @@ export function createEngine (deps) {
     // "too small".
     if (!ind.length && es.some((e) => haveOf(e) < A && sizeEntry(e, A))) {
       const ready = es.reduce((m, e) => (haveOf(e) > m ? haveOf(e) : m), 0n)
-      return { ok: false, why: 'part-ready', ready: String(ready) }
+      return { ok: false, why: 'part-ready', ready: String(ready), soon: soonNow }
     }
     // Firm terms of the best eight, all asked at once, within QUOTE_FIRM_MS: an entry that cannot
     // be firmed (a resting order the wallet's coins are too old for, a maker that ran short) or
@@ -1063,5 +1087,5 @@ export function createEngine (deps) {
     return out
   }
 
-  return { quote: personWaits(quote), estimate, offered, confirm: personWaits(confirm), advance, resume, records, spendable, release, drop }
+  return { quote: personWaits(quote), estimate, offered, confirm: personWaits(confirm), advance, resume, records, spendable, release, drop, soon }
 }
