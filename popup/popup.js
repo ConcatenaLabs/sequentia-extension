@@ -3,7 +3,7 @@
 import { lnInvoiceKind } from '../src/util.js';
 import { userSplit, developerSplit } from '../src/balance-view.js';
 import { partitionHidden } from '../src/hidden.js';
-import { canonicalPair } from '../src/pair.js';
+import { displayPair } from '../src/pair.js';
 import { plannedCoins } from '../src/leaf-schedule.js';
 import { frozenSentence, plainRefusal, batchLine, servedPairs, supervisedAssets } from '../src/leaf-profiles.js';
 import { chainGenesis } from '../src/chain-genesis.js';
@@ -49,6 +49,14 @@ function fmtAtoms(atoms, d) {
   let s = (a / base).toString();
   if (d > 0) { const f = (a % base).toString().padStart(d, '0').replace(/0+$/, ''); if (f) s += '.' + f; }
   return (neg ? '-' : '') + s;
+}
+// An amount a person reads, grouped as the web wallet's Balance groups it ("500,000"); fmtAtoms
+// stays plain for amounts put in a field.
+function fmtAmount(atoms, d) {
+  const plain = fmtAtoms(atoms, d), neg = plain.startsWith('-'), [i, f] = (neg ? plain.slice(1) : plain).split('.');
+  let grouped = i;
+  try { grouped = BigInt(i).toLocaleString(); } catch {}
+  return (neg ? '-' : '') + grouped + (f ? '.' + f : '');
 }
 const looksLikeBolt11 = (s) => /^ln(bc|tb|tbs|ert|sq|tsq)[0-9a-z]+$/i.test((s || '').trim());
 
@@ -1387,13 +1395,14 @@ async function renderTrade() {
       log: (...a) => console.log(...a),
     });
     composer = mountUserComposer({
-      root, engine: userTrade, assetMeta: metaOf, fmtAtoms, parseAtoms: (t, p) => parseAmount(t, p),
+      root, engine: userTrade, assetMeta: metaOf, fmtAtoms, fmtShow: fmtAmount, parseAtoms: (t, p) => parseAmount(t, p),
+      session: (() => { try { return sessionStorage; } catch { return null; } })(), tag: () => OV && OV.tag ? OV.tag : 'default',
       knownAssets, held,
       isHidden: (h) => !!(OV && (OV.hidden || []).includes(h)),
       refValue,
       admittedReceives: (pay) => admittedReceives(served(), genesis, pay),
       // The chosen pair's market above the inputs, from the relay's one trade log.
-      market: { relay: () => seqob.seqobBase(), pairOf: (a, b) => canonicalPair(a, b, (h) => metaOf(h).ticker),
+      market: { relay: () => seqob.seqobBase(), pairOf: (a, b) => displayPair(a, b, (h) => metaOf(h).ticker),
         visible: () => !$('tTrade').classList.contains('hide') },
     });
   }

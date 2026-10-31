@@ -19,7 +19,7 @@ export const MODE_WORDS = Object.freeze({
   user: 'User mode',
   userLine: 'One figure per asset, and the wallet chooses how value moves.',
   developer: 'Developer mode',
-  developerLine: 'Every rail by name, side by side (on-chain, leaves and Lightning), each with its balance and its manual controls, and the developer tools.',
+  developerLine: 'Every way the wallet can move value, side by side, each with its own balance and controls, and the developer tools.',
   note: 'Kept for this wallet. Sites that ask the wallet for its mode follow it.',
 });
 

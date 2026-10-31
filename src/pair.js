@@ -11,6 +11,16 @@ export function quoteRank(hex, tickerOf) {
   return t in RANK ? RANK[t] : 400;
 }
 
+// The direction a pair is read in (the web wallet's displayPair, swap.js): BTC against a fiat
+// stablecoin is priced in the stablecoin ("1 BTC = 77,200 USDX"); every other pair as
+// canonicalPair has it. Display only: books and markets keep canonicalPair.
+export function displayPair(a, b, tickerOf) {
+  const fiat = (h) => h !== 'BTC' && quoteRank(h, tickerOf) >= 860;
+  if (a === 'BTC' && fiat(b)) return { base: a, quote: b };
+  if (b === 'BTC' && fiat(a)) return { base: b, quote: a };
+  return canonicalPair(a, b, tickerOf);
+}
+
 export function canonicalPair(a, b, tickerOf) {
   if (!a || !b) return { base: a || b, quote: b || a };
   const ra = quoteRank(a, tickerOf), rb = quoteRank(b, tickerOf);
