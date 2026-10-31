@@ -186,6 +186,8 @@ function renderOverview() {
       const arr = BigInt(r.arriving || 0), rd0 = BigInt(r.redoing || 0), rd = rd0 > arr ? arr : rd0;
       if (arr - rd > 0n) row.appendChild(el('div', 'sub arriving-line', DEFAULT_WORDS.arriving(fmtAtoms(arr - rd, r.precision), r.ticker)));
       if (rd > 0n) row.appendChild(el('div', 'sub redoing-line', DEFAULT_WORDS.redoing(fmtAtoms(rd, r.precision), r.ticker)));
+      const ks = BigInt(r.keptSafe || 0);
+      if (ks > 0n) row.appendChild(el('div', 'sub kept-safe-line', DEFAULT_WORDS.keptSafe(fmtAtoms(ks, r.precision), r.ticker)));
     }
 
     if (r.restricted && r.legend) {

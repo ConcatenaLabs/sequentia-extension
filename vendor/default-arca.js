@@ -35,6 +35,9 @@ export const DEFAULT_WORDS = Object.freeze({
   // Held, spendable before, and taken back out of the chain with the Bitcoin block it rested on:
   // still the wallet's, and counted, while the network takes it in again.
   redoing: (amount, ticker) => `${amount} ${ticker} being redone after a Bitcoin reorganisation`,
+  // Not refreshed while the wallet was away: taken on the chain under its own key before it could
+  // be swept, and put back by itself once the wallet is open again. Part of the figure meanwhile.
+  keptSafe: (amount, ticker) => `${amount} ${ticker} moved out of the Ark to keep it safe while you were away`,
   codeLabel: 'Receive code',
   receiveTip: 'Any asset, any amount. A payment from another Sequentia wallet arrives in seconds. Each code is paid once; a new one shows when it is.',
   receiveWait: 'Making your receive code\u2026',
@@ -148,6 +151,13 @@ export function arrivingAtoms (balance, asset) {
   let n = 0n
   for (const s of ARRIVING_STATES) n += big(states[s])
   return n
+}
+
+// What of an asset was moved out to keep it safe while the wallet was away (the library's balance
+// `kept_safe`, part of what it counts as `exiting`), in atoms, until the wallet has put it back.
+export function keptSafeAtoms (balance, asset) {
+  const states = (balance && balance.arca && balance.arca[asset]) || {}
+  return big(states.kept_safe)
 }
 
 // What of an asset is being redone: coins the library marks `redoing` (spendable once, then taken

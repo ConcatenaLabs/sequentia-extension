@@ -60,3 +60,14 @@ test('removing the wallet closes its leaf and ark wallets before the vault goes'
   assert.match(cw, /leaves\.stop\(\)/);
   assert.match(cw, /stopArk\(\)/);
 });
+
+test('a coin kept safe while the wallet was away is said under its figure, from the leaf wallet\'s balance', async () => {
+  const { keptSafeAtoms } = await import('../vendor/default-arca.js');
+  const A = 'a'.repeat(64);
+  assert.equal(keptSafeAtoms({ arca: { [A]: { exiting: '7', kept_safe: '7' } } }, A), 7n);
+  assert.equal(DEFAULT_WORDS.keptSafe('0.07', 'GOLD'), '0.07 GOLD moved out of the Ark to keep it safe while you were away');
+  // The leaf sum keeps it, the row carries it, the popup says it in default mode.
+  assert.match(read('src/leaves.js'), /keptSafe: kept/);
+  assert.match(read('background.js'), /keptSafe: key === 'BTC' \? '0' : String\(keptSafePer\[key\]/);
+  assert.match(read('popup/popup.js'), /DEFAULT_WORDS\.keptSafe\(/);
+});
