@@ -44,6 +44,9 @@ export const BTC_FOLLOW_MS = 10 * 60_000
 export const CLOSE_WORTH = 4n
 // How long a cooperative close is given before the node's own (device-signed) unilateral close.
 export const CLOSE_UNILATERAL_S = 600
+// How long what a cooperative close pays the wallet is held in the figure, at most, until the
+// wallet's own scan sees the close's transaction.
+export const CLOSE_HOLD_MS = 2 * 3600_000
 // What is kept across a reload, per wallet (+ '.' + the wallet's tag).
 export const STORE_KEY = 'swk.lnToArk'
 
@@ -207,6 +210,8 @@ export function closeVerdict ({ channel, left, spendable, fee, min = MIN_MOVE_SA
 //   allowance(kind)           -> what the daily limit lets a payment of kind reach, atoms, or null
 //   closeFee(kind, channel)   -> the estimated cost of closing it to this side, atoms, or null
 //   close({ kind, channel })  closes it cooperatively to an address of the wallet
+//   seen(kind, txid, address) whether the wallet's own scan counts the close's payment to it yet;
+//                             without it, what a close pays is not held in the figure
 //   store                     localStorage-like; tag() the wallet's tag
 //   onChange(), log(...), now(), sleep(ms)
 export function mountLightningToArk (deps) {
@@ -430,7 +435,8 @@ export function mountLightningToArk (deps) {
       try {
         log(`closing the emptied ${kind.slice(0, 8)} channel ${id}, ${c.balance_units} left in it, fee about ${fee}`)
         const r = await deps.close({ kind, channel: c })
-        update((x) => { x.closed[id] = { at: now(), txid: (r && r.closing_txid) || null, type: (r && r.type) || null } })
+        update((x) => { x.closed[id] = { at: now(), txid: (r && r.closing_txid) || null, type: (r && r.type) || null, kind,
+          left: String(c.balance_units ?? c.spendable_units ?? 0), address: (r && r.destination) || null } })
         S.closeWhy.set(id, null)
         log(`closed ${id}:`, (r && r.type) || '', (r && r.closing_txid) || '')
         try { await deps.refreshChannels() } catch {}
@@ -442,8 +448,29 @@ export function mountLightningToArk (deps) {
     }
   }
 
+  // What cooperative closes paid the wallet that its own scan does not count yet, in `kind`'s atoms:
+  // the channel has left the status, and its balance is on its way to the wallet's address.
+  function closing (kind) {
+    if (!deps.seen) return 0n
+    let n = 0n
+    for (const v of Object.values(load().closed || {})) {
+      if (v && v.kind === kind && v.txid && v.type !== 'unilateral' && !v.seen && now() - v.at < CLOSE_HOLD_MS) n += big(v.left)
+    }
+    return n
+  }
+  // Asks the wallet whether it counts each close's payment yet.
+  async function checkClosed () {
+    if (!deps.seen) return
+    for (const [id, v] of Object.entries(load().closed || {})) {
+      if (!v || !v.txid || v.seen || now() - v.at >= CLOSE_HOLD_MS) continue
+      let yes = false; try { yes = !!(await deps.seen(v.kind, v.txid, v.address)) } catch {}
+      if (yes) { update((x) => { if (x.closed[id]) x.closed[id].seen = now() }); changed() }
+    }
+  }
+
   return {
-    tick, tickAssets,
+    tick: async () => { await checkClosed(); return tick() },
+    tickAssets,
     // What of BTC is on its way from the channel to the ark, in sats, or null; and what its channel
     // held when the move began.
     movingBtc: () => { const b = load().btc; return b ? big(b.sats) : null },
@@ -451,9 +478,11 @@ export function mountLightningToArk (deps) {
     moving: (kind) => kind === 'BTC' ? (load().btc ? big(load().btc.sats) : null) : (S.movingAssets.get(kind) ?? null),
     // The channels' part of `kind`'s figure, `read` as last read.
     channelPart: (kind, read) => {
-      if (kind === 'BTC') { const b = load().btc; return b ? channelPart(read, big(b.sats), big(b.from)) : big(read) }
-      return channelPart(read, S.movingAssets.get(kind) ?? null, S.movingFrom.get(kind) ?? null)
+      if (kind === 'BTC') { const b = load().btc; return (b ? channelPart(read, big(b.sats), big(b.from)) : big(read)) + closing(kind) }
+      return channelPart(read, S.movingAssets.get(kind) ?? null, S.movingFrom.get(kind) ?? null) + closing(kind)
     },
+    // Asks whether each close's payment is counted yet (each pass does).
+    checkClosed,
     // The payment hashes of the wallet's own moves: History lists them as no payment.
     ownHashes: () => new Set(load().ownHashes),
     // Why an emptied channel (its short id) stays open, or null.

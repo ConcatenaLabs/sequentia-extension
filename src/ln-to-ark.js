@@ -12,6 +12,7 @@ import * as ln from './ln.js';
 import * as leaves from './leaves.js';
 import * as dm from './default-mode.js';
 import * as A from './assets.js';
+import * as engine from './engine.js';
 import { mode, walletTag } from './mode.js';
 import { sessionMnemonic } from './vault.js';
 
@@ -58,6 +59,9 @@ const move = mountLightningToArk({
   allowance: async (kind) => allowanceAtoms({ default: SIGNER_DEFAULT_ATOMS }, kind),
   closeFee: async (kind) => closeFee(kind),
   close: ({ kind, channel }) => ln.closeToWallet({ kind, scid: channel.short_channel_id, node_key: channel.node_key, unilateraltimeout: CLOSE_UNILATERAL_S }),
+  // What a close of an emptied asset channel pays stays in the figure until the wallet holds the
+  // close's transaction; a BTC close is not held (its scan is not this worker's to ask).
+  seen: async (kind, txid) => kind === 'BTC' || engine.hasSeqTx(txid),
   store: localStorage, tag: () => tagNow,
   log: (...a) => console.log(...a),
 });
