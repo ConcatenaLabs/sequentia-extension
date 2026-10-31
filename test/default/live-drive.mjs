@@ -137,7 +137,7 @@ async function main() {
       const jb = await joined(B, bw.t);
       check('B joined the operator by itself', jb.joined && jb.open, jb);
       await B.pop.click('[data-tab=receive]');
-      await B.pop.waitFor("/^bitcoin:.*sequentia=/.test(document.querySelector('#recvDCode').innerText)", 120000);
+      await B.pop.waitFor("/^bitcoin:.*sequentia=/i.test(document.querySelector('#recvDCode').innerText)", 120000);
       return await B.pop.text('#recvDCode');
     });
 
@@ -153,9 +153,9 @@ async function main() {
       const sendList = await A.pop.eval("[...document.querySelectorAll('#sendDAsset option')].map(o=>o.textContent)");
       check('a fresh wallet sends from BTC alone', sendList.join() === 'BTC', sendList);
       await A.pop.click('[data-tab=receive]');
-      await A.pop.waitFor("/^bitcoin:/.test(document.querySelector('#recvDCode').innerText)", 120000);
+      await A.pop.waitFor("/^bitcoin:/i.test(document.querySelector('#recvDCode').innerText)", 120000);
       const code = await A.pop.text('#recvDCode');
-      check('A shows one receive code with the ark and the Sequentia parts', /^bitcoin:tb1[0-9a-z]+\?/.test(code) && /[?&]ark=/.test(code) && /[?&]sequentia=/.test(code), code.slice(0, 60) + '…');
+      check('A shows one receive code with the ark and the Sequentia parts', /^bitcoin:tb1[0-9a-z]+\?/i.test(code) && /[?&]ark=/i.test(code) && /[?&]sequentia=/i.test(code), code.slice(0, 60) + '…');
       note(`     A: code shown ${secs(a.t)} after Create`);
       await wordsCheck(A, 'fresh');
 

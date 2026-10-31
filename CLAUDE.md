@@ -123,7 +123,7 @@ wasm. Read this before changing anything.
   `vendor/seqob.js`, `vendor/covenant.js`, `vendor/covenant-order.js`, `vendor/covenant-flow.js`,
   `vendor/covenant-fill-host.js`, `vendor/noble-ciphers.js`, `vendor/contracts.js`, `vendor/bolt11.js`,
   `vendor/lnupgrade.js`, `vendor/own-txs.js`, `vendor/stake-records.js`,
-  `vendor/default-arca.js`, `vendor/pay-code.js`, `vendor/btc-ark.js`, `vendor/lightning-to-ark.js`,
+  `vendor/default-arca.js`, `vendor/pay-code.js`, `vendor/btc-ark.js`, `vendor/lightning-to-ark.js`, `vendor/speed-up.js`,
   `vendor/user-trade.js`, `vendor/user-trade-btc.js`, `vendor/user-composer.js`,
   `vendor/asset-picker.js`, `vendor/market-view.js`, `vendor/chart.js`, `vendor/indicators.js`,
   `vendor/vendor/lightweight-charts/` (`vendor/` mirrors the web wallet's root, so the market
@@ -243,7 +243,9 @@ token (already public in sequentia-web-wallet) — not a secret.
 - No camera QR scanning (paste or file only). Developer mode's QR payloads are
   bare addresses (deliberately NOT `Address.QRCodeUri()`, which emits a
   wrong-network `liquidnetwork:` URI); default mode's is the receive code.
-- RBF/CPFP rescue buttons are not yet ported from the web wallet.
+- RBF bump and replace are not yet ported from the web wallet. Speed up (CPFP) is: in developer
+  mode on every waiting transaction of both chains, and by itself in default mode
+  (`engine.autoSpeedUp`, `vendor/speed-up.js`).
 
 <!-- BEGIN SHARED AGENT CONVENTIONS: identical in every Sequentia repo. Change it in all of them together. -->
 ## Working with git and GitHub here

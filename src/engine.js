@@ -14,7 +14,7 @@ import './shim.js';
 import { rememberWallet, tagOf } from './mode.js';
 import init, {
   Mnemonic, Network, Signer, Wollet, Update, EsploraClient, Address, AssetId,
-  Pset, Transaction, BtcWallet, stringToQr,
+  Pset, Transaction, BtcWallet, stringToQr, Txid,
 } from '../pkg/lwk_wasm.js';
 import { hydrateShim } from './shim.js';
 import * as A from './assets.js';
@@ -24,6 +24,8 @@ import { ESPLORA, T4_API, DEFAULT_FEERATE, BTC_FEERATE } from './config.js';
 import { parseAtoms, fmtAtoms, stGet, stSet } from './util.js';
 import { describeTransparent, stripBip32 } from './psetbytes.js';
 import { reapplyUnseen } from '../vendor/own-txs.js';
+import { dueNow, markRaised, raiseRate, btcChildPlan } from '../vendor/speed-up.js';
+import { HDKey, mnemonicToSeedSync, btc } from '../vendor/btc.js';
 
 // ---- module state (rebuilt lazily after a service-worker restart) ----
 let wasmReady = null;
@@ -491,6 +493,127 @@ export async function sweepCredit(asset, amount) {
 export function hasSeqTx(txid) {
   if (!wollet) return false;
   try { return wollet.transactions().some((t) => t.txid().toString() === txid); } catch { return false; }
+}
+
+// ---- speeding up what waits (child pays for parent; vendor/speed-up.js) ----
+// A transaction of the wallet's that waits for a block is sped up by a child spending its
+// output to the wallet and paying for both. Sequentia: the kit's `cpfpOf`, its fee in the
+// asset the stuck one paid in when it is priced, else in a priced asset the wallet holds
+// (a second input). Bitcoin: a child built here from the wallet's own keys (BIP84, the
+// shared address). Default mode does it by itself after two blocks (autoSpeedUp); developer
+// mode asks for each (speedUp). Children are recorded, so History shows them as part of
+// the payment they sped up.
+const SPED_KEY = 'ext.sped';
+async function spedState() { return (await stGet('local', SPED_KEY)) || { children: {}, seq: {}, btc: {} }; }
+async function saveSped(s) { await stSet('local', SPED_KEY, s); }
+export async function spedChildren() { return (await spedState()).children; }
+
+function seqFeeOf(txid) {
+  const t = wollet.transactions().find((x) => x.txid().toString() === txid);
+  if (!t) throw new Error('This transaction is not in the wallet any more.');
+  const tx = t.tx();
+  for (const h of [POLICY_HEX, ...Object.keys(wollet.balance().toJSON())]) {
+    try { const f = tx.fee(new AssetId(h)); if (f > 0n) return h; } catch {}
+  }
+  return null;
+}
+function priced(h) { try { return Number(A.feeRateFor(h)) > 0; } catch { return h === POLICY_HEX; } }
+
+async function speedUpSeq(txid, targetKvb) {
+  const paid = seqFeeOf(txid);
+  const hex = paid && priced(paid) ? paid : Object.keys(wollet.balance().toJSON()).find(priced);
+  if (!hex) throw new Error('The wallet holds no asset a producer prices, so this cannot be sped up.');
+  return withWollet(async () => {
+    const rate = wollet.cpfpSuggestedFeerate(new Txid(txid), targetKvb);
+    let b = wollet.cpfpOf(new Txid(txid));
+    b = hex === POLICY_HEX ? b.feeRate(rate) : b.feeRate(rate).feeAsset(new AssetId(hex), A.feeRateFor(hex));
+    const finalized = wollet.finalize(signer.sign(b.finish(wollet)));
+    const child = (await client.broadcast(finalized)).toString();
+    try { wollet.applyTransaction(finalized); } catch {}
+    noteOwnTx(finalized);
+    return { child, feeAsset: hex };
+  });
+}
+
+function btcKey(internal, i) {
+  const root = HDKey.fromMasterSeed(mnemonicToSeedSync(mnemonic));
+  return root.derive(`m/84'/1'/0'/${internal ? 1 : 0}/${i}`);
+}
+async function speedUpBtc(txid, satPerVb, children) {
+  // The chain from `txid` down the wallet's own children: the child spends the last that waits.
+  const chain = [txid];
+  for (let i = 0; i < 8; i++) { const next = Object.keys(children).find((c) => children[c] === chain[chain.length - 1]); if (!next) break; chain.push(next); }
+  const infos = await Promise.all(chain.map((id) => fetch(`${T4_API}/tx/${id}`).then((r) => (r.ok ? r.json() : null)).catch(() => null)));
+  if (!infos[0]) throw new Error('This transaction is not on the network any more.');
+  if (infos[0].status && infos[0].status.confirmed) throw new Error('This transaction is in a block already.');
+  let last = 0; for (let i = 1; i < infos.length; i++) if (infos[i] && !(infos[i].status && infos[i].status.confirmed)) last = i;
+  const live = infos.slice(0, last + 1);
+  const parentVsize = live.reduce((n, t) => n + Math.ceil(t.weight / 4), 0), parentFee = live.reduce((n, t) => n + (t.fee || 0), 0);
+  const { externalNext, changeNext } = btcScanState;
+  const keys = new Map();
+  for (const internal of [false, true]) {
+    const lim = (internal ? changeNext : externalNext) + GAP;
+    for (let i = 0; i < lim; i++) { const k = btcKey(internal, i); keys.set(btc.p2wpkh(k.publicKey, btc.TEST_NETWORK).address, k); }
+  }
+  const utxos = [];
+  for (const [addr, k] of keys) {
+    let us = []; try { us = await fetch(`${T4_API}/address/${addr}/utxo`).then((r) => (r.ok ? r.json() : [])); } catch {}
+    for (const u of us) utxos.push({ txid: u.txid, vout: u.vout, value: BigInt(u.value), confirmed: !!(u.status && u.status.confirmed), key: k });
+  }
+  const handles = utxos.filter((u) => u.txid === chain[last]);
+  const extra = utxos.filter((u) => u.txid !== chain[last] && u.confirmed).sort((a, b) => (a.value < b.value ? 1 : a.value > b.value ? -1 : 0));
+  const vsizeOf = (n) => Math.ceil(10.75 + 68 * n + 31);
+  const plan = btcChildPlan({ handles, extra, parentVsize, parentFee, rate: Math.max(1, Number(satPerVb) || BTC_FEERATE), vsizeOf, dust: 294 });
+  const tx = new btc.Transaction();
+  for (const u of plan.inputs) {
+    const p = btc.p2wpkh(u.key.publicKey, btc.TEST_NETWORK);
+    tx.addInput({ txid: u.txid, index: u.vout, witnessUtxo: { script: p.script, amount: u.value }, sequence: 0xfffffffd });
+  }
+  tx.addOutputAddress(btcW.address(mnemonic, true, changeNext), plan.change, btc.TEST_NETWORK);
+  for (const u of plan.inputs) tx.sign(u.key.privateKey);
+  tx.finalize();
+  const child = String(await btcW.broadcast(tx.hex));
+  btcScanState = { ...btcScanState, changeNext: changeNext + 1 };
+  return { child, of: chain[last], fee: String(plan.fee) };
+}
+
+// Developer mode: speed up one waiting transaction now.
+export async function speedUp({ chain, txid, rate }) {
+  if (!wollet) throw new Error('wallet is locked');
+  const s = await spedState();
+  const r = chain === 'btc' ? await speedUpBtc(txid, rate || 2 * BTC_FEERATE, s.children)
+    : await speedUpSeq(txid, rate || 2 * DEFAULT_FEERATE);
+  s.children[r.child] = r.of || txid;
+  await saveSped(s);
+  sync().catch(() => {});
+  return r;
+}
+
+// Default mode: every transaction of the wallet's on either chain that has waited two blocks,
+// at twice the default rate, doubled at each raise. Returns what it sped up.
+export async function autoSpeedUp() {
+  if (!wollet || !signer) return [];
+  const s = await spedState(), done = [];
+  let seqTip = 0; try { seqTip = wollet.tip().height(); } catch {}
+  if (seqTip > 0) {
+    const waiting = seqHistory(60).filter((t) => !t.height && !s.children[t.txid] && t.type !== 'unknown').map((t) => t.txid);
+    for (const id of dueNow(s.seq, waiting, seqTip)) {
+      try { const r = await speedUpSeq(id, raiseRate(DEFAULT_FEERATE, s.seq[id].raises)); s.children[r.child] = id; done.push({ chain: 'seq', txid: id, child: r.child }); }
+      catch (e) { console.warn('[speed up]', id, (e && e.message) || e); }
+      markRaised(s.seq, id, seqTip);
+    }
+  }
+  let btcTip = 0; try { btcTip = Number(await fetch(`${T4_API}/blocks/tip/height`).then((r) => (r.ok ? r.text() : '0'))); } catch {}
+  if (btcTip > 0) {
+    const waiting = (await btcHistory(60).catch(() => [])).filter((t) => !t.height && !s.children[t.txid]).map((t) => t.txid);
+    for (const id of dueNow(s.btc, waiting, btcTip)) {
+      try { const r = await speedUpBtc(id, raiseRate(BTC_FEERATE, s.btc[id].raises), s.children); s.children[r.child] = r.of; done.push({ chain: 'btc', txid: id, child: r.child }); }
+      catch (e) { console.warn('[speed up] BTC', id, (e && e.message) || e); }
+      markRaised(s.btc, id, btcTip);
+    }
+  }
+  await saveSped(s);
+  return done;
 }
 
 // ---- histories ----

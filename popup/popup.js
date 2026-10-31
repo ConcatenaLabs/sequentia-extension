@@ -9,6 +9,7 @@ import { frozenSentence, plainRefusal, batchLine, servedPairs, supervisedAssets 
 import { chainGenesis } from '../src/chain-genesis.js';
 import { DEFAULT_WORDS, heldAssetList, anchorDepth } from '../vendor/default-arca.js';
 import { BTC_WORDS } from '../vendor/btc-ark.js';
+import { SPEED_WORDS } from '../vendor/speed-up.js';
 import { createEngine as createUserTrade } from '../vendor/user-trade.js';
 import { mountUserComposer } from '../vendor/user-composer.js';
 import { attachChooser, PICKER_WORDS } from '../vendor/asset-picker.js';
@@ -600,7 +601,10 @@ function renderHistList() {
   const items = (histTab === 'seq' ? HIST.seq : HIST.btc) || [];
   if (!items.length) { list.appendChild(el('p', 'sub', 'No transactions yet.')); return; }
   const base = histTab === 'seq' ? OV.explorerTx : OV.explorerT4Tx;
+  const dev = OV.mode === 'developer', kids = HIST.children || {}, sped = new Set(Object.values(kids));
   for (const t of items) {
+    // Default mode shows one row a payment: a speed-up is part of the payment it sped up.
+    if (!dev && kids[t.txid]) continue;
     const item = el('div', 'item');
     const bcls = t.type === 'incoming' ? 'b-in' : (t.type === 'outgoing' || t.type === 'burn') ? 'b-out' : 'b-iss';
     item.appendChild(el('span', 'badge ' + bcls, t.type));
@@ -608,6 +612,19 @@ function renderHistList() {
     const a = el('a', null, t.txid.slice(0, 18) + '…'); a.href = base + t.txid; a.target = '_blank'; a.rel = 'noopener';
     const d1 = el('div'); d1.appendChild(a); mid.appendChild(d1);
     mid.appendChild(el('div', 'sub', t.height ? (t.timestamp ? new Date(t.timestamp * 1000).toLocaleString() : 'block ' + t.height) : 'unconfirmed'));
+    if (!t.height && !dev && sped.has(t.txid)) mid.appendChild(el('div', 'sub', SPEED_WORDS.spedUp));
+    if (!t.height && dev && kids[t.txid]) mid.appendChild(el('div', 'sub', 'Speeds up ' + kids[t.txid].slice(0, 8) + '…'));
+    if (!t.height && dev && !kids[t.txid]) {
+      // Developer mode: a child that pays for this one and itself (child pays for parent).
+      const b = el('button', 'ghost', 'Speed up'); b.style.cssText = 'padding:3px 8px;font-size:11px;margin-top:4px';
+      const chain = histTab === 'seq' ? 'seq' : 'btc';
+      b.onclick = async () => {
+        b.disabled = true; b.textContent = 'Speeding up…';
+        try { const r = await rpc('speedUp', { chain, txid: t.txid }); b.textContent = 'Sped up by ' + String(r.child).slice(0, 8) + '…'; }
+        catch (e) { b.textContent = 'Speed up failed'; b.title = e.message; b.disabled = false; }
+      };
+      mid.appendChild(b);
+    }
     item.appendChild(mid);
     const nz = (t.display || []).filter((x) => BigInt(x.atoms) !== 0n);
     const top = nz.reduce((best, x) => {

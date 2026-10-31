@@ -153,7 +153,7 @@ async function stepTrade() {
     if (process.env.FAUCET_ONCHAIN) {
       // Paid on the chain, at the address the wallet shows: default mode boards it by itself.
       await T.pop.click('[data-tab=receive]');
-      await T.pop.waitFor("/^bitcoin:tb1/.test((document.querySelector('#recvDCode')||{}).innerText||'')", 120000);
+      await T.pop.waitFor("/^bitcoin:tb1/i.test((document.querySelector('#recvDCode')||{}).innerText||'')", 120000);
       const addr = decodeURIComponent(String(await T.pop.text('#recvDCode')).replace(/^bitcoin:/i, '').split('?')[0]).trim();
       const r = await fetch('https://sequentiatestnet.com/faucet', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ address: addr, asset: baseTk }) }).then(async (x) => ({ ok: x.ok, t: await x.text() })).catch((e) => ({ ok: false, t: e.message }));
       check(`T: the faucet paid ${baseTk} on the chain to ${addr}`, r.ok, r.t.slice(0, 200));
