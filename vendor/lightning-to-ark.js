@@ -182,9 +182,10 @@ export function channelPart (read, moving, from) {
 
 // Whether an emptied channel is closed now, and if not, why it stays (developer mode's words).
 // `left`: this side's balance in it; `fee`: what its close is estimated to cost this side, or null
-// when it cannot be priced; `min`: the least a move is.
-export function closeVerdict ({ channel, left, spendable, fee, min = MIN_MOVE_SATS, moving = false, moved = false }) {
-  if (!moved) return { close: false, why: 'no move has been made from it' }
+// when it cannot be priced; `min`: the least a move is. Default mode never pays from a channel, so
+// one that holds too little to move is emptied, whichever browser of the phrase emptied it (a
+// wallet restored elsewhere included); one that holds nothing of the wallet's stays.
+export function closeVerdict ({ channel, left, spendable, fee, min = MIN_MOVE_SATS, moving = false }) {
   if (moving) return { close: false, why: 'a move from it is still on its way' }
   if (!channelLockedIn(channel)) return { close: false, why: 'it is not open for payments now, so it cannot be closed cooperatively' }
   if (amountToMove(spendable, min) != null) return { close: false, why: 'it still holds enough to move' }
@@ -427,11 +428,10 @@ export function mountLightningToArk (deps) {
       if (!c || !c.node_key || kindOf(c) !== kind) continue
       const id = c.short_channel_id || c.node_key
       if (s.closed[id]) continue
-      const moved = !!s.moved[kind + ':' + c.node_key]
       let fee = null; try { fee = await deps.closeFee(kind, c) } catch {}
-      const v = closeVerdict({ channel: c, left: big(c.balance_units ?? c.spendable_units ?? 0), spendable: big(c.spendable_units ?? 0), fee, min, moving, moved })
+      const v = closeVerdict({ channel: c, left: big(c.balance_units ?? c.spendable_units ?? 0), spendable: big(c.spendable_units ?? 0), fee, min, moving })
       S.closeWhy.set(id, v.why)
-      if (!v.close) { if (moved) why(`${kind.slice(0, 8)} channel ${id} stays open: ${v.why}`); continue }
+      if (!v.close) { why(`${kind.slice(0, 8)} channel ${id} stays open: ${v.why}`); continue }
       S.closing = true
       try {
         log(`closing the emptied ${kind.slice(0, 8)} channel ${id}, ${c.balance_units} left in it, fee about ${fee}`)
