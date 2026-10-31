@@ -340,7 +340,9 @@ async function overview({ withLn = false } = {}) {
   // every other asset only when its total is non-zero; nothing is pinned or
   // privileged beyond that. Headline = portfolio total in the reference currency.
   push('BTC', bal.btc, true);
-  for (const h of Object.keys(bal.seq)) push(h, bal.seq[h], false);
+  // A board the leaf wallet just made spent these coins, and its leaf counts as arriving already:
+  // until this reading of the chain shows them spent, they come off the chain's part.
+  for (const h of Object.keys(bal.seq)) push(h, await leaves.onchainLess(h, bal.seq[h]), false);
   // LN-only balances: an asset can live ENTIRELY in Lightning channels (bought
   // on the LNDEX, zero on-chain trace) — it must show like any other holding.
   for (const k of Object.keys(lnSum.perKind)) {
@@ -708,7 +710,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   if (msg && msg.scope === 'leaf-event' && sender.id === chrome.runtime.id) {
     if (msg.event === 'leafBalance') {
-      leaves.rememberLeafSum(msg.data && msg.data.balance, msg.data && msg.data.frozen, msg.data && msg.data.redoing)
+      leaves.rememberLeafSum(msg.data && msg.data.balance, msg.data && msg.data.frozen, msg.data && msg.data.redoing, msg.data && msg.data.boards)
         .then(() => chrome.runtime.sendMessage({ scope: 'ui-event', event: 'leaves-changed' }).catch(() => {}))
         .catch(() => {});
     } else if (msg.event === 'leafArrived' || msg.event === 'leafSyncDue') {

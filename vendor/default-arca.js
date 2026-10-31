@@ -30,6 +30,12 @@ function arrivesWords (minutes) {
   return minutes <= 5 ? 'It arrives in a few minutes.' : `It arrives in about ${minutes} minutes.`
 }
 
+// When coins moved out of the Ark are ready, from the operator's interval in minutes.
+function readyWords (minutes) {
+  if (!minutes) return 'They are ready shortly.'
+  return minutes <= 5 ? 'They are ready in a few minutes.' : `They are ready in about ${minutes} minutes.`
+}
+
 export const DEFAULT_WORDS = Object.freeze({
   arriving: (amount, ticker) => `${amount} ${ticker} arriving`,
   // Held, spendable before, and taken back out of the chain with the Bitcoin block it rested on:
@@ -65,6 +71,18 @@ export const DEFAULT_WORDS = Object.freeze({
   fee: (amount, ticker) => `Fee ${amount} ${ticker}`,
   sentLater: (amount, ticker, minutes) => `Sent ${amount} ${ticker}. ${arrivesWords(minutes)}`,
   faucetReceived: (what) => `Received ${what}.`,
+  // A stake, a pool's delegation and a mix are made from coins the wallet holds on the chain: what
+  // they need is moved out of the Ark first, by the wallet itself.
+  movingOut: (what, purpose, minutes) => `Moving ${what} out of the Ark so it can be ${purpose}. ${readyWords(minutes)} Keep this page open.`,
+  movingWaits: (what, purpose) => `${what} cannot be moved out of the Ark yet: the network moves it as soon as it can, and it stays yours meanwhile. It is ${purpose} then, while this page is open; or come back later and press the button again.`,
+  cannotMoveNow: (what) => `${what} cannot be moved out of the Ark right now: the network has too little of it free. Nothing has moved: try again later.`,
+  notEnough: (amount, ticker) => `Not enough ${ticker}: ${amount} ${ticker} short.`,
+  stillOpening: 'Your wallet is still opening: try again in a moment.',
+  waitOpening: 'Your wallet is still opening; this goes on by itself once it has.',
+  notMoved: 'This could not be moved out of the Ark just now. Nothing was spent: try again in a moment.',
+  notReady: 'What was moved out of the Ark has not arrived yet. It stays yours: try again in a few minutes.',
+  stakeFeeOther: (ticker) => `Not enough tSEQ for the stake and its fee: the fee is paid in ${ticker} instead, chosen below. Press Review stake again.`,
+  stakeFeeShort: 'Not enough tSEQ for the stake and its fee: stake a little less, or hold an asset that can pay the fee.',
 })
 
 // The minutes a payment to an address from the tree takes at most, from the operator's interval
@@ -218,10 +236,34 @@ export async function boardAll (run, c, tries = 3) {
     let q
     try { q = await run('board_quote', { asset: c.asset, amount: String(v) }) } catch { fee = fee * 2n + 1n; continue }
     const f = big(q && q.fee && q.fee.amount)
-    if (v + f <= c.onchain) return await run('board', { asset: c.asset, amount: String(v), shown: q.fee })
+    if (v + f <= c.onchain) {
+      const r = await run('board', { asset: c.asset, amount: String(v), shown: q.fee })
+      // What the board took off the chain (its amount and its fee), for onchainLessBoards.
+      return r && typeof r === 'object' ? { ...r, spent: String(v + f) } : r
+    }
     fee = f
   }
   return null
+}
+
+// What a board just made takes off the chain: `onchain` atoms as the page's own reading of the
+// chain shows them, less what the board spent (`board`: { spent, below, at }, from boardSpent)
+// while that reading does not show it spent yet. The board's leaf counts as arriving in the tree
+// from the moment it is made, so without this the coins count twice until the reading catches
+// up (a block, or the page's next scan). The board is taken as seen once the reading drops to
+// what it left (`below`), or after half an hour. -> { atoms, seen }
+export const BOARD_SEEN_MS = 30 * 60_000
+export function onchainLessBoards (board, onchain, nowMs) {
+  const o = big(onchain)
+  if (!board) return { atoms: o, seen: true }
+  if (o <= big(board.below) || nowMs - Number(board.at) > BOARD_SEEN_MS) return { atoms: o, seen: true }
+  const v = o - big(board.spent)
+  return { atoms: v > 0n ? v : 0n, seen: false }
+}
+// The record onchainLessBoards keeps for a board of `held` atoms on the chain (the library's
+// reading when it boarded) that spent `spent`, made at `at`.
+export function boardSpent (held, spent, at) {
+  return { spent: String(big(spent)), below: String(big(held) - big(spent)), at }
 }
 
 // The assets a wallet lists to pay or send from: BTC always (the parent chain, first-class,
