@@ -72,7 +72,7 @@
 import { inFlight, nextAskMs, freshRequestWaits, syncDecision, careDue, careSummary, careArgs, payThrough, CARE_EVERY_MS, laterMode } from './src/leaf-schedule.js';
 import { frozenAtoms } from './src/leaf-profiles.js';
 import { redoingAtoms } from './vendor/default-arca.js';
-import { boardCandidates, boardAll } from './vendor/default-arca.js';
+import { boardCandidates, boardAll, boardSpent } from './vendor/default-arca.js';
 
 const TICK_MS = 60_000;
 let worker = null;
@@ -143,7 +143,11 @@ async function reportBalance() {
     // What of each asset a Bitcoin reorganisation took back out of the chain and is being redone.
     const redoing = {};
     for (const c of S.coins || []) if (c && c.asset && redoing[c.asset] === undefined) { const n = redoingAtoms(S.coins, c.asset); if (n > 0n) redoing[c.asset] = n.toString(); }
-    emit('leafBalance', { balance: b, frozen, redoing });
+    // What a board just made spent on the chain, once: the service worker keeps it until its own
+    // reading of the chain shows the coins spent (onchainLessBoards).
+    const boards = S.newBoards || {};
+    S.newBoards = {};
+    emit('leafBalance', { balance: b, frozen, redoing, boards });
   } catch { /* the next change reports it again */ }
 }
 // Whether the wallet holds a leaf of a supervised asset (one that lands at its key), or
@@ -290,7 +294,11 @@ async function boardArrivals() {
     if (S.boardRefused.get(c.asset) === String(c.onchain)) continue;
     try {
       const v = await boardAll(async (cmd, a) => (await runCommand(cmd, a)).result, c);
-      if (v) { boarded = true; S.lastBoard = { at: Date.now(), asset: c.asset, value: v }; emit('leafArrived', { asset: c.asset, value: String(c.onchain), kind: 'board' }); }
+      if (v) {
+        boarded = true; S.lastBoard = { at: Date.now(), asset: c.asset, value: v };
+        if (v.spent) (S.newBoards || (S.newBoards = {}))[c.asset] = boardSpent(c.onchain, v.spent, Date.now());
+        emit('leafArrived', { asset: c.asset, value: String(c.onchain), kind: 'board' });
+      }
       else S.boardRefused.set(c.asset, String(c.onchain));
       console.info(`[leaves] board of ${c.asset.slice(0, 8)}: ${v ? 'boarded' : 'nothing to board after the fee'}`);
     } catch (e) {

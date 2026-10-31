@@ -19,7 +19,7 @@ import { sessionMnemonic } from './vault.js';
 import { mode, setMode, walletTag, modeStamp } from './mode.js';
 import { claimScan } from './leaf-schedule.js';
 import { leafPerAsset } from './balance-view.js';
-import { arrivingAtoms, keptSafeAtoms } from '../vendor/default-arca.js';
+import { arrivingAtoms, keptSafeAtoms, onchainLessBoards } from '../vendor/default-arca.js';
 
 export { mode, setMode, modeStamp };
 
@@ -76,7 +76,7 @@ export async function leafSum() {
   const all = (await stGet('local', SUM_KEY)) || {};
   return (tag && all[tag]) || null;
 }
-export async function rememberLeafSum(balance, frozen, redoing) {
+export async function rememberLeafSum(balance, frozen, redoing, boards) {
   const tag = await walletTag();
   if (!tag) return;
   const perAsset = leafPerAsset(balance);
@@ -93,8 +93,25 @@ export async function rememberLeafSum(balance, frozen, redoing) {
   // What was moved out to keep it safe while the wallet was away, until it is put back.
   const kept = {};
   for (const a of Object.keys((balance && balance.arca) || {})) { const n = keptSafeAtoms(balance, a); if (n > 0n) kept[a] = n.toString(); }
-  all[tag] = { at: Date.now(), perAsset, frozen: fz, arriving, redoing: rd, keptSafe: kept };
+  // What boards just made spent on the chain (the host reports each once), kept until the
+  // wallet's own reading of the chain shows it (onchainLess).
+  const prev = (all[tag] && all[tag].boards) || {};
+  all[tag] = { at: Date.now(), perAsset, frozen: fz, arriving, redoing: rd, keptSafe: kept, boards: { ...prev, ...(boards || {}) } };
   await stSet('local', SUM_KEY, all);
+}
+
+// `atoms` of `asset` as the wallet's own reading of the chain shows them, less what a board the
+// leaf wallet just made spent that the reading does not show spent yet: the board's leaf counts
+// as arriving from the moment it is made, so the coins would count twice. A board seen spent, or
+// half an hour old, is forgotten.
+export async function onchainLess(asset, atoms) {
+  const tag = await walletTag();
+  const all = (await stGet('local', SUM_KEY)) || {};
+  const rec = tag && all[tag] && all[tag].boards && all[tag].boards[asset];
+  if (!rec) return BigInt(atoms || 0);
+  const r = onchainLessBoards(rec, atoms, Date.now());
+  if (r.seen) { delete all[tag].boards[asset]; await stSet('local', SUM_KEY, all); }
+  return r.atoms;
 }
 
 // One on-chain address of the leaf wallet, the same each time it is asked: the address
