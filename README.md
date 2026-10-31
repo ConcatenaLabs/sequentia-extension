@@ -67,8 +67,7 @@ confidential `tsqb1…` addresses are an explicit opt-in).
 - **Transaction history** — Sequentia, Bitcoin, and restricted-asset transfers. A
   transaction that waits for a block is sped up by a child that pays for both (child pays for
   parent): by itself in default mode once it has waited two blocks, and with a **Speed up**
-  button in developer mode. A coin received out of round is refreshed at the next round by
-  itself in default mode.
+  button in developer mode.
 - **Lightning** — send and receive BTC and fee-priced Sequentia assets over
   the hosted SeqLN rail (Tier-2: keyless hosted nodes, this device co-signs
   everything; the LSP can route but never move funds), plus non-custodial
