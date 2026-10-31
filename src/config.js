@@ -35,6 +35,10 @@ export const ARCA = {
   server: BASE + '/arca',
   node_url: BASE + '/node-rpc',
   operator: 'b6f4c5924ad81947658cf85bb93d9267efc54c7fcb2e4577e8c954c68fa087bb',
+  // The watchtowers other operators run for this operator's users, which the wallet deposits its
+  // coins with beside those the operator names: arca.albertodeluigi.com's, and operator B's
+  // (the testnet's stand-in second operator). The same as the web wallet's and Ambra's.
+  watchtowers: ['https://arca.albertodeluigi.com/watchtower', BASE + '/watchtower-b'],
 };
 // The Bitcoin ark that holds default mode's BTC (vendor/btc-ark.js): its server (gRPC-web) and
 // the Esplora server its wallet reads testnet4 from.

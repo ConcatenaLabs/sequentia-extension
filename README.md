@@ -32,7 +32,11 @@ confidential `tsqb1…` addresses are an explicit opt-in).
   `docs/DEFAULT_MODE.md`; its words and route rules are the web wallet's own
   modules, in `vendor/`). A wallet in user mode joins the operator pinned in
   `src/config.js` (`ARCA`) by itself, only while its server shows the pinned key,
-  and tries again every two minutes when it cannot. BTC is held on the Bitcoin ark
+  and tries again every two minutes when it cannot. Its coins are deposited, sealed,
+  with the watchtowers the operator names and those other operators run for its
+  users (`ARCA.watchtowers`), so any one of them takes a coin on the chain under its
+  owner's key should its batch be released, or a sender take back an earlier coin,
+  while the wallet is away. BTC is held on the Bitcoin ark
   (`BTC_ARK`, Bark's wallet in `btc-ark/`, opened in both modes). Receive shows one
   receive code, `BITCOIN:<TB1>?ark=<ARK ADDRESS>&sequentia=<SQR1…>` (the web wallet's
   `pay-code.js`, kept in `vendor/`), with

@@ -29,7 +29,7 @@ import { leafPerAsset } from './balance-view.js';
 import { plainRefusal } from './leaf-profiles.js';
 import { fromWire } from './wire.js';
 import {
-  pinnedOperator, checkPinned, treeRoute, parseReceiveCode, arrivingAtoms, addressRoute, arrivalMinutes,
+  pinnedOperator, defaultWatchtowers, checkPinned, treeRoute, parseReceiveCode, arrivingAtoms, addressRoute, arrivalMinutes,
   DEFAULT_WORDS, JOIN_RETRY_MS, BOARD_QUIET_MS,
 } from '../vendor/default-arca.js';
 import { buildPayCode, readPayCode, expandRequest } from '../vendor/pay-code.js';
@@ -137,9 +137,21 @@ export async function autoJoin() {
 // Tells the leaf host whether default mode's upkeep runs (boarding, the mailbox read).
 export async function syncDefaults() {
   const st = await modeStamp();
-  const on = st.mode === 'user' && !!(await leaves.config());
+  const joined = !!(await leaves.config());
+  const on = st.mode === 'user' && joined;
   await leaves.hostOp('defaults', { on, at: st.at }).catch(() => {});
+  if (joined) await setDefaultWatchtowers();
   return on;
+}
+// The other operators' watchtowers, beside the operator's own, given to the library once each
+// time the leaf wallet runs, in either mode: it deposits each coin with them too, sealed.
+let towersSet = false;
+async function setDefaultWatchtowers() {
+  if (towersSet) return;
+  try {
+    await leaves.runAny('set_default_watchtowers', { urls: defaultWatchtowers(ARCA) });
+    towersSet = true;
+  } catch (e) { console.warn('[default] default watchtowers not set:', (e && e.message) ?? e); }
 }
 
 // ---- the receive code ----

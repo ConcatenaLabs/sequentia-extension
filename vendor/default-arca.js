@@ -127,6 +127,17 @@ export function pinnedOperator (cfg) {
   return { server: server.replace(/\/+$/, ''), node_url: nodeUrl, operator }
 }
 
+// The watchtowers the page names beside those its operator names (`watchtowers` in its
+// operator's configuration): those other operators run for this operator's users, so a coin
+// does not rest on its own operator alone to name who watches for it. Only https URLs (or
+// http on this machine), at most eight; the library deposits with one only when its info says
+// it watches for the wallet's own operator, and passes over the rest.
+export function defaultWatchtowers (cfg) {
+  const list = (cfg && Array.isArray(cfg.watchtowers)) ? cfg.watchtowers : []
+  return list.filter((u) => typeof u === 'string' && (/^https:\/\/[^\s]+$/.test(u) || /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/[^\s]*)?$/.test(u)))
+    .map((u) => u.replace(/\/+$/, '')).slice(0, 8)
+}
+
 // The operator's server must show the key the page pinned before the wallet joins it, and the
 // wallet's own answer must name it after: a server that shows another key is refused.
 export function checkPinned (operatorKey, pinned, what = 'the server') {
