@@ -62,6 +62,7 @@ const move = mountLightningToArk({
   // What a close of an emptied asset channel pays stays in the figure until the wallet holds the
   // close's transaction; a BTC close is not held (its scan is not this worker's to ask).
   seen: async (kind, txid) => kind === 'BTC' || engine.hasSeqTx(txid),
+  seenNow: (kind, txid) => (kind === 'BTC' ? true : engine.hasSeqTx(txid)),
   store: localStorage, tag: () => tagNow,
   log: (...a) => console.log(...a),
 });

@@ -47,6 +47,9 @@ export const CLOSE_UNILATERAL_S = 600
 // How long what a cooperative close pays the wallet is held in the figure, at most, until the
 // wallet's own scan sees the close's transaction.
 export const CLOSE_HOLD_MS = 2 * 3600_000
+// How long a close that has not answered yet (its page closed meanwhile) is held, and blocks
+// another close of the channel: longer than the close's own cooperative window.
+export const CLOSE_PENDING_MS = 15 * 60_000
 // What is kept across a reload, per wallet (+ '.' + the wallet's tag).
 export const STORE_KEY = 'swk.lnToArk'
 
@@ -120,6 +123,16 @@ export function payingNode (channels, kind, kindOf) {
   let best = null
   for (const n of by.values()) if (!best || n.spendable > best.spendable) best = n
   return best
+}
+
+// What the wallet's own channels in `kind` hold, as the figure counts them (every channel the
+// service lists in a CHANNELD state, open for payments or not): a move holds the figure at this.
+export function kindBalance (channels, kind, kindOf) {
+  let n = 0n
+  for (const c of channels || []) {
+    if (c && c.node_key && kindOf(c) === kind && String(c.state || '').toUpperCase().startsWith('CHANNELD')) n += big(c.balance_units ?? c.spendable_units ?? 0)
+  }
+  return n
 }
 
 // The assets the operator receives over Lightning (`info.server_info.assets[].lightning`: up and
@@ -213,6 +226,8 @@ export function closeVerdict ({ channel, left, spendable, fee, min = MIN_MOVE_SA
 //   close({ kind, channel })  closes it cooperatively to an address of the wallet
 //   seen(kind, txid, address) whether the wallet's own scan counts the close's payment to it yet;
 //                             without it, what a close pays is not held in the figure
+//   seenNow(kind, txid)       the same, answered at once where the page can (true/false), or
+//                             undefined; the figure asks it as it is drawn
 //   store                     localStorage-like; tag() the wallet's tag
 //   onChange(), log(...), now(), sleep(ms)
 export function mountLightningToArk (deps) {
@@ -252,7 +267,8 @@ export function mountLightningToArk (deps) {
     if (pending) return followBtc(pending)
     if (await deps.personBusy()) return why('BTC: waiting while a person uses the wallet')
     if (S.btcLast != null && now() - S.btcLast < RETRY_MS) return
-    const n = payingNode(await deps.channels(), 'BTC', kindOf)
+    const chans = await deps.channels()
+    const n = payingNode(chans, 'BTC', kindOf)
     if (!n) return why('BTC: no channel that is locked in')
     const amount = withinAllowance(amountToMove(n.spendable), await deps.allowance('btc'))
     if (amount == null) { why(`BTC: ${n.spendable} sat in the channel, too little to move`); return closeEmptied('BTC') }
@@ -260,7 +276,7 @@ export function mountLightningToArk (deps) {
     S.btcLast = now()
     try {
       const inv = await ark.invoice(amount, 'From your Lightning channel')
-      const rec = { hash: inv.payment_hash, invoice: inv.invoice, sats: String(amount), from: String(n.balance), node_key: n.node_key,
+      const rec = { hash: inv.payment_hash, invoice: inv.invoice, sats: String(amount), from: String(kindBalance(chans, 'BTC', kindOf)), node_key: n.node_key,
         at: now(), expires_at: inv.expires_at || null }
       update((s) => { s.btc = rec; s.ownHashes = tail([...s.ownHashes, rec.hash]); s.moved['BTC:' + n.node_key] = now() })
       changed()
@@ -364,7 +380,8 @@ export function mountLightningToArk (deps) {
       for (const asset of legs) {
         if (await deps.personBusy()) break
         const a8 = asset.slice(0, 8)
-        const n = payingNode(await deps.channels(), asset, kindOf)
+        const chans = await deps.channels()
+        const n = payingNode(chans, asset, kindOf)
         if (!n) continue
         if (receivesUnderWay(rcv, asset, now(), givenUp)) { why(`${a8}: a move is under way`); continue }
         const refused = S.refused.get(asset)
@@ -373,7 +390,7 @@ export function mountLightningToArk (deps) {
         const amount = withinAllowance(amountToMove(n.spendable, min), await deps.allowance(asset), min)
         if (amount == null) { why(`${a8}: ${n.spendable} in the channel, too little to move (smallest leaf ${min})`); await closeEmptied(asset); continue }
         try {
-          S.movingFrom.set(asset, n.balance)
+          S.movingFrom.set(asset, kindBalance(chans, asset, kindOf))
           await moveAsset(asset, amount, n)
         } catch (e) {
           S.refused.set(asset, isLimitRefusal(e) ? now() + LIMIT_WAIT_MS - RETRY_MS : now())
@@ -427,22 +444,28 @@ export function mountLightningToArk (deps) {
     for (const c of (await deps.channels()) || []) {
       if (!c || !c.node_key || kindOf(c) !== kind) continue
       const id = c.short_channel_id || c.node_key
-      if (s.closed[id]) continue
+      const was = s.closed[id]
+      if (was && !(was.type === 'closing' && now() - was.at > CLOSE_PENDING_MS)) continue
       let fee = null; try { fee = await deps.closeFee(kind, c) } catch {}
       const v = closeVerdict({ channel: c, left: big(c.balance_units ?? c.spendable_units ?? 0), spendable: big(c.spendable_units ?? 0), fee, min, moving })
       S.closeWhy.set(id, v.why)
       if (!v.close) { why(`${kind.slice(0, 8)} channel ${id} stays open: ${v.why}`); continue }
       S.closing = true
+      // Held in the figure from the moment the channel leaves the service's list, before its close
+      // has answered (the figure counts it while it is listed, then this).
+      const left = String(c.balance_units ?? c.spendable_units ?? 0)
+      update((x) => { x.closed[id] = { at: now(), txid: null, type: 'closing', kind, left, address: null } })
       try {
         log(`closing the emptied ${kind.slice(0, 8)} channel ${id}, ${c.balance_units} left in it, fee about ${fee}`)
         const r = await deps.close({ kind, channel: c })
         update((x) => { x.closed[id] = { at: now(), txid: (r && r.closing_txid) || null, type: (r && r.type) || null, kind,
-          left: String(c.balance_units ?? c.spendable_units ?? 0), address: (r && r.destination) || null } })
+          left, address: (r && r.destination) || null } })
         S.closeWhy.set(id, null)
         log(`closed ${id}:`, (r && r.type) || '', (r && r.closing_txid) || '')
         try { await deps.refreshChannels() } catch {}
         changed()
       } catch (e) {
+        update((x) => { delete x.closed[id] })
         S.closeWhy.set(id, 'its close was refused now, and is tried again later: ' + ((e && e.message) || e))
         log(`close of ${id} refused:`, (e && e.message) || e)
       } finally { S.closing = false }
@@ -453,9 +476,17 @@ export function mountLightningToArk (deps) {
   // the channel has left the status, and its balance is on its way to the wallet's address.
   function closing (kind) {
     if (!deps.seen) return 0n
+    let listed = null
+    try { const c = deps.channels(); if (Array.isArray(c)) listed = new Set(c.filter((x) => x && String(x.state || '').toUpperCase().startsWith('CHANNELD')).map((x) => x.short_channel_id || x.node_key)) } catch {}
     let n = 0n
-    for (const v of Object.values(load().closed || {})) {
-      if (v && v.kind === kind && v.txid && v.type !== 'unilateral' && !v.seen && now() - v.at < CLOSE_HOLD_MS) n += big(v.left)
+    for (const [id, v] of Object.entries(load().closed || {})) {
+      if (!v || v.kind !== kind || v.type === 'unilateral' || v.seen || now() - v.at >= CLOSE_HOLD_MS) continue
+      if (!v.txid && now() - v.at > CLOSE_PENDING_MS) continue
+      // Still listed: the figure counts the channel itself. Without a list at hand, only a close
+      // that has answered is held.
+      if (listed ? listed.has(id) : !v.txid) continue
+      if (v.txid && deps.seenNow) { let s; try { s = deps.seenNow(v.kind, v.txid) } catch {} if (s === true) continue }
+      n += big(v.left)
     }
     return n
   }
