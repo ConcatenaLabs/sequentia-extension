@@ -310,6 +310,27 @@ async function boardArrivals() {
   if (boarded) await reportBalance();
 }
 
+// Default mode: every coin received out of round is given up in the operator's next round for
+// a coin of the wallet's own (`refresh_received`), which ends what its senders could still do
+// with it; at most once every two minutes, and not while the wallet's own payment is under way.
+// Until that round is final the coin counts as arriving. Nothing is said unless it goes wrong.
+const REFRESH_EVERY_MS = 120_000;
+async function refreshReceived() {
+  if (!S.open || !S.defaultMode || Date.now() < S.quietUntil) return;
+  if (S.refreshedAt && Date.now() - S.refreshedAt < REFRESH_EVERY_MS) return;
+  S.refreshedAt = Date.now();
+  try {
+    const v = await runCommand('refresh_received', {});
+    const r = (v && v.result) || {};
+    S.lastRefresh = { at: Date.now(), value: r };
+    if ((r.refreshed || []).length) { console.info(`[leaves] ${r.refreshed.length} coin(s) received out of round given up in the next round`); await reportBalance(); }
+    for (const l of r.left || []) console.info(`[leaves] a received coin left as it is: ${l.why}`);
+  } catch (e) {
+    S.lastRefresh = { at: Date.now(), error: errorOf(e) };
+    console.warn(`[leaves] refreshing what was received: ${e && e.message}`);
+  }
+}
+
 function watchMailbox() {
   clearTimeout(S.mailTimer);
   if (!S.open || !S.defaultMode) return;
@@ -370,6 +391,7 @@ async function tick() {
       await reportBalance();
     }
     if (S.defaultMode) await boardArrivals();
+    if (S.defaultMode) await refreshReceived();
     S.lastError = null;
     wait = inFlight(S.coins, S.participations) ? Math.min(S.tickMs, 30_000) : nextAskMs(S.schedule, S.tickMs);
     if (takeWaits()) wait = Math.min(wait, S.watchMs);

@@ -235,6 +235,13 @@ try {
       // A wallet made before default mode held its coins in the Ark: what its own channels hold
       // moves there by itself (src/ln-to-ark.js).
       lnToArk.tick().catch((e) => console.warn('[ln to ark]', e && e.message));
+      // Default mode speeds up, by itself, what has waited two blocks on either chain.
+      sessionMnemonic().then(async (m) => {
+        if (!m || (await leaves.mode()) === 'developer') return;
+        await engine.ensureOpen();
+        const done = await engine.autoSpeedUp();
+        if (done.length) console.info('[speed up]', JSON.stringify(done));
+      }).catch((e) => console.warn('[speed up]', e && e.message));
     }
   });
 } catch { /* alarms unavailable in this context */ }
@@ -559,8 +566,13 @@ const uiMethods = {
       ...t,
       display: Object.entries(t.deltas).map(([h, v]) => ({ ticker: A.assetMeta(h).ticker, precision: A.assetMeta(h).precision || (h === 'BTC' ? 8 : 0), atoms: v })),
     }));
-    return { seq: withMeta(seq), btc: withMeta(btc), oamp };
+    // What the wallet sped up (child pays for parent): each child, and the transaction it sped up.
+    const children = await engine.spedChildren().catch(() => ({}));
+    return { seq: withMeta(seq), btc: withMeta(btc), oamp, children };
   },
+  // Developer mode: speed up one waiting transaction (`chain` seq | btc; `rate` optional:
+  // reference atoms a kvB for Sequentia, sat/vB for Bitcoin).
+  'speedUp': async ({ chain, txid, rate }) => { await engine.ensureOpen(); return await engine.speedUp({ chain, txid, rate }); },
   'feeAssets': async () => {
     await engine.ensureOpen();
     const bal = await engine.balances();
