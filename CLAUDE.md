@@ -81,8 +81,9 @@ wasm. Read this before changing anything.
   after the leaf wallet opens and after a sync at most every ten minutes
   (`careDue`, `src/leaf-schedule.js`, the web wallet's rules), in either mode,
   with `scan` = the kit wallet's next receive index + 20 (`claimScan`; the
-  service worker tells the host through `ensureRunning`) and `plan_within` set
-  to plan every leaf of a round (`careArgs`). Which claim to take, which coin to
+  service worker tells the host through `ensureRunning`) and the library's own
+  planning reach: a leaf of a round is planned once its refresh could run within
+  ten days (`careArgs`). Which claim to take, which coin to
   plan, its fee and every refusal are the library's; never decide one in
   JavaScript. Every leaf command a person or a site starts goes through one path:
   `leaves.run` asks the host with `paying`, and the host's `payThrough`

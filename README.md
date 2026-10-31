@@ -169,8 +169,10 @@ confidential `tsqb1…` addresses are an explicit opt-in).
   mode and with no prompt: after a sync, at most every ten minutes and once when
   the leaf wallet opens, it takes up every claim of a distribution named for one
   of its addresses (the asset then counts in its figure), signs a refresh plan
-  for every leaf of a round so that a wallet closed across that leaf's expiry
-  keeps it, whenever it closes, cancels the plan of a leaf that moved, and sends
+  for a leaf of a round once its refresh could run within ten days, so that a
+  wallet closed across that leaf's expiry keeps it while the leaf is free to
+  trade and pay until then (one closed earlier and kept away past the expiry has
+  it repaid by the operator, less the late-refresh fee), cancels the plan of a leaf that moved, and sends
   a leaf no round made into a round's refresh once that refresh could run within
   ten days, so it can be planned later. A plan's fee comes out of the leaf in the
   leaf's own asset; a leaf the operator will not plan is refreshed while the
