@@ -153,11 +153,11 @@ export function receivesUnderWay (receives, asset, nowMs, givenUp = new Set()) {
 }
 
 // What of each asset is on its way from the wallet's channel to its tree, in atoms: each receive it
-// paid from its own channel (`paid`) not yet received, until its leaf is a coin of the wallet's
-// (`coins`: the leaf counts in the figure from then). -> Map(asset -> atoms)
+// paid from its own channel (`paid`) not yet received, until its leaf is a coin of the wallet's in
+// any state (`coins`: the leaf counts in the figure from then). -> Map(asset -> atoms)
 export function movingOf (receives, coins, paid, nowMs) {
   const out = new Map()
-  const leafValues = new Set((coins || []).filter((c) => c && c.state === 'receiving').map((c) => `${c.asset}:${c.value}`))
+  const leafValues = new Set((coins || []).filter((c) => c && c.asset && c.value != null).map((c) => `${c.asset}:${c.value}`))
   for (const [hash, r] of Object.entries(receives || {})) {
     if (!r || !paid.has(hash)) continue
     if (r.state !== 'waiting' && r.state !== 'issuing') continue
@@ -328,6 +328,7 @@ export function mountLightningToArk (deps) {
     try { return (await deps.leaves.run('lightning_receives', {})) || {} } catch (e) { why('assets: the leaf wallet did not list its receives: ' + ((e && e.message) || e)); return {} }
   }
   async function setMoving (rcv) {
+    S.lastReceives = rcv
     const s = load()
     const next = movingOf(rcv, (await deps.leaves.coins()) || [], new Set(s.paid), now())
     for (const a of [...S.movingFrom.keys()]) if (!next.has(a)) S.movingFrom.delete(a)
@@ -468,6 +469,17 @@ export function mountLightningToArk (deps) {
     }
   }
 
+  // What of an asset is moving, read again from the last receives and the coins the leaf wallet
+  // holds now, where it answers at once: the leaf counts in the figure the moment it is the
+  // wallet's, so the move must stop counting at that same moment, not at the next pass.
+  function liveMoving (kind) {
+    if (S.lastReceives && deps.leaves && deps.leaves.coins) {
+      let c = null; try { c = deps.leaves.coins() } catch {}
+      if (Array.isArray(c)) return movingOf(S.lastReceives, c, new Set(load().paid), now()).get(kind) ?? null
+    }
+    return S.movingAssets.get(kind) ?? null
+  }
+
   return {
     tick: async () => { await checkClosed(); return tick() },
     tickAssets,
@@ -475,11 +487,11 @@ export function mountLightningToArk (deps) {
     // held when the move began.
     movingBtc: () => { const b = load().btc; return b ? big(b.sats) : null },
     // What of `kind` is on its way from its channels, in atoms, or null.
-    moving: (kind) => kind === 'BTC' ? (load().btc ? big(load().btc.sats) : null) : (S.movingAssets.get(kind) ?? null),
+    moving: (kind) => kind === 'BTC' ? (load().btc ? big(load().btc.sats) : null) : liveMoving(kind),
     // The channels' part of `kind`'s figure, `read` as last read.
     channelPart: (kind, read) => {
       if (kind === 'BTC') { const b = load().btc; return (b ? channelPart(read, big(b.sats), big(b.from)) : big(read)) + closing(kind) }
-      return channelPart(read, S.movingAssets.get(kind) ?? null, S.movingFrom.get(kind) ?? null) + closing(kind)
+      return channelPart(read, liveMoving(kind), S.movingFrom.get(kind) ?? null) + closing(kind)
     },
     // Asks whether each close's payment is counted yet (each pass does).
     checkClosed,
