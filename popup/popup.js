@@ -1385,6 +1385,10 @@ async function renderTrade() {
         const o = ((await r.json()).vout || [])[vout]; return o && o.value != null ? String(o.value) : null;
       },
       admitted: async () => ({ pairs: served(), genesis }),
+      // BTC at the wallet's address, moved to the Bitcoin ark for a trade that pays more than the
+      // ark holds (default mode only; the service worker answers 0 otherwise).
+      btcAtAddress: async () => BigInt((await rpc('default.btcAtAddress', {})).sats || 0),
+      btcMove: (sats) => { rpc('default.boardBtcFor', { sats: String(sats) }).catch(() => {}); },
       // What the balance shows of an asset, so one held but not payable yet reads as not ready,
       // never as none; and the board of what is on the chain, asked for at once.
       held: (a) => held(a),
