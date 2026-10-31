@@ -8,7 +8,7 @@
 // USER_MODE_FORBIDDEN_WORDS (user-trade.test.mjs checks both, the browser drive the page).
 //
 // ctx: { root (element), engine (createEngine's), assetMeta(hex) -> {ticker, precision},
-//   fmtAtoms(atoms, precision), parseAtoms(text, precision), knownAssets() -> [hex],
+//   fmtAtoms(atoms, precision) (fmtShow, optional: the same, grouped, for amounts read), parseAtoms(text, precision), knownAssets() -> [hex],
 //   held(hex) -> atoms the person holds (the figure the Balance tab shows), admittedReceives(pay)
 //   -> [hex] (optional: the receive picker lists those after what is offered now),
 //   market: { relay() -> the relay's base URL, pairOf(a, b) -> {base, quote} } (optional: the
@@ -30,6 +30,10 @@ const NONE = '…'
 const CARET = '▾'
 
 // How long a trade is followed every few seconds, and how often after that.
+// While the wallet gets coins ready for a trade, the trade is priced again this often, this many
+// times at most (about ten minutes: a round and its block).
+export const READY_RETRY_MS = 20_000
+export const READY_TRIES = 30
 export const FOLLOW_FAST_MS = 120_000
 export const FOLLOW_SLOW_MS = 30_000
 
@@ -44,11 +48,20 @@ export function mountUserComposer (ctx) {
     estTimer: null, estSeq: 0,
     offered: { pay: null, list: [], at: 0, loading: false } }
   const OFFERS_MS = ctx.offersMs || 60000
+  // The pair and the amount typed are kept for the browser tab's session (ctx.session, a
+  // sessionStorage), so a reload, or a tab the browser put to sleep, opens on them again. A ticket
+  // is never kept: its price is asked again.
+  const KEPT = ['pay', 'get', 'amount', 'recv', 'fixed', 'payChosen', 'getChosen']
+  const keptKey = () => 'swk.composer.' + (ctx.tag ? ctx.tag() : 'default')
+  try { const k = ctx.session && JSON.parse(ctx.session.getItem(keptKey()) || 'null'); if (k && typeof k === 'object') for (const f of KEPT) if (k[f] != null) S[f] = k[f] } catch {}
+  function keep () { try { if (ctx.session) { const k = {}; for (const f of KEPT) k[f] = S[f] ?? null; ctx.session.setItem(keptKey(), JSON.stringify(k)) } } catch {} }
   const doc = ctx.root.ownerDocument || document
   const el = (tag, cls, text) => { const e = doc.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e }
   const name = (h) => (h === 'BTC' ? 'BTC' : ((ctx.assetMeta(h) || {}).ticker || String(h).slice(0, 8)))
   const prec = (h) => (h === 'BTC' ? 8 : ((ctx.assetMeta(h) || {}).precision ?? 0))
-  const amt = (h, atoms) => `${ctx.fmtAtoms(big(atoms), prec(h))} ${name(h)}`
+  // Amounts the person reads are grouped as Balance groups them; an amount put in a field is plain.
+  const show = (atoms, p) => (ctx.fmtShow || ctx.fmtAtoms)(atoms, p)
+  const amt = (h, atoms) => `${show(big(atoms), prec(h))} ${name(h)}`
 
   // What can be paid: BTC always, and an asset only while the wallet holds some (a fresh wallet
   // pays from BTC alone); what can be got is every asset the book knows.
@@ -136,7 +149,7 @@ export function mountUserComposer (ctx) {
       const m = ctx.assetMeta(h) || {}
       return { hex: h, ticker: name(h), name: h === 'BTC' ? 'Bitcoin' : (m.name || ''), held: atoms > 0n,
         hidden: !!(ctx.isHidden && ctx.isHidden(h)), offered: offered.has(h), tradable: tradable.has(h), cur: h === value,
-        bal: atoms > 0n ? { b: ctx.fmtAtoms(atoms, prec(h)), r: ctx.refValue ? ctx.refValue(h, atoms) : '' } : null }
+        bal: atoms > 0n ? { b: show(atoms, prec(h)), r: ctx.refValue ? ctx.refValue(h, atoms) : '' } : null }
     }), (hex) => onchange(hex), { hint: PICKER_WORDS.hintSearch })
     return b
   }
@@ -156,7 +169,7 @@ export function mountUserComposer (ctx) {
     row1.appendChild(el('label', 'lbl', USER_WORDS.pay))
     row1.appendChild(chooser('ucPay', payList(), S.pay, (v) => { S.pay = v; S.payChosen = true; S.getChosen = false; S.get = null; reset(); render() }))
     const inp = el('input', 'uc-amount'); inp.id = 'ucAmount'; inp.inputMode = 'decimal'; inp.placeholder = USER_WORDS.amount; inp.value = S.amount
-    inp.oninput = () => { S.amount = inp.value; S.fixed = 'pay'; S.error = ''; if (S.ticket) { reset(); paintTicket() } schedule() }
+    inp.oninput = () => { S.amount = inp.value; S.fixed = 'pay'; S.error = ''; keep(); if (S.ticket) { reset(); paintTicket() } schedule() }
     row1.appendChild(inp)
     const have = el('div', 'sub uc-have'); have.id = 'ucHave'
     have.appendChild(el('span', null, USER_WORDS.balance(amt(S.pay, ctx.held(S.pay) || 0n))))
@@ -165,6 +178,18 @@ export function mountUserComposer (ctx) {
     have.appendChild(max)
     row1.appendChild(have)
     box.appendChild(row1)
+    // ⇅ exchanges the two sides; the amount typed stays with its asset, now on the other side.
+    const flipRow = el('div', 'uc-flip-row')
+    const flip = el('button', 'ghost uc-flip', USER_WORDS.flipMark); flip.type = 'button'; flip.id = 'ucFlip'
+    flip.title = USER_WORDS.flip; flip.setAttribute('aria-label', USER_WORDS.flip); flip.disabled = !S.get
+    flip.onclick = () => {
+      if (!S.get) return
+      ;[S.pay, S.get] = [S.get, S.pay]; [S.amount, S.recv] = [S.recv, S.amount]
+      S.fixed = S.fixed === 'pay' ? 'receive' : 'pay'; S.payChosen = true; S.getChosen = true
+      reset(); render(); schedule(0)
+    }
+    flipRow.appendChild(flip)
+    box.appendChild(flipRow)
     // You receive
     const row2 = el('div', 'uc-row')
     row2.appendChild(el('label', 'lbl', USER_WORDS.get))
@@ -172,7 +197,7 @@ export function mountUserComposer (ctx) {
     if (!S.get || !gl.includes(S.get)) S.get = defaultGet(gl)
     row2.appendChild(chooser('ucGet', gl, S.get, pickGet))
     const rin = el('input', 'uc-amount'); rin.id = 'ucReceive'; rin.inputMode = 'decimal'; rin.placeholder = USER_WORDS.amount; rin.value = S.recv
-    rin.oninput = () => { S.recv = rin.value; S.fixed = 'receive'; S.error = ''; if (S.ticket) { reset(); paintTicket() } schedule() }
+    rin.oninput = () => { S.recv = rin.value; S.fixed = 'receive'; S.error = ''; keep(); if (S.ticket) { reset(); paintTicket() } schedule() }
     row2.appendChild(rin)
     box.appendChild(row2)
     // The ticket and the button
@@ -182,6 +207,7 @@ export function mountUserComposer (ctx) {
     // Trades
     const list = el('div', 'uc-trades'); list.id = 'ucTrades'; box.appendChild(list)
     r.appendChild(box)
+    keep()
     paintTicket()
     paintTrades()
     loadOffered()
@@ -229,13 +255,27 @@ export function mountUserComposer (ctx) {
     try {
       const q = await ctx.engine.quote({ payAsset: S.pay, receiveAsset: S.get, amount: String(atoms) })
       if (q.ok) { S.ticket = q.ticket; S.choice = q.choice }
-      else S.error = q.why === 'no-funds' ? USER_WORDS.noFunds(name(S.pay)) : q.why === 'not-ready' ? USER_WORDS.notReady(name(S.pay), q.soon) : q.why === 'redoing' ? USER_WORDS.redoing(name(S.pay)) : q.why === 'busy' ? USER_WORDS.busy(name(S.pay)) : q.why === 'freeing' ? USER_WORDS.freeing(name(S.pay), q.soon) : q.why === 'part-ready' ? USER_WORDS.partReady(amt(S.pay, q.ready), name(S.pay), q.soon) : q.why === 'too-small' ? USER_WORDS.tooSmall
+      else S.error = q.why === 'no-funds' ? USER_WORDS.noFunds(name(S.pay)) : q.why === 'not-ready' ? USER_WORDS.notReady(name(S.pay), q.soon) : q.why === 'redoing' ? USER_WORDS.redoing(name(S.pay)) : q.why === 'busy' ? USER_WORDS.busy(name(S.pay)) : q.why === 'freeing' ? USER_WORDS.freeing(name(S.pay), q.soon) : q.why === 'readying' ? USER_WORDS.readying(name(S.pay), q.soon) : q.why === 'part-ready' ? USER_WORDS.partReady(amt(S.pay, q.ready), name(S.pay), q.soon) : q.why === 'too-small' ? USER_WORDS.tooSmall
         : q.why === 'no-firm-offer' ? USER_WORDS.noFirmOffer
         : q.why === 'not-listed' ? USER_WORDS.notListed(name(S.get), name(S.pay)) : USER_WORDS.notOffered(name(S.get), name(S.pay))
+      // Coins being made ready for this trade: priced again by itself while the person waits,
+      // every READY_RETRY_MS, as long as nothing they typed changed.
+      if (!q.ok && q.why === 'readying') readyAgain()
     } catch (e) {
       console.warn('[user composer] quote:', e && e.message)
       S.error = USER_WORDS.notOffered(name(S.get), name(S.pay))
     } finally { S.busy = false; paintTicket() }
+  }
+
+  let readyTimer = null, readyTries = 0
+  function readyAgain () {
+    const asked = `${S.pay}|${S.get}|${S.amount}`
+    clearTimeout(readyTimer)
+    if (++readyTries > READY_TRIES) { readyTries = 0; return }
+    readyTimer = setTimeout(() => {
+      if (`${S.pay}|${S.get}|${S.amount}` !== asked || S.busy || S.ticket) { readyTries = 0; return }
+      review()
+    }, READY_RETRY_MS)
   }
 
   async function confirm () {

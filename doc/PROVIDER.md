@@ -428,9 +428,8 @@ Mode), kept for each wallet and `'user'` until the user changes it. The words
 are the same in every Sequentia wallet:
 
 - **User mode**: One figure per asset, and the wallet chooses how value moves.
-- **Developer mode**: Every rail by name, side by side (on-chain, leaves and
-  Lightning), each with its balance and its manual controls, and the developer
-  tools.
+- **Developer mode**: Every way the wallet can move value, side by side, each
+  with its own balance and controls, and the developer tools.
 
 A site reads the mode and follows it, with an override of its own if it wants
 one: a site's developer features (leaves, a rail picker, contract tools) are
