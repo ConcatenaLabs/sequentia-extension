@@ -24,6 +24,7 @@ import * as perms from './src/permissions.js';
 import * as router from './src/provider-router.js';
 import * as leaves from './src/leaves.js';
 import * as dm from './src/default-mode.js';
+import * as lnToArk from './src/ln-to-ark.js';
 import { hiddenAssets, setHidden } from './src/hidden.js';
 import { issuerAssets } from './src/leaf-profiles.js';
 import * as leafTrade from './src/leaf-trade.js';
@@ -231,6 +232,9 @@ try {
     if (a && a.name === 'leafHost') {
       dm.autoJoin().then(() => leaves.ensureRunning()).then((up) => (up ? dm.syncDefaults().then(() => resumeLeafTrades()) : null)).catch(() => {});
       sessionMnemonic().then((m) => (m ? dm.ensureArk().then(() => dm.boardBtcSoon()) : null)).catch(() => {});
+      // A wallet made before default mode held its coins in the Ark: what its own channels hold
+      // moves there by itself (src/ln-to-ark.js).
+      lnToArk.tick().catch((e) => console.warn('[ln to ark]', e && e.message));
     }
   });
 } catch { /* alarms unavailable in this context */ }
@@ -297,9 +301,13 @@ async function overview({ withLn = false } = {}) {
   const stakedAtoms = stakedNow ? BigInt(stakedNow.atoms) : 0n;
 
   const rows = [];
+  lnToArk.setTag(await walletTagNow());
   const push = (key, onchainAtoms, alwaysShow) => {
     const lnEntry = lnSum.perKind[key];
-    const lnAtoms = lnEntry ? BigInt(lnEntry.units) : 0n;
+    // What is on its way from the wallet's own channel to the Ark stays in the figure.
+    const lnRead = lnEntry ? BigInt(lnEntry.units) : 0n;
+    const lnAtoms = walletMode === 'user' ? lnToArk.channelPart(key, lnRead) : lnRead;
+    const moving = walletMode === 'user' ? (lnToArk.moving(key) || 0n) : 0n;
     const leafAtoms = BigInt(leafPer[key] || 0);
     const staked = key === policy ? stakedAtoms : 0n;
     const ark = key === 'BTC' ? arkAtoms : 0n;
@@ -314,6 +322,7 @@ async function overview({ withLn = false } = {}) {
       staked: staked.toString(),
       ark: ark.toString(),
       arriving: String(arrivingPer[key] || '0'),
+      moving: moving.toString(),
       redoing: key === 'BTC' ? '0' : String(redoingPer[key] || '0'),
       keptSafe: key === 'BTC' ? '0' : String(keptSafePer[key] || '0'),
       total: total.toString(),
@@ -680,6 +689,9 @@ const uiMethods = {
 };
 
 // ---- message dispatch ----
+// The popup's reads, which a person opening it does not count as asking for anything.
+const PASSIVE_UI = new Set(['state', 'overview', 'stakingOverview', 'rewardsOverview', 'stakes', 'history', 'feeAssets', 'getMode',
+  'default.joined', 'default.leafInfo', 'default.assetMeta', 'leaves.state', 'getSettings', 'sites', 'sync']);
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // The leaf wallet's events, from its host in the offscreen document: relayed to
   // connected sites (an open wallet page hears the same message itself).
@@ -748,6 +760,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         }
         const fn = uiMethods[msg.method];
         if (!fn) throw new Error('unknown ui method: ' + msg.method);
+        // Something a person asked for: the wallet's own moves wait twenty seconds after it.
+        if (!PASSIVE_UI.has(msg.method)) lnToArk.notePerson();
         await touchAutoLock();
         const result = await fn(msg.params || {});
         sendResponse({ ok: true, result });

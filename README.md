@@ -38,7 +38,14 @@ confidential `tsqb1…` addresses are an explicit opt-in).
   `pay-code.js`, kept in `vendor/`), with
   an optional "Amount in BTC" that adds `amount=` and an ark invoice as
   `lightning=`; the testnet faucet pays the code. Coins that arrive at the address
-  are moved into the tree (assets) or onto the ark (BTC) by themselves. Send takes a
+  are moved into the tree (assets) or onto the ark (BTC) by themselves, and so is
+  what the wallet's own Lightning channels hold (a wallet made before default mode
+  held its coins this way, `src/ln-to-ark.js` over the web wallet's
+  `lightning-to-ark.js`): the BTC channel pays an invoice of the wallet's ark, each
+  asset channel a Lightning receive of its leaf wallet, within the Lightning signer's
+  daily limit, while the figure stays whole and reads "Moving <amount> <TICKER> so it
+  can be sent in seconds."; an emptied channel is then closed to the wallet's
+  address when that is cheap and safe. Send takes a
   receive code, an address or an invoice: a code is paid in the tree in seconds,
   an address from the chain or else out of the tree, an invoice over Lightning, BTC
   from the ark first. Trade is the web wallet's composer: the pair's market (last
@@ -455,7 +462,7 @@ vendor/                modules copied from sequentia-web-wallet (btc.js,
                        covenant-order.js, covenant-fill-host.js,
                        noble-ciphers.js, contracts.js, bolt11.js,
                        lnupgrade.js, own-txs.js, lightning/ signer SDK,
-                       default-arca.js, pay-code.js, btc-ark.js,
+                       default-arca.js, pay-code.js, btc-ark.js, lightning-to-ark.js,
                        user-trade.js, user-trade-btc.js, user-composer.js,
                        asset-picker.js, market-view.js, chart.js, indicators.js,
                        vendor/lightweight-charts/ (the chart library),

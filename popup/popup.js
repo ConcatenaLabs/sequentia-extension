@@ -192,7 +192,10 @@ function renderOverview() {
     // Of it, what a Bitcoin reorganisation took back out of the chain is said apart: never a loss.
     if (!(OV.mode === 'developer')) {
       const arr = BigInt(r.arriving || 0), rd0 = BigInt(r.redoing || 0), rd = rd0 > arr ? arr : rd0;
-      if (arr - rd > 0n) row.appendChild(el('div', 'sub arriving-line', DEFAULT_WORDS.arriving(fmtAtoms(arr - rd, r.precision), r.ticker)));
+      // What is on its way from the wallet's own Lightning channel to where it is sent in seconds.
+      const mv = BigInt(r.moving || 0);
+      if (mv > 0n) row.appendChild(el('div', 'sub moving-line', DEFAULT_WORDS.moving(fmtAtoms(mv, r.precision), r.ticker)));
+      if (arr - rd > 0n && !(mv > 0n && r.key === 'BTC')) row.appendChild(el('div', 'sub arriving-line', DEFAULT_WORDS.arriving(fmtAtoms(arr - rd, r.precision), r.ticker)));
       if (rd > 0n) row.appendChild(el('div', 'sub redoing-line', DEFAULT_WORDS.redoing(fmtAtoms(rd, r.precision), r.ticker)));
       const ks = BigInt(r.keptSafe || 0);
       if (ks > 0n) row.appendChild(el('div', 'sub kept-safe-line', DEFAULT_WORDS.keptSafe(fmtAtoms(ks, r.precision), r.ticker)));

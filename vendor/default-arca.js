@@ -38,6 +38,9 @@ export const DEFAULT_WORDS = Object.freeze({
   // Not refreshed while the wallet was away: taken on the chain under its own key before it could
   // be swept, and put back by itself once the wallet is open again. Part of the figure meanwhile.
   keptSafe: (amount, ticker) => `${amount} ${ticker} moved out of the Ark to keep it safe while you were away`,
+  // Held where it cannot be sent in seconds (a wallet's own Lightning channel, in a wallet made
+  // before), on its way to where it can (lightning-to-ark.js). Part of the figure meanwhile.
+  moving: (amount, ticker) => `Moving ${amount} ${ticker} so it can be sent in seconds.`,
   codeLabel: 'Receive code',
   receiveTip: 'Any asset, any amount. A payment from another Sequentia wallet arrives in seconds. Each code is paid once; a new one shows when it is.',
   receiveWait: 'Making your receive code\u2026',

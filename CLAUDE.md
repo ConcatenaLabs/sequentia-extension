@@ -74,7 +74,10 @@ wasm. Read this before changing anything.
   both modes so its BTC is in BTC's figure; it boards the wallet's confirmed tb1
   coins in default mode, signed in that document with the phrase's own keys. The
   popup's composer reaches the leaf library (`default.leaf`) and the ark's
-  Lightning (`default.ark`) through the service worker; BigInt crosses as
+  Lightning (`default.ark`) through the service worker. What the wallet's own
+  Lightning channels hold moves to the ark and the tree by itself in default mode
+  (`src/ln-to-ark.js`, on the `leafHost` alarm, over the vendored move); the overview
+  counts it in the figure while it moves (`moving`). BigInt crosses as
   `{ $big }` (`src/wire.js`). Remove wallet closes the leaf and ark wallets before
   the vault goes.
 - **Care is the library's, run by the host.** The offscreen host runs `care` once
@@ -120,7 +123,7 @@ wasm. Read this before changing anything.
   `vendor/seqob.js`, `vendor/covenant.js`, `vendor/covenant-order.js`, `vendor/covenant-flow.js`,
   `vendor/covenant-fill-host.js`, `vendor/noble-ciphers.js`, `vendor/contracts.js`, `vendor/bolt11.js`,
   `vendor/lnupgrade.js`, `vendor/own-txs.js`, `vendor/stake-records.js`,
-  `vendor/default-arca.js`, `vendor/pay-code.js`, `vendor/btc-ark.js`,
+  `vendor/default-arca.js`, `vendor/pay-code.js`, `vendor/btc-ark.js`, `vendor/lightning-to-ark.js`,
   `vendor/user-trade.js`, `vendor/user-trade-btc.js`, `vendor/user-composer.js`,
   `vendor/asset-picker.js`, `vendor/market-view.js`, `vendor/chart.js`, `vendor/indicators.js`,
   `vendor/vendor/lightweight-charts/` (`vendor/` mirrors the web wallet's root, so the market
