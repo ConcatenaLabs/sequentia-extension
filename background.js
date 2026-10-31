@@ -282,6 +282,8 @@ async function overview({ withLn = false } = {}) {
   const arrivingPer = { ...(leafKept.arriving || {}) };
   // Of it, what a Bitcoin reorganisation took back out of the chain, being redone: said apart.
   const redoingPer = leafKept.redoing || {};
+  // What was moved out to keep it safe while the wallet was away, until it is put back: said apart.
+  const keptSafePer = leafKept.keptSafe || {};
   // BTC on the Bitcoin ark counts in BTC's one figure, in both modes.
   const arkKept = (await dm.arkSum().catch(() => null)) || null;
   const arkAtoms = arkKept ? BigInt(arkKept.total || 0) : 0n;
@@ -313,6 +315,7 @@ async function overview({ withLn = false } = {}) {
       ark: ark.toString(),
       arriving: String(arrivingPer[key] || '0'),
       redoing: key === 'BTC' ? '0' : String(redoingPer[key] || '0'),
+      keptSafe: key === 'BTC' ? '0' : String(keptSafePer[key] || '0'),
       total: total.toString(),
       frozen: key === 'BTC' ? '0' : String(frozenPer[key] || '0'),
       refStr: A.refValueStr(key, total, ref),

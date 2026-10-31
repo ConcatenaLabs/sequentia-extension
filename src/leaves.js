@@ -19,7 +19,7 @@ import { sessionMnemonic } from './vault.js';
 import { mode, setMode, walletTag, modeStamp } from './mode.js';
 import { claimScan } from './leaf-schedule.js';
 import { leafPerAsset } from './balance-view.js';
-import { arrivingAtoms } from '../vendor/default-arca.js';
+import { arrivingAtoms, keptSafeAtoms } from '../vendor/default-arca.js';
 
 export { mode, setMode, modeStamp };
 
@@ -90,7 +90,10 @@ export async function rememberLeafSum(balance, frozen, redoing) {
   // Of what is arriving, the coins a Bitcoin reorganisation took back out of the chain.
   const rd = {};
   for (const [a, v] of Object.entries(redoing || {})) if (BigInt(v) > 0n) rd[a] = String(v);
-  all[tag] = { at: Date.now(), perAsset, frozen: fz, arriving, redoing: rd };
+  // What was moved out to keep it safe while the wallet was away, until it is put back.
+  const kept = {};
+  for (const a of Object.keys((balance && balance.arca) || {})) { const n = keptSafeAtoms(balance, a); if (n > 0n) kept[a] = n.toString(); }
+  all[tag] = { at: Date.now(), perAsset, frozen: fz, arriving, redoing: rd, keptSafe: kept };
   await stSet('local', SUM_KEY, all);
 }
 
