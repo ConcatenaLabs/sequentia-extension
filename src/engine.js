@@ -487,6 +487,12 @@ export async function sweepCredit(asset, amount) {
   });
 }
 
+// Whether the wallet holds Sequentia transaction `txid` (a close of its own channel that paid it).
+export function hasSeqTx(txid) {
+  if (!wollet) return false;
+  try { return wollet.transactions().some((t) => t.txid().toString() === txid); } catch { return false; }
+}
+
 // ---- histories ----
 // Sequentia: classify from non-zero deltas (lwk reports "unknown" when the
 // policy asset nets to zero, e.g. an asset send paying its fee in that asset).

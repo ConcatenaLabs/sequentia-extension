@@ -88,6 +88,8 @@ export async function arkSum() {
   const all = (await stGet('local', ARK_SUM_KEY)) || {};
   return (tag && all[tag]) || null;
 }
+// An invoice of the wallet's own ark, and whether it was paid (claimed as the server holds it).
+export async function arkInvoice(sats, description) { return await arkHost('invoice', { sats: String(sats), description }); }
 // The trade composer's BTC, on the ark (vendor/btc-ark.js `lightning()`), one method at a time.
 export async function arkLightning(method, args) { return await arkHost('ln', { method, args }); }
 

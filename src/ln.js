@@ -14,8 +14,9 @@
 import {
   initSeqln, seqlnState, seqlnGetStatus, seqlnChannelInbound, seqlnNodeReceive,
   seqlnNodePay, provisionAndConnect, waitNodeReady, deviceTransportPubkey,
-  registerOwnStatusKeys, closeChannelLsp, fundChannel, resumeFundChannel,
+  registerOwnStatusKeys, closeChannelLsp, fundChannel, resumeFundChannel, approveCloseDestination,
 } from '../vendor/seqln.js';
+import { btc as btcLib } from '../vendor/btc.js';
 // Statically imported and injected into seqln.js: the HTML spec disallows
 // dynamic import() on ServiceWorkerGlobalScope, so the lazy sdkPath load that
 // works on the web wallet page throws here.
@@ -353,15 +354,57 @@ export async function closeToChain({ kind }) {
   if (!own.length) throw new Error('no Lightning channel to close for this asset');
   const chan = own[0];
   say('Connecting your device signer…');
+  say('Closing the channel (your device is co-signing)…');
+  const res = await closeToWallet({ kind, scid: chan.scid, node_key: chan.node_key });
+  return { closing_txid: res.closing_txid || null };
+}
+// Closes the wallet's own channel `scid` of `kind` cooperatively to an address of this wallet (the
+// same tb1 address on both chains). The device signs a close only to its own scripts or to one the
+// wallet names to it, so the address is named first; without that the close would fall back to a
+// unilateral one paying the node's own address. `unilateraltimeout`: the seconds the cooperative
+// close is given first.
+export async function closeToWallet({ kind, scid, node_key, unilateraltimeout }) {
+  lnInit();
   const prov = await connectOwnNode(kind);
   const dest = engine.currentAddress(false).address;
-  say('Closing the channel (your device is co-signing)…');
-  const res = await closeChannelLsp({
+  const script = btcLib.OutScript.encode(btcLib.Address(btcLib.TEST_NETWORK).decode(dest));
+  approveCloseDestination(prov.key, Array.from(script, (x) => x.toString(16).padStart(2, '0')).join(''));
+  return await closeChannelLsp({
     chain: kind === 'BTC' ? 'btc' : 'seq',
     asset: kind === 'BTC' ? undefined : kind,
-    node: prov.key || chan.node_key,
-    scid: chan.scid,
+    node: prov.key || node_key,
+    scid,
     destination: dest,
+    unilateraltimeout,
   });
-  return { closing_txid: res.closing_txid || null };
+}
+
+// ---- the move of what the channels hold to the Ark (src/ln-to-ark.js) ----
+// The wallet's own channels as the last status gave them.
+export function ownChannels() { return ((lastStatus && lastStatus.channels) || []).filter((c) => c && c.node_key); }
+// 'BTC' or the asset id of channel `c`.
+export function channelKind(c) {
+  if (c.asset_label === 'BTC' || c.leg === 'btc') return 'BTC';
+  const a = String(c.asset || '').toLowerCase();
+  if (a === 'policy' || String(c.asset_label || '').toLowerCase() === 'policy') return String(engine.getPolicyHex() || '').toLowerCase();
+  return a;
+}
+// The node key of the wallet's own node for `kind`, brought online and ready.
+export async function readyNode(kind) {
+  const prov = await connectOwnNode(kind);
+  await waitNodeReadyPatient(prov.key, kind === 'BTC' ? 'BTC' : A.assetMeta(kind).ticker);
+  return kind === 'BTC' ? await btcNodeKey() : await assetNodeKey(kind);
+}
+export async function nodePay({ node_key, bolt11 }) {
+  const r = await seqlnNodePay({ node_key, bolt11 });
+  if (!(r && r.paid)) throw new Error((r && r.error) || 'payment did not complete');
+  return r;
+}
+// How the node's payments under a hash stand: { state: 'none'|'pending'|'complete'|'failed' }
+// (the service's /node/pay-status, as the web wallet's seqln.js asks it).
+export async function nodePayStatus({ node_key, payment_hash }) {
+  const r = await fetch(LSP.url + '/node/pay-status?node=' + encodeURIComponent(node_key) + '&payment_hash=' + encodeURIComponent(payment_hash),
+    { headers: { authorization: 'Bearer ' + LSP.token } });
+  if (!r.ok) throw new Error('the Lightning service answered HTTP ' + r.status);
+  return await r.json();
 }
