@@ -2,7 +2,7 @@
 // rules and the words are the web wallet's, shared across the three wallets.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { supervisedAssets, frozenAtoms, frozenSentence, plainRefusal, frozenRefusal, FROZEN_REFUSAL, DECLINED_REFUSAL, bondRefusal, BOND_WORDS, issuerAssets, batchLine } from '../src/leaf-profiles.js';
+import { supervisedAssets, frozenAtoms, frozenSentence, plainRefusal, frozenRefusal, FROZEN_REFUSAL, DECLINED_REFUSAL, UPDATE_REFUSAL, bondRefusal, BOND_WORDS, issuerAssets, batchLine } from '../src/leaf-profiles.js';
 import { developerWordsIn } from '../src/balance-view.js';
 
 const X = 'aa'.repeat(32);
@@ -47,6 +47,17 @@ test('user mode says a frozen refusal plainly, and leaves every other refusal as
   assert.equal(frozenRefusal(new Error('refused: the issuer has paused this asset')), true);
   const o = new Error('refused: no');
   assert.equal(plainRefusal(o), o);
+});
+
+test('an operator that asks for the wallet to be updated is said so in user mode, in the web wallet\'s words', async () => {
+  const e = { kind: 'server_refused', code: 'declined', status: 422, message: 'the server refused submit_participation (422 declined): this wallet hands over its forfeits only after a round is broadcast, and this operator builds batches without a sweep, whose rounds go out only once every forfeit is in: update the wallet to refresh, offboard or pay out here. Nothing was taken: the coins given up are still yours' };
+  const p = plainRefusal(e);
+  assert.equal(p.message, 'This wallet is out of date for this: update it, then try again. Nothing was taken.');
+  assert.equal(p.message, UPDATE_REFUSAL);
+  assert.equal(p.code, 'declined');
+  assert.deepEqual(developerWordsIn(UPDATE_REFUSAL), []);
+  const { forbiddenIn } = await import('../vendor/user-trade.js');
+  assert.deepEqual(forbiddenIn(UPDATE_REFUSAL), [], 'default mode passes it through as it is');
 });
 
 test('a payment the operator declines reads plainly in user mode, in the words the three wallets share', () => {

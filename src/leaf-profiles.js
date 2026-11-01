@@ -87,10 +87,15 @@ export const BOND_WORDS = Object.freeze({
 // A payment the operator's signer refuses for what it asks, which it would refuse again
 // however often it were asked (the server's `declined`): the library has put the coins back.
 export const DECLINED_REFUSAL = 'This payment was declined; nothing was sent.';
+// The operator declines what an out-of-date wallet asks (one that hands its forfeits over only
+// after a round is broadcast, to an operator building batches without a sweep), and says to
+// update it: in its words, plainly, as the web wallet says it.
+export const UPDATE_REFUSAL = 'This wallet is out of date for this: update it, then try again. Nothing was taken.';
 
-// A refusal for user mode: one the operator declines, the bond's and a frozen coin's said
-// plainly; every other refusal as it is.
+// A refusal for user mode: one the operator declines (asking for the wallet to be updated, or
+// not), the bond's and a frozen coin's said plainly; every other refusal as it is.
 export function plainRefusal(e) {
+  if (e && e.code === 'declined' && /\bupdate the wallet\b/i.test(String(e.message || ''))) return withMessage(e, UPDATE_REFUSAL);
   if (e && e.code === 'declined') return withMessage(e, DECLINED_REFUSAL);
   if (bondRefusal(e)) return withMessage(e, BOND_WORDS.refused);
   if (frozenRefusal(e)) return withMessage(e, FROZEN_REFUSAL);
