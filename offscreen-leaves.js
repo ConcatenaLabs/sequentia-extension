@@ -315,10 +315,10 @@ async function boardArrivals() {
 // with it; at most once every two minutes, and not while the wallet's own payment is under way.
 // Until that round is final the coin counts as arriving. Nothing is said unless it goes wrong.
 const REFRESH_EVERY_MS = 120_000;
-// Off: a refresh the operator cannot fund at once waits in its queue, and the coins it holds can
-// be neither traded nor sent until it runs or expires. On again once the library puts a coin into
-// a refresh only where the operator can fund it and takes it back out of one that waits.
-const REFRESH_RECEIVED = false;
+// On: the library gives a coin up only with an operator that takes back a refresh that waits,
+// and only as much of each asset as the operator can fund now; a refresh that still waits is
+// taken back after two minutes, and a payment or a trade that needs its coins takes it back first.
+const REFRESH_RECEIVED = true;
 async function refreshReceived() {
   if (!REFRESH_RECEIVED) return;
   if (!S.open || !S.defaultMode || Date.now() < S.quietUntil) return;

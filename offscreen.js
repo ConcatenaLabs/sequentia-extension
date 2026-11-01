@@ -1,4 +1,4 @@
-const OFFSCREEN_BUILD = '0.5.80';
+const OFFSCREEN_BUILD = '0.5.81';
 // Offscreen document: the home for LONG Lightning operations. A service
 // worker gets killed by idle clocks and task caps no keepalive fully
 // defeats; this is a real page with neither. The worker hands a job over,
