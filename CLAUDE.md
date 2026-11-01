@@ -145,7 +145,13 @@ wasm. Read this before changing anything.
   hidden, as the value; its button is `<id>Chooser`). A new asset menu joins that list.
 - `leaves/worker.js` is copied from `sequentia-web-wallet/leaves/worker.js`
   (fix it there and re-copy). `leaves/pkg/` is the `arca` repository's
-  `wallet-wasm/` build, made with `scripts/build-leaf-wallet.sh`; nothing about
+  `wallet-wasm/` build, and what is committed is always that repository's CI
+  build, copied exactly: the `leaf-wallet-pkg` artifact of a commit on its
+  master, fetched by `scripts/fetch-leaf-wallet.sh <arca commit>` with its
+  `BUILT_FROM` and `SHA256SUMS`, the same files the web wallet vendors, so the
+  wasm a release ships is traced by its sha256 to one arca commit
+  (`test/leaf-pkg-built-from.test.mjs`). Never commit a local build;
+  `scripts/build-leaf-wallet.sh` is for trying an unmerged arca change. Nothing about
   a leaf is decided in this repository's JavaScript, every check, fee and
   refusal is that library's.
 - `pkg/` is the SWK `lwk_wasm` build (size-optimized). Rebuild recipe in

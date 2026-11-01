@@ -457,10 +457,12 @@ git archive --format=zip -o ambra-extension.zip HEAD -- manifest.json background
 - `btc-ark/` (the worker and its wasm) is copied from the web wallet's
   `btc-ark/`, built there by `tooling/build-btc-ark.sh` from the `arca`
   repository's `bark-wasm/`.
-- Rebuild the leaf wallet (`leaves/pkg/`, the `arca` repository's
-  `wallet-wasm/`; needs the wasm32 target, `wasm-pack` and `protoc`):
-  `scripts/build-leaf-wallet.sh ../arca`. Build paths are remapped, and the
-  script refuses to copy a package that still names the build machine.
+- Update the leaf wallet (`leaves/pkg/`, the `arca` repository's
+  `wallet-wasm/`): `scripts/fetch-leaf-wallet.sh <arca master commit>` copies
+  that repository's CI build exactly, with `BUILT_FROM` (the commit) and
+  `SHA256SUMS`. Every release ships that build. To try an unmerged arca change
+  locally, `scripts/build-leaf-wallet.sh ../arca` builds one (needs the wasm32
+  target, `wasm-pack` and `protoc`; build paths remapped); never commit it.
 
 ## Repository layout
 
