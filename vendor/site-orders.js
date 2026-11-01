@@ -37,7 +37,7 @@
 //   now()             -> milliseconds; optional
 //   log(...)          optional
 
-import { USER_WORDS, costLine } from './user-trade.js'
+import { USER_WORDS, costLine, heldAlready, tradeStateWord } from './user-trade.js'
 
 const HEX64 = /^[0-9a-f]{64}$/
 const big = (v) => { try { return BigInt(v ?? 0) } catch { return 0n } }
@@ -175,16 +175,39 @@ export function makeSiteOrders (d) {
     if (q.why === 'not-listed') return W.notListed(tick(get), tick(pay))
     if (q.why === 'not-offered') return W.notOffered(tick(get), tick(pay))
     if (q.why === 'no-funds') return W.noFunds(tick(pay))
-    if (q.why === 'not-ready') return W.notReady(tick(pay))
-    return W.tooSmall
+    if (q.why === 'not-ready') return W.notReady(tick(pay), q.soon)
+    if (q.why === 'redoing') return W.redoing(tick(pay))
+    if (q.why === 'busy') return W.busy(tick(pay))
+    if (q.why === 'freeing') return W.freeing(tick(pay), q.soon)
+    if (q.why === 'readying') return W.readying(tick(pay), q.soon)
+    if (q.why === 'part-ready') return W.partReady(fmt(pay, q.ready), tick(pay), q.soon)
+    if (q.why === 'too-small') return W.tooSmall
+    if (q.why === 'no-firm-offer') return W.noFirmOffer
+    // A reason this list does not know is never told as the amount's fault.
+    return W.failed
   }
 
   // One trade of the engine for the order: a sale pays its amount; a purchase pays what the book
-  // asks for its amount, read from a first price for all the wallet can pay.
+  // asks for its amount. A market purchase reads that from the makers' published prices (no firm
+  // offer, nothing held), then asks a firm offer for it: one round with each maker, of the
+  // purchase's size. A firm offer for all the wallet can pay, only to learn the price, cost a
+  // second round, and a slow maker's first answer could use up the time a person waits; it is
+  // what is asked when no published price is to be had.
   async function tradeQuote (o) {
     const pay = o.side === 'sell' ? o.base : o.quote
     const get = o.side === 'sell' ? o.quote : o.base
     if (o.side === 'sell') return { pay, get, q: await d.engine.quote({ payAsset: pay, receiveAsset: get, amount: o.amount }) }
+    if (o.price == null && d.engine.estimate) {
+      const est = await d.engine.estimate({ payAsset: pay, receiveAsset: get, receive: o.amount }).catch(() => null)
+      if (est && est.ok && big(est.pay) > 0n) {
+        const q = await d.engine.quote({ payAsset: pay, receiveAsset: get, amount: big(est.pay) })
+        if (!q.ok || big(q.ticket.amountOut) <= o.amount) return { pay, get, q }
+        try { d.engine.drop(q.choice) } catch {}
+        const want = ceilDiv(o.amount * big(q.ticket.amountIn), big(q.ticket.amountOut))
+        return { pay, get, q: await d.engine.quote({ payAsset: pay, receiveAsset: get, amount: want }) }
+      }
+      if (est && !est.ok && (est.why === 'not-listed' || est.why === 'not-offered')) return { pay, get, q: est }
+    }
     const probeAmount = o.price != null ? ceilDiv(o.amount * o.price, unitOf(o.base)) : 10n ** 18n
     const probe = await d.engine.quote({ payAsset: pay, receiveAsset: get, amount: probeAmount })
     if (!probe.ok) return { pay, get, q: probe }
@@ -314,11 +337,14 @@ export function makeSiteOrders (d) {
     }
   }
 
+  // A trade is `received` as soon as what it brings is the wallet's (a swap the maker completed,
+  // seconds after it is sent): only its settling with the network is left, which no longer holds
+  // the person's trade at "Sent".
   function tradeState (r) {
     if (!r) return 'sent'
     if (r.state === 'settled') return 'settled'
     if (r.state === 'failed' || r.state === 'returned') return 'failed'
-    return 'sent'
+    return heldAlready(r) ? 'received' : 'sent'
   }
   function orderState (o, rec) {
     const s = String(o && o.state || 'waiting')
@@ -336,7 +362,9 @@ export function makeSiteOrders (d) {
     const trades = Object.entries(v.trades).filter(([, t]) => t.origin === origin).map(([id, t]) => {
       const r = byId.get(id)
       const state = tradeState(r)
-      return { trade: id, at: t.at, market: t.market, side: t.side, type: t.type, kind: 'take', order: null, state,
+      // The trade's own words, as the wallet's list says them (with the minutes it has waited).
+      const note = r ? tradeStateWord(r, now()) : null
+      return { trade: id, at: t.at, market: t.market, side: t.side, type: t.type, kind: 'take', order: null, state, note,
         fills: t.base != null ? [{ txid: id, base: t.base, quote: t.quote, state }] : [] }
     })
     const placing = Object.entries(v.placing || {}).filter(([, o]) => o.origin === origin)

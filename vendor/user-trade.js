@@ -1088,8 +1088,13 @@ export function createEngine (deps) {
       const fresh = ((await run('coins')) || []).filter((c) => !(rec.before || []).includes(c.leaf_id) && c.state === 'live')
       const coins = []
       for (const t of targets) {
-        const c = fresh.find((x) => !coins.includes(x) && x.asset === t.asset && String(x.value) === String(t.value))
-        if (!c) return 'waiting'
+        // A target that names its coin is that coin; otherwise the coin of its asset and value.
+        const c = fresh.find((x) => !coins.includes(x) && x.asset === t.asset && (t.leaf_id ? x.leaf_id === t.leaf_id : String(x.value) === String(t.value)))
+        if (!c) {
+          const why = t.leaf_id ? `coin ${t.leaf_id} is not live yet` : `no live coin of ${t.value} of ${t.asset} yet`
+          if (rec.settleWhy !== why) { rec.settleWhy = why; put(rec); log('[user trade] settle waits:', why) }
+          return 'waiting'
+        }
         coins.push(c)
       }
       // Only a coin one reassignment short of the operator's limit needs a round now: the rest stay
