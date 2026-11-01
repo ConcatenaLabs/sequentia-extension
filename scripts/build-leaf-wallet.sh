@@ -34,5 +34,5 @@ for p in "$HOME" "$src" "$cargo_home"; do
   fi
 done
 mkdir -p "$ext/leaves/pkg"
-cp pkg/leaf_wallet.js pkg/leaf_wallet.d.ts pkg/leaf_wallet_bg.wasm pkg/leaf_wallet_bg.wasm.d.ts "$ext/leaves/pkg/"
+cp pkg/leaf_wallet.js pkg/leaf_wallet.d.ts pkg/leaf_wallet_bg.wasm "$ext/leaves/pkg/"
 echo "built from $(git -C "$src" rev-parse --short=8 HEAD): leaf_wallet_bg.wasm $(wc -c < pkg/leaf_wallet_bg.wasm) bytes, sha256 $(sha256sum pkg/leaf_wallet_bg.wasm | cut -c1-16)…, no build-machine path"
