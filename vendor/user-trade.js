@@ -220,7 +220,9 @@ export function pickerOrder (assets, held, name) {
 }
 
 // What the library can pay now, per asset, out of round: its live coins, less the coin of every
-// open offline-refresh plan, which the library never spends outside a round.
+// open offline-refresh plan, which the library never spends outside a round. With `waiting`, also
+// every coin given up in a refresh still waiting for a round (`refresh_waiting`): a trade takes
+// that refresh back first and pays with the coin, and its quote prices it so.
 // What a payment the library refused for want of funds is short by, in atoms of the asset paid: what
 // it takes with its margins less what the wallet holds, or the operator's smallest leaf when the
 // change would fall below it (paying that much less leaves change of at least that). 0n otherwise.
@@ -245,11 +247,12 @@ export function worthFirming (ind) {
 export function plannedCoins (plans) {
   return new Set(((plans && plans.plans) || []).filter((p) => !/^(done|cancelled|stopped|finished)$/.test(String(p.state || ''))).map((p) => p.coin))
 }
-export function spendableFrom (coins, plans) {
+export function spendableFrom (coins, plans, { waiting = false } = {}) {
   const planned = plannedCoins(plans)
   const out = new Map()
   for (const c of coins || []) {
-    if (!c || c.state !== 'live' || planned.has(c.leaf_id)) continue
+    if (!c || planned.has(c.leaf_id)) continue
+    if (c.state !== 'live' && !(waiting && c.state === 'given' && c.refresh_waiting)) continue
     out.set(c.asset, (out.get(c.asset) || 0n) + big(c.value))
   }
   return out
@@ -325,7 +328,7 @@ export function createEngine (deps) {
     let coins
     try { coins = await run('coins') } catch (e) { log('[user trade] no leaves:', e && e.message); return new Map() }
     const plans = await run('plans').catch(() => ({ plans: [] }))
-    return spendableFrom(coins, plans)
+    return spendableFrom(coins, plans, { waiting: true })
   }
 
   // The candidates' entries for a directed pair, from every admitted source.
