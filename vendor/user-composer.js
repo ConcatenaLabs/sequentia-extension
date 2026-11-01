@@ -9,7 +9,8 @@
 //
 // ctx: { root (element), engine (createEngine's), assetMeta(hex) -> {ticker, precision},
 //   fmtAtoms(atoms, precision) (fmtShow, optional: the same, grouped, for amounts read), parseAtoms(text, precision), knownAssets() -> [hex],
-//   held(hex) -> atoms the person holds (the figure the Balance tab shows), admittedReceives(pay)
+//   held(hex) -> atoms the person holds (the figure the Balance tab shows), vestingAtoms(hex) -> atoms
+//   of it that vest later (optional: an asset held only so is listed to pay), admittedReceives(pay)
 //   -> [hex] (optional: the receive picker lists those after what is offered now),
 //   market: { relay() -> the relay's base URL, pairOf(a, b) -> {base, quote} } (optional: the
 //   chosen pair's market above the inputs, market-view.js), isHidden(hex) -> the person hid it
@@ -67,7 +68,9 @@ export function mountUserComposer (ctx) {
 
   // What can be paid: BTC always, and an asset only while the wallet holds some (a fresh wallet
   // pays from BTC alone); what can be got is every asset the book knows.
-  function payList () { return payAssets(ctx.knownAssets(), ctx.held, S.pay, name) }
+  // An asset held only as what vests later is listed too, so a trade of it says from when it can be.
+  const listed = (a) => big(ctx.held(a)) + (ctx.vestingAtoms ? big(ctx.vestingAtoms(a)) : 0n)
+  function payList () { return payAssets(ctx.knownAssets(), listed, S.pay, name) }
   // What is paid starts as the first asset held, in the pickers' order (BTC first when held).
   function defaultPay () { const l = payList(); return l.find((a) => big(ctx.held(a)) > 0n) || l[0] }
   function offeredNow () { return S.offered.pay === S.pay ? S.offered.list.filter((a) => a !== S.pay) : [] }
@@ -148,7 +151,8 @@ export function mountUserComposer (ctx) {
     const offered = new Set(offeredNow())
     const tradable = new Set(ctx.admittedReceives && id === 'ucGet' ? ctx.admittedReceives(S.pay) : [])
     b.onclick = () => openPicker(b, list.map((h) => {
-      const atoms = big(ctx.held(h) || 0n)
+      // The figure the Balance tab shows: what is held, and what of it vests later.
+      const atoms = big(ctx.held(h) || 0n) + (ctx.vestingAtoms ? big(ctx.vestingAtoms(h)) : 0n)
       const m = ctx.assetMeta(h) || {}
       return { hex: h, ticker: name(h), name: h === 'BTC' ? 'Bitcoin' : (m.name || ''), held: atoms > 0n,
         hidden: !!(ctx.isHidden && ctx.isHidden(h)), offered: offered.has(h), tradable: tradable.has(h), cur: h === value,
@@ -273,7 +277,7 @@ export function mountUserComposer (ctx) {
     try {
       const q = await ctx.engine.quote({ payAsset: S.pay, receiveAsset: S.get, amount: String(atoms) })
       if (q.ok) { S.ticket = q.ticket; S.choice = q.choice; S.moving = !!q.moving }
-      else S.error = q.why === 'no-funds' ? USER_WORDS.noFunds(name(S.pay)) : q.why === 'not-ready' ? USER_WORDS.notReady(name(S.pay), q.soon) : q.why === 'redoing' ? USER_WORDS.redoing(name(S.pay)) : q.why === 'busy' ? USER_WORDS.busy(name(S.pay)) : q.why === 'freeing' ? USER_WORDS.freeing(name(S.pay), q.soon) : q.why === 'readying' ? USER_WORDS.readying(name(S.pay), q.soon) : q.why === 'part-ready' ? USER_WORDS.partReady(amt(S.pay, q.ready), name(S.pay), q.soon) : q.why === 'too-small' ? USER_WORDS.tooSmall
+      else S.error = q.why === 'vesting' ? USER_WORDS.notVested(show(big(q.atoms), prec(S.pay)), name(S.pay), q.vests) : q.why === 'no-funds' ? USER_WORDS.noFunds(name(S.pay)) : q.why === 'not-ready' ? USER_WORDS.notReady(name(S.pay), q.soon) : q.why === 'redoing' ? USER_WORDS.redoing(name(S.pay)) : q.why === 'busy' ? USER_WORDS.busy(name(S.pay)) : q.why === 'freeing' ? USER_WORDS.freeing(name(S.pay), q.soon) : q.why === 'readying' ? USER_WORDS.readying(name(S.pay), q.soon) : q.why === 'part-ready' ? USER_WORDS.partReady(amt(S.pay, q.ready), name(S.pay), q.soon) : q.why === 'too-small' ? USER_WORDS.tooSmall
         : q.why === 'no-firm-offer' ? USER_WORDS.noFirmOffer
         : q.why === 'btc-moving' ? USER_WORDS.btcMoving(ctx.btcMoveBlocks ? ctx.btcMoveBlocks() : 2)
         : q.why === 'not-listed' ? USER_WORDS.notListed(name(S.get), name(S.pay)) : USER_WORDS.notOffered(name(S.get), name(S.pay))

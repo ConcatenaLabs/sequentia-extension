@@ -192,7 +192,9 @@ function renderOverview() {
     // Default mode: what is held but cannot be spent yet, under the figure.
     // Of it, what a Bitcoin reorganisation took back out of the chain is said apart: never a loss.
     if (!(OV.mode === 'developer')) {
-      const arr = BigInt(r.arriving || 0), rd0 = BigInt(r.redoing || 0), rd = rd0 > arr ? arr : rd0;
+      // What has vested and the wallet is taking up counts as arriving.
+      const vestedArr = (Array.isArray(r.vesting) ? r.vesting : []).filter((l) => l.arriving).reduce((n, l) => n + BigInt(l.atoms), 0n);
+      const arr = BigInt(r.arriving || 0) + vestedArr, rd0 = BigInt(r.redoing || 0), rd = rd0 > arr ? arr : rd0;
       // What is on its way from the wallet's own Lightning channel to where it is sent in seconds.
       const mv = BigInt(r.moving || 0);
       if (mv > 0n) row.appendChild(el('div', 'sub moving-line', DEFAULT_WORDS.moving(fmtAtoms(mv, r.precision), r.ticker)));
@@ -201,6 +203,8 @@ function renderOverview() {
       const ks = BigInt(r.keptSafe || 0);
       if (ks > 0n) row.appendChild(el('div', 'sub kept-safe-line', DEFAULT_WORDS.keptSafe(fmtAtoms(ks, r.precision), r.ticker)));
     }
+    // What vests later: one line for each date still to come, in both modes.
+    for (const l of (Array.isArray(r.vesting) ? r.vesting : []).filter((x) => !x.arriving)) row.appendChild(el('div', 'sub vests-line', DEFAULT_WORDS.vests(fmtAtoms(l.atoms, r.precision), r.ticker, l.vests)));
 
     if (r.restricted && r.legend) {
       const meta = el('div', 'ln-meta'); meta.appendChild(el('div', null, r.legend)); row.appendChild(meta);
@@ -1331,7 +1335,7 @@ function fillDefaultSend() {
 }
 function updateDefaultAvail() {
   const row = OV && OV.rows.find((r) => r.key === $('sendDAsset').value);
-  $('sendDAvail').textContent = row ? 'balance ' + fmtAtoms(row.total, row.precision) : '';
+  $('sendDAvail').textContent = row ? 'balance ' + fmtAtoms(BigInt(row.total) - BigInt(row.vestingAtoms || 0), row.precision) : '';
 }
 $('btnDReview').onclick = async () => {
   $('sendDErr').className = 'status'; $('sendDErr').textContent = '';
@@ -1375,7 +1379,10 @@ function metaOf(h) {
   if (row) return { ticker: row.ticker, precision: row.precision };
   return assetInfo[h] || { ticker: h.slice(0, 8), precision: 8 };
 }
-function held(h) { const row = OV && OV.rows.find((r) => r.key === h); return row ? BigInt(row.total) : 0n; }
+// What the wallet holds of an asset to spend: its figure less what vests later, which no Max counts.
+function held(h) { const row = OV && OV.rows.find((r) => r.key === h); return row ? BigInt(row.total) - BigInt(row.vestingAtoms || 0) : 0n; }
+function vestingOf(h) { const row = OV && OV.rows.find((r) => r.key === h); return row && Array.isArray(row.vesting) ? row.vesting : []; }
+function vestingAtomsOf(h) { const row = OV && OV.rows.find((r) => r.key === h); return row ? BigInt(row.vestingAtoms || 0) : 0n; }
 function knownAssets() {
   const s = new Set(['BTC']);
   for (const r of (OV && OV.rows) || []) if (!r.restricted) s.add(r.key);
@@ -1448,6 +1455,8 @@ async function renderTrade() {
       // What the balance shows of an asset, so one held but not payable yet reads as not ready,
       // never as none; and the board of what is on the chain, asked for at once.
       held: (a) => held(a),
+      // What vests later: a trade that needs it is refused with its date.
+      vesting: (a) => vestingOf(a),
       prepare: () => { rpc('default.prepare').catch(() => {}); },
       get btc() { return arkUp ? arkBtc : null; },
       onchain: null,
@@ -1460,7 +1469,7 @@ async function renderTrade() {
     composer = mountUserComposer({
       root, engine: userTrade, assetMeta: metaOf, fmtAtoms, fmtShow: fmtAmount, parseAtoms: (t, p) => parseAmount(t, p),
       session: (() => { try { return sessionStorage; } catch { return null; } })(), tag: () => OV && OV.tag ? OV.tag : 'default',
-      knownAssets, held,
+      knownAssets, held, vestingAtoms: vestingAtomsOf,
       isHidden: (h) => !!(OV && (OV.hidden || []).includes(h)),
       refValue,
       admittedReceives: (pay) => admittedReceives(served(), genesis, pay),

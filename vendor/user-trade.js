@@ -37,6 +37,9 @@
 //                                 before a coin in it can be traded (the library's `info`
 //                                 `anchor_depth`), or null; optional: at 0 a coin not ready yet is
 //                                 on its way and ready in a minute or two
+//   vesting(asset)             -> what of an asset vests later ([{ asset, vest, vests, atoms }], the
+//                                 wallet's last `claims` reading, default-arca.js vestingLots); optional:
+//                                 with it, a pay amount that needs what has not vested is 'vesting'
 //   held(asset)                -> what the wallet shows it holds of an asset, wherever it is; optional:
 //                                 with it, a pay asset held but not payable now is 'not-ready', not
 //                                 'no-funds'
@@ -55,6 +58,7 @@ import { makerEntries, covenantRoundEntries, restingEntries, onchainFillEntries,
 import { planFillFromMatched } from './covenant-order.js'
 import { planSingleStep } from './tooling/lsp/settlement-router.mjs'
 import { btcTrades } from './user-trade-btc.js'
+import { DEFAULT_WORDS, vestingShort } from './default-arca.js'
 
 const big = (v) => { try { return BigInt(v ?? 0) } catch { return 0n } }
 
@@ -74,7 +78,7 @@ export const MAX_FEE_PPM = 10_000
 export const USER_MODE_FORBIDDEN_WORDS = Object.freeze(['rail', 'rails', 'round', 'rounds', 'leaf', 'leaves', 'operator', 'covenant',
   'covenants', 'expiry', 'atom', 'atoms', 'forfeit', 'forfeits', 'channel', 'channels', 'relay', 'maker', 'makers', 'hash', 'preimage',
   'htlc', 'submarine', 'lsp', 'tree', 'anchor', 'unroll', 'exit', 'checkpoint', 'reassignment', 'on-chain', 'lightning', 'bridge', 'gateway',
-  'node', 'nodes'])
+  'node', 'nodes', 'claim', 'claims', 'distribution', 'distributions', 'lapse', 'lapses', 'lapsed', 'locktime', 'locktimes'])
 
 export function forbiddenIn (text) {
   const t = String(text || '').toLowerCase()
@@ -111,6 +115,8 @@ export const USER_WORDS = Object.freeze({
   tooSmall: 'That amount is too small to trade.',
   noFirmOffer: 'Nobody could confirm a price for this just now. Nothing has moved: try again in a moment.',
   noFunds: (pay) => `You have no ${pay} to trade.`,
+  // More than can be traded now, the rest vesting later (the wallet's one sentence for it).
+  notVested: DEFAULT_WORDS.notVested,
   // Held, and shown in the balance, but not where a trade can pay it from yet (just arrived, or
   // still being moved in by the wallet): never "you have none". `soon`: the operator calls a coin
   // ready once its block is certified (anchor depth 0), so it is ready in a minute or two.
@@ -795,6 +801,19 @@ export function createEngine (deps) {
     tooOldFrom = null
     const A = big(amount)
     if (A <= 0n) return { ok: false, why: 'too-small' }
+    // More than the wallet holds to spend, the rest vesting later: refused with the date from
+    // which all of it can be used (default-arca.js vestingShort), whatever the pair. Nothing is
+    // asked of a maker.
+    if (payAsset !== 'BTC' && deps.vesting) {
+      const lots = await Promise.resolve(deps.vesting(payAsset)).catch(() => [])
+      if (lots && lots.length) {
+        const can = deps.held ? big(await Promise.resolve(deps.held(payAsset)).catch(() => 0n)) : ((await spendable()).get(payAsset) || 0n)
+        const v = vestingShort(lots, payAsset, A, can)
+        // Vested, and being taken up by the wallet: ready in a moment.
+        if (v && v.arriving) return { ok: false, why: 'not-ready', held: String(can + v.atoms), soon: true }
+        if (v) return { ok: false, why: 'vesting', atoms: String(v.atoms), vests: v.vests }
+      }
+    }
     const ad = deps.admitted ? await deps.admitted() : { pairs: null, genesis: null }
     const sources = admittedSources(ad.pairs, ad.genesis, payAsset, receiveAsset)
     if (!sources.length) return { ok: false, why: 'not-listed' }

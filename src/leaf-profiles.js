@@ -12,6 +12,8 @@ const HELD = new Set(['pending', 'live', 'offered', 'sending', 'given', 'forfeit
 
 const servedAssets = (info) => ((info && info.server_info && Array.isArray(info.server_info.assets)) ? info.server_info.assets : []);
 
+import { vestingRefusal } from '../vendor/default-arca.js';
+
 // The assets the operator serves under the supervised profile (`info`'s `supervised`
 // entry): a coin of one is held only as a landing-1 leaf, landing in the wallet's own key.
 export function supervisedAssets(info) {
@@ -99,6 +101,9 @@ export function plainRefusal(e) {
   if (e && e.code === 'declined') return withMessage(e, DECLINED_REFUSAL);
   if (bondRefusal(e)) return withMessage(e, BOND_WORDS.refused);
   if (frozenRefusal(e)) return withMessage(e, FROZEN_REFUSAL);
+  // A coin that has not vested (the operator's `vesting`): its date, plainly.
+  const vested = vestingRefusal(e);
+  if (vested) return withMessage(e, vested);
   return e;
 }
 

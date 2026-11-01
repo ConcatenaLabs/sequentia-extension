@@ -22,7 +22,12 @@ confidential `tsqb1…` addresses are an explicit opt-in).
   unbonding output not yet withdrawn, and the delegation record); the headline
   is the sum of every figure. User mode shows that one figure per asset, with
   "<amount> <TICKER> arriving" under it for what cannot be spent yet, and a tap on
-  a row opens what is staked of it and "Hide asset from list"; developer mode names
+  a row opens what is staked of it and "Hide asset from list". What the wallet holds
+  that cannot move before a date (a vesting allocation, such as tokens bought in a
+  sale that vests) is part of the figure, with "<amount> <TICKER> vests on <date>"
+  under it for each date, in both modes; nothing that spends counts it, and Send,
+  Trade and joining a pool refuse an amount that needs it, saying from when it can
+  be used. From that date the wallet takes it by itself. Developer mode names
   every rail under the row, with the controls that move an asset to and from
   Lightning. A hidden asset leaves the list for a folded "Hidden assets (N)" at its
   foot (with Unhide), still counts in the total, and is left out of the trade

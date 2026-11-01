@@ -83,6 +83,15 @@ export const DEFAULT_WORDS = Object.freeze({
   notReady: 'What was moved out of the Ark has not arrived yet. It stays yours: try again in a few minutes.',
   stakeFeeOther: (ticker) => `Not enough tSEQ for the stake and its fee: the fee is paid in ${ticker} instead, chosen below. Press Review stake again.`,
   stakeFeeShort: 'Not enough tSEQ for the stake and its fee: stake a little less, or hold an asset that can pay the fee.',
+  // What the wallet holds that nothing can move before a date (a vesting allocation): part of the
+  // figure, one line under it for each date, never counted as what can be spent.
+  vests: (amount, ticker, date) => `${amount} ${ticker} vests on ${date}`,
+  vestsOn: (date) => `Vests on ${date}`,
+  // Any action asked for more than can be spent now, the rest of it held until a date.
+  notVested: (amount, ticker, date) => `${amount} ${ticker} of this vests on ${date}, and can be used from then. Nothing has moved.`,
+  // The same, refused by the network, which names only the date.
+  vestingRefused: (date) => `Part of this vests on ${date}, and can be used from then. Nothing has moved.`,
+  vestingRefusedUndated: 'Part of this has not vested yet, and can be used once it has. Nothing has moved.',
 })
 
 // The minutes a payment to an address from the tree takes at most, from the operator's interval
@@ -292,3 +301,106 @@ export function heldAssetList (balances, others = []) {
   return out
 }
 
+
+// ---- what the wallet holds that cannot move before a date (a vesting allocation) ----
+//
+// A vesting distribution pays a key of the wallet a coin nobody can move before its vest date.
+// The leaf library's `claims` lists it (state `vesting`, `vest` a median time, `vests` the date in
+// words); from that date its `care` takes it up by itself and it is an ordinary coin. Until then
+// the wallet shows it under the asset's figure, counts it in the figure and the headline, and
+// never as what can be spent. `care` and `claim` list a vesting claim without its asset or value:
+// only `claims` is read for this.
+
+// How often the wallet reads its claims at most (and once after each care).
+export const CLAIMS_EVERY_MS = 120_000
+
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
+// The UTC date of a unix time in words, as the library writes it: "3 November 2026".
+export function dateWords (t) {
+  const d = new Date(Number(t) * 1000)
+  if (!Number.isFinite(d.getTime())) return ''
+  return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`
+}
+
+// A `claims` answer -> what vests, one entry for each asset and date (claims vesting on the same
+// day are one line), earliest first: [{ asset, vest, vests, atoms }] (`vest` the earliest median
+// time of the entry, `atoms` a decimal string, so the list crosses a message boundary as it is).
+// A claim whose date has passed and that the wallet has not taken up yet (state `open`, with a
+// vest time) stays in the figure as arriving, `arriving: true`, one entry per asset, until care
+// takes it up a moment later: the figure never dips between the date and the take-up.
+export function vestingLots (claims) {
+  const by = new Map()
+  for (const c of Array.isArray(claims) ? claims : []) {
+    if (!c || c.held || typeof c.asset !== 'string') continue
+    const vest = Number(c.vest)
+    const atoms = big(c.value)
+    if (c.vest == null || !Number.isFinite(vest) || vest <= 0 || atoms <= 0n) continue
+    const arriving = c.state === 'open'
+    if (c.state !== 'vesting' && !arriving) continue
+    const vests = (typeof c.vests === 'string' && c.vests) || dateWords(vest)
+    const k = c.asset + '|' + (arriving ? '' : vests)
+    const e = by.get(k)
+    if (e) { e.atoms += atoms; if (vest < e.vest) { e.vest = vest; if (arriving) e.vests = vests } } else by.set(k, { asset: c.asset, vest, vests, atoms, ...(arriving ? { arriving: true } : {}) })
+  }
+  return [...by.values()].sort((a, b) => a.vest - b.vest || (a.asset < b.asset ? -1 : a.asset > b.asset ? 1 : 0))
+    .map((e) => ({ ...e, atoms: e.atoms.toString() }))
+}
+
+// What of an asset has vested and is arriving (taken up by the wallet a moment later), in atoms.
+export function vestedArriving (lots, asset) {
+  return vestingFor(lots, asset).filter((l) => l.arriving).reduce((n, l) => n + big(l.atoms), 0n)
+}
+
+// The entries of one asset still to vest (one line under the figure for each), earliest first.
+export function vestingLines (lots, asset) {
+  return vestingFor(lots, asset).filter((l) => !l.arriving)
+}
+
+// The entries of one asset, earliest first.
+export function vestingFor (lots, asset) {
+  return (Array.isArray(lots) ? lots : []).filter((l) => l && l.asset === asset)
+}
+
+// What of an asset vests later, in atoms.
+export function vestingAtoms (lots, asset) {
+  return vestingFor(lots, asset).reduce((n, l) => n + big(l.atoms), 0n)
+}
+
+// The assets anything vests in.
+export function vestingAssets (lots) {
+  return [...new Set((Array.isArray(lots) ? lots : []).filter((l) => l && big(l.atoms) > 0n).map((l) => l.asset))]
+}
+
+// Whether `asked` atoms of an asset need what has not vested: more than `spendable`, and no more
+// than what vests on top of it. -> null, or { atoms: the part of what is asked that is not
+// spendable now, vest, vests: the earliest date from which all of it can be used }, or, when what
+// has vested and is arriving covers it, { atoms, arriving: true } (it can be used in a moment).
+// Asked for more than even all of it covers, it is plainly not enough: null, for the action's own
+// refusal.
+export function vestingShort (lots, asset, asked, spendable) {
+  const a = big(asked), s = big(spendable) > 0n ? big(spendable) : 0n
+  if (a <= s) return null
+  const need = a - s
+  let got = vestedArriving(lots, asset)
+  if (got > 0n && got >= need) return { atoms: need, arriving: true }
+  for (const l of vestingLines(lots, asset)) {
+    got += big(l.atoms)
+    if (got >= need) return { atoms: need, vest: l.vest, vests: l.vests }
+  }
+  return null
+}
+
+// A refusal of the network's for a coin that has not vested (the operator's code `vesting`, its
+// message naming the median time) in plain words, or null for any other.
+export function vestingRefusal (e) {
+  if (!e || e.code !== 'vesting') return null
+  const m = /median time (\d+)/.exec(String(e.message || ''))
+  const date = m ? dateWords(Number(m[1])) : ''
+  return date ? DEFAULT_WORDS.vestingRefused(date) : DEFAULT_WORDS.vestingRefusedUndated
+}
+
+// Whether a reading of `claims` shows a claim whose vest date has passed that the wallet has not
+// taken up yet: care is then run at once rather than at its pace, so it becomes a coin by itself.
+export function vestedOpen (claims) {
+  return (Array.isArray(claims) ? claims : []).some((c) => c && c.state === 'open' && !c.held && c.vest != null)
+}

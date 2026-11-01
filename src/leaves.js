@@ -76,7 +76,7 @@ export async function leafSum() {
   const all = (await stGet('local', SUM_KEY)) || {};
   return (tag && all[tag]) || null;
 }
-export async function rememberLeafSum(balance, frozen, redoing, boards) {
+export async function rememberLeafSum(balance, frozen, redoing, boards, vesting) {
   const tag = await walletTag();
   if (!tag) return;
   const perAsset = leafPerAsset(balance);
@@ -96,7 +96,10 @@ export async function rememberLeafSum(balance, frozen, redoing, boards) {
   // What boards just made spent on the chain (the host reports each once), kept until the
   // wallet's own reading of the chain shows it (onchainLess).
   const prev = (all[tag] && all[tag].boards) || {};
-  all[tag] = { at: Date.now(), perAsset, frozen: fz, arriving, redoing: rd, keptSafe: kept, boards: { ...prev, ...(boards || {}) } };
+  // What vests later (vendor/default-arca.js vestingLots), as the host last read it: kept until a
+  // new reading, so the figure shows it while the wallet opens, syncs or is offline.
+  const vest = Array.isArray(vesting) ? vesting : ((all[tag] && all[tag].vesting) || []);
+  all[tag] = { at: Date.now(), perAsset, frozen: fz, arriving, redoing: rd, keptSafe: kept, vesting: vest, boards: { ...prev, ...(boards || {}) } };
   await stSet('local', SUM_KEY, all);
 }
 
