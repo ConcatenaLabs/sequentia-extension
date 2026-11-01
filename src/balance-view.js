@@ -5,6 +5,8 @@
 // User mode shows that one figure, and a tap on the row opens what is staked of it, when
 // part of it is. Developer mode names every rail on one line under the row.
 
+import { DEFAULT_WORDS } from '../vendor/default-arca.js';
+
 const big = (v) => BigInt(v || 0);
 
 /// The parts of a row's figure, in plain words, in this order.
@@ -26,11 +28,13 @@ export function figureOf(row) {
 /// in the web wallet). Where an asset is held is never said; what is staked is, when the
 /// figure holds more than the stake. What is arriving is said under the figure itself.
 export function userSplit(row, fmt) {
+  const parts = [];
   const staked = big(row.staked);
-  if (staked <= 0n) return null;
   const total = row.total != null ? big(row.total) : figureOf(row);
-  if (total <= staked) return null;
-  return 'Staked ' + fmt(staked);
+  if (staked > 0n && total > staked) parts.push('Staked ' + fmt(staked));
+  // What vests later, for each date (its lines are under the figure too).
+  for (const l of (Array.isArray(row.vesting) ? row.vesting : []).filter((x) => !x.arriving)) parts.push(DEFAULT_WORDS.vestsOn(l.vests) + ' ' + fmt(big(l.atoms)));
+  return parts.length ? parts.join(' · ') : null;
 }
 
 /// Developer mode's line: every rail by name, and what is staked when there is any.
@@ -68,7 +72,7 @@ export function leafPerAsset(balance) {
 /// The words user mode never shows: how value is held and moved off the chain is
 /// developer mode's.
 export const DEVELOPER_WORDS = ['leaf', 'leaves', 'round', 'plan', 'claim', 'distribution', 'expiry', 'operator',
-  'forfeit', 'covenant', 'anchor', 'atoms', 'unroll', 'refresh', 'CSV'];
+  'forfeit', 'covenant', 'anchor', 'atoms', 'unroll', 'refresh', 'CSV', 'lapse', 'locktime'];
 /// The developer words a text carries, as whole words, case aside.
 export function developerWordsIn(text) {
   const t = String(text || '');

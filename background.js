@@ -43,6 +43,8 @@ import {
   armAutoLock, touchAutoLock,
 } from './src/vault.js';
 import { stGet, stSet, parseAtoms } from './src/util.js';
+import { vestingFor, vestingAtoms, vestingAssets } from './vendor/default-arca.js';
+import { RECORD_ATOMS } from './vendor/stake-records.js';
 import { tagOf } from './src/mode.js';
 import { EXPLORER_TX, EXPLORER_T4_TX } from './src/config.js';
 
@@ -295,6 +297,9 @@ async function overview({ withLn = false } = {}) {
   const redoingPer = leafKept.redoing || {};
   // What was moved out to keep it safe while the wallet was away, until it is put back: said apart.
   const keptSafePer = leafKept.keptSafe || {};
+  // What vests later (a vesting allocation): part of the figure and the headline in both modes,
+  // one line per date under it, never in what can be spent.
+  const vestLots = Array.isArray(leafKept.vesting) ? leafKept.vesting : [];
   // BTC on the Bitcoin ark counts in BTC's one figure, in both modes.
   const arkKept = (await dm.arkSum().catch(() => null)) || null;
   const arkAtoms = arkKept ? BigInt(arkKept.total || 0) : 0n;
@@ -318,7 +323,8 @@ async function overview({ withLn = false } = {}) {
     const leafAtoms = BigInt(leafPer[key] || 0);
     const staked = key === policy ? stakedAtoms : 0n;
     const ark = key === 'BTC' ? arkAtoms : 0n;
-    const total = BigInt(onchainAtoms) + lnAtoms + leafAtoms + staked + ark;
+    const vest = key === 'BTC' || key.startsWith('oamp:') ? 0n : vestingAtoms(vestLots, key);
+    const total = BigInt(onchainAtoms) + lnAtoms + leafAtoms + staked + ark + vest;
     if (!alwaysShow && total <= 0n) return;
     const m = A.assetMeta(key);
     rows.push({
@@ -333,6 +339,8 @@ async function overview({ withLn = false } = {}) {
       moving: moving.toString(),
       redoing: key === 'BTC' ? '0' : String(redoingPer[key] || '0'),
       keptSafe: key === 'BTC' ? '0' : String(keptSafePer[key] || '0'),
+      vesting: vest > 0n ? vestingFor(vestLots, key) : [],
+      vestingAtoms: vest.toString(),
       total: total.toString(),
       frozen: key === 'BTC' ? '0' : String(frozenPer[key] || '0'),
       refStr: A.refValueStr(key, total, ref),
@@ -366,6 +374,11 @@ async function overview({ withLn = false } = {}) {
     push(k, 0n, false);
   }
   if (policy && stakedAtoms > 0n && !(policy in bal.seq) && !(policy in lnSum.perKind) && !(policy in leafPer)) push(policy, 0n, false);
+  // And an asset held only as what vests later.
+  for (const k of vestingAssets(vestLots)) {
+    if (k in bal.seq || k in lnSum.perKind || k in leafPer || (k === policy && stakedAtoms > 0n)) continue;
+    push(k, 0n, false);
+  }
   for (const [id, atoms] of Object.entries(openamp.balancesMap())) push('oamp:' + id, atoms, false);
   rows.sort((a, b) => (a.key === 'BTC' ? -1 : b.key === 'BTC' ? 1 : (b.refVal || 0) - (a.refVal || 0)));
 
@@ -537,6 +550,8 @@ const uiMethods = {
   'stakeStepDrop': async ({ id }) => { staking.dropStakeReview(id); return { ok: true }; },
   'stakingDelegate': async ({ signer }) => {
     await engine.ensureOpen();
+    // Default mode: tSEQ that vests later cannot pay the record; said with its date.
+    if ((await leaves.mode()) === 'user') await dm.refuseIfVesting(engine.getPolicyHex(), RECORD_ATOMS);
     // Two transactions: the wallet pays its staking key, then the record is
     // created from that coin. `txid` is the record's.
     return await staking.delegate(signer);
@@ -727,7 +742,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   if (msg && msg.scope === 'leaf-event' && sender.id === chrome.runtime.id) {
     if (msg.event === 'leafBalance') {
-      leaves.rememberLeafSum(msg.data && msg.data.balance, msg.data && msg.data.frozen, msg.data && msg.data.redoing, msg.data && msg.data.boards)
+      leaves.rememberLeafSum(msg.data && msg.data.balance, msg.data && msg.data.frozen, msg.data && msg.data.redoing, msg.data && msg.data.boards, msg.data && msg.data.vesting)
         .then(() => chrome.runtime.sendMessage({ scope: 'ui-event', event: 'leaves-changed' }).catch(() => {}))
         .catch(() => {});
     } else if (msg.event === 'leafArrived' || msg.event === 'leafSyncDue') {

@@ -72,7 +72,7 @@
 import { inFlight, nextAskMs, freshRequestWaits, syncDecision, careDue, careSummary, careArgs, payThrough, CARE_EVERY_MS, laterMode } from './src/leaf-schedule.js';
 import { frozenAtoms } from './src/leaf-profiles.js';
 import { redoingAtoms } from './vendor/default-arca.js';
-import { boardCandidates, boardAll, boardSpent } from './vendor/default-arca.js';
+import { boardCandidates, boardAll, boardSpent, CLAIMS_EVERY_MS, vestingLots, vestedOpen } from './vendor/default-arca.js';
 
 const TICK_MS = 60_000;
 let worker = null;
@@ -81,7 +81,7 @@ const pending = new Map();
 let failed = null;
 const S = { open: false, fp: null, timer: null, heldFor: null, schedule: null, coins: [], participations: [], lastSync: null, lastError: null, tickMs: TICK_MS,
   watch: new Set(), watchMs: 3000, seen: new Map(), scan: null, careAt: null, careMs: CARE_EVERY_MS, lastCare: null, releasing: null, bond: null, lastWatch: null,
-  defaultMode: false, defaultModeAt: -1, quietUntil: 0, lastAsked: 0, info: null, boardRefused: new Map(), lastBoard: null, mailTimer: null };
+  claimsAt: null, vesting: null, defaultMode: false, defaultModeAt: -1, quietUntil: 0, lastAsked: 0, info: null, boardRefused: new Map(), lastBoard: null, mailTimer: null };
 
 function errorOf(e) {
   if (e && typeof e === 'object' && e.message) {
@@ -147,7 +147,9 @@ async function reportBalance() {
     // reading of the chain shows the coins spent (onchainLessBoards).
     const boards = S.newBoards || {};
     S.newBoards = {};
-    emit('leafBalance', { balance: b, frozen, redoing, boards });
+    // What vests later, as `claims` last listed it (null until read: the service worker keeps
+    // the last reading meanwhile).
+    emit('leafBalance', { balance: b, frozen, redoing, boards, vesting: S.vesting });
   } catch { /* the next change reports it again */ }
 }
 // Whether the wallet holds a leaf of a supervised asset (one that lands at its key), or
@@ -232,8 +234,27 @@ async function careIfDue(force = false) {
     console.warn('[leaves] care failed:', S.lastCare.error.message);
   }
   emit('leafCared', S.lastCare);
+  await claimsIfDue(true);
   await watchBond();
   return S.lastCare;
+}
+
+// What vests later (vendor/default-arca.js vestingLots): the library's `claims`, the only answer
+// that gives a vesting claim's asset and value, read after each care and at most every
+// CLAIMS_EVERY_MS besides, in either mode, and reported with the balance. A claim whose date has
+// passed that care has not taken up yet has care run at once.
+async function claimsIfDue(force = false) {
+  if (!S.open) return;
+  if (!force && S.claimsAt != null && Date.now() - S.claimsAt < CLAIMS_EVERY_MS) return;
+  S.claimsAt = Date.now();
+  try {
+    const v = (await call('run', { command: 'claims', args: S.scan ? { scan: S.scan } : {} })).result;
+    const lots = vestingLots(v);
+    const changed = JSON.stringify(lots) !== JSON.stringify(S.vesting);
+    S.vesting = lots;
+    if (vestedOpen(v)) S.careAt = null;
+    if (changed) await reportBalance();
+  } catch (e) { console.warn('[leaves] claims:', (e && e.message) || e); }
 }
 
 // The operator's bond, read (which engages the library's ratchet) and watched.
@@ -391,6 +412,7 @@ async function tick() {
     }
     // A freeze or a lift is read from the node at each coin's landing by `coins`: while
     // the wallet holds a leaf of a supervised asset, read them on every tick.
+    if (!d.sync) await claimsIfDue();
     if (!d.sync && holdsSupervised()) {
       S.coins = (await call('run', { command: 'coins' })).result || [];
       await reportBalance();
@@ -472,6 +494,7 @@ async function start(args) {
   S.open = true;
   S.fp = fp;
   S.careAt = null;      // care once after the wallet opens,
+  S.claimsAt = null; S.vesting = null;
   S.syncOnOpen = true;  // after one sync
   console.info(`[leaves] the leaf wallet is open (${has ? 'from its store' : 'created'}); it syncs on its schedule`);
   S.info = null;

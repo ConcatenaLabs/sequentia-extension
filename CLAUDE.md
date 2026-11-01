@@ -94,6 +94,15 @@ wasm. Read this before changing anything.
   `plan_release` of the coins it names, syncs until that round has freed them,
   and asks again. The host carries that wait, so it outlives the service worker.
   Keep that one path; `runAny` (the work carried on by itself) does not take it.
+  After each care, and at most every two minutes besides, the host reads the
+  library's `claims` (only it gives a vesting claim's asset and value) and reports
+  what vests later with the balance (`vesting`, `vestingLots` in
+  `vendor/default-arca.js`); the service worker keeps the last reading for the
+  wallet (`ext.leaves.sum`), so the overview counts it in the figure and the
+  headline and lists a line per date while the wallet opens or is offline. It is
+  never spendable: the composer's `held` and the Send form's balance leave it out,
+  and `refuseIfVesting` (`src/default-mode.js`) refuses a send or a pool join that
+  needs it, the composer through the engine's `vesting`.
 - **A supervised asset's freeze is said, never hidden** (`src/leaf-profiles.js`, the
   web wallet's rules and words). The host reports, with each `leafBalance`, what of
   each asset its issuer has frozen for this wallet (frozen or paused held leaves, and

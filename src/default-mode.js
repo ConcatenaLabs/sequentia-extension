@@ -30,7 +30,7 @@ import { plainRefusal } from './leaf-profiles.js';
 import { fromWire } from './wire.js';
 import {
   pinnedOperator, defaultWatchtowers, checkPinned, treeRoute, parseReceiveCode, arrivingAtoms, addressRoute, arrivalMinutes,
-  DEFAULT_WORDS, JOIN_RETRY_MS, BOARD_QUIET_MS,
+  DEFAULT_WORDS, JOIN_RETRY_MS, BOARD_QUIET_MS, vestingShort,
 } from '../vendor/default-arca.js';
 import { buildPayCode, readPayCode, expandRequest } from '../vendor/pay-code.js';
 import { BTC_WORDS, destination } from '../vendor/btc-ark.js';
@@ -273,6 +273,22 @@ async function treeHeld(asset) {
   return { held: big(leafPerAsset(b)[asset]), arriving: arrivingAtoms(b, asset), balance: b };
 }
 
+// An amount of an asset that needs more than the wallet can spend now, the rest vesting later
+// (the host's last `claims` reading, vendor/default-arca.js vestingShort), is refused with the date
+// all of it can be used from. Nothing is signed. Anything else is left to the route.
+export async function refuseIfVesting(asset, atoms) {
+  if (asset === 'BTC' || String(asset).startsWith('oamp:')) return;
+  const sum = await leaves.leafSum().catch(() => null);
+  const lots = (sum && Array.isArray(sum.vesting)) ? sum.vesting : [];
+  if (!lots.some((l) => l && l.asset === asset)) return;
+  const { held, arriving } = await treeHeld(asset).catch(() => ({ held: 0n, arriving: 0n }));
+  const v = vestingShort(lots, asset, atoms, engine.availableFor(asset) + held - arriving);
+  if (!v) return;
+  const m = meta(asset);
+  if (v.arriving) throw new Error(DEFAULT_WORDS.stillArriving(m.ticker));
+  throw new Error(DEFAULT_WORDS.notVested(fmtAtoms(v.atoms, m.precision || 0), m.ticker, v.vests));
+}
+
 // -> { id, title, lines: [text], button }
 export async function prepareSend({ to, amtS, asset }) {
   const text = String(to || '').trim();
@@ -293,6 +309,7 @@ export async function prepareSend({ to, amtS, asset }) {
   const atoms = parseAtoms(amtS, m.precision || 0);
   if (atoms <= 0n) throw new Error('Enter how much to send.');
   const amt = fmtAtoms(atoms, m.precision || 0);
+  await refuseIfVesting(asset, atoms);
   let request = null, address = null;
   if (/^bitcoin:/i.test(text)) {
     let c = null; try { c = readPayCode(text); } catch { throw new Error(DEFAULT_WORDS_DECLINED); }

@@ -28,7 +28,7 @@ test('developer mode: every rail by name, staked when there is any', () => {
 });
 
 test('the word list names what user mode never shows', () => {
-  assert.equal(DEVELOPER_WORDS.length, 15);
+  assert.equal(DEVELOPER_WORDS.length, 17);
   assert.deepEqual(developerWordsIn('3 Leaves, a round, two plans, the claim, CSV and atoms'), ['leaves', 'round', 'plan', 'claim', 'atoms', 'CSV']);
   assert.deepEqual(developerWordsIn('Portfolio total · around · planet · Off-chain'), []);
 });
@@ -55,4 +55,14 @@ test('leaves count once in a figure: a leaf whose exit claim is out is the chain
   // An older library with no `held`: its states summed.
   assert.deepEqual(leafPerAsset({ arca: { [Z]: { live: '3', exiting: '4' } } }), { [Z]: '7' });
   assert.deepEqual(leafPerAsset(null), {});
+});
+
+test('what vests later: in the details for each date, in plain words', () => {
+  const vesting = [{ asset: 'aa', vest: 1793664000, vests: '3 November 2026', atoms: '100' }, { asset: 'aa', vest: 1793750400, vests: '4 November 2026', atoms: '7' }];
+  assert.equal(userSplit({ onchain: '0', leaves: '0', ln: '0', staked: '0', total: '107', vesting }, fmt), 'Vests on 3 November 2026 100 · Vests on 4 November 2026 7');
+  assert.equal(userSplit({ onchain: '0', leaves: '5', ln: '0', staked: '9', total: '121', vesting: vesting.slice(0, 1) }, fmt), 'Staked 9 · Vests on 3 November 2026 100');
+  const s = userSplit({ onchain: '0', leaves: '0', ln: '0', staked: '0', total: '107', vesting }, fmt);
+  assert.deepEqual(developerWordsIn(s), []);
+  assert.deepEqual(forbiddenIn(s), []);
+  assert.deepEqual(developerWordsIn('the claim lapses at its locktime'), ['claim', 'lapse', 'locktime']);
 });
