@@ -361,6 +361,11 @@ git archive --format=zip -o ambra-extension.zip HEAD -- manifest.json background
   through the approval window, and hears the events; every step is a DOM assertion and a screenshot, every console line of
   the extension's contexts is logged, and an error from any of them fails the
   drive.
+- What default mode shows of a vesting holding on the live network, read only:
+  `CHROME=… PHRASE_FILE=… ASSET=<hex> TICKER=EURX AMOUNT=0.05 node
+  test/leaves/vesting-live-check.mjs <evidence-dir> <work-dir>` imports the
+  phrase, reads the asset row's "vests on <date>" line, and checks that Send of
+  an amount needing what has not vested is refused with the sentence.
 - What the wallet does by itself with leaves, the same way:
   `CHROME=/path/to/chrome ARCA_OPERATOR_CONTROL=127.0.0.1:18640
   ARCA_CLI=/path/to/arca node test/leaves/care-drive.mjs <evidence-dir> <work-dir>`
