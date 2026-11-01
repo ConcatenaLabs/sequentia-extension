@@ -131,8 +131,8 @@ export interface InitOutput {
     readonly rustsecp256k1_v0_10_0_context_destroy: (a: number) => void;
     readonly rustsecp256k1_v0_10_0_default_error_callback_fn: (a: number, b: number) => void;
     readonly rustsecp256k1_v0_10_0_default_illegal_callback_fn: (a: number, b: number) => void;
-    readonly wasm_bindgen_b19ca315ae9c045d___convert__closures_____invoke___js_sys_6877b6322c26ad48___Function_fn_wasm_bindgen_b19ca315ae9c045d___JsValue_____wasm_bindgen_b19ca315ae9c045d___sys__Undefined___js_sys_6877b6322c26ad48___Function_fn_wasm_bindgen_b19ca315ae9c045d___JsValue_____wasm_bindgen_b19ca315ae9c045d___sys__Undefined_______true_: (a: number, b: number, c: any, d: any) => void;
-    readonly wasm_bindgen_b19ca315ae9c045d___convert__closures_____invoke___wasm_bindgen_b19ca315ae9c045d___JsValue__core_37ee0ce0c4cd57d5___result__Result_____wasm_bindgen_b19ca315ae9c045d___JsError___true_: (a: number, b: number, c: any) => [number, number];
+    readonly wasm_bindgen__convert__closures_____invoke__h013ba51563c85e2c: (a: number, b: number, c: any, d: any) => void;
+    readonly wasm_bindgen__convert__closures_____invoke__hde160c6f8cc1d9e4: (a: number, b: number, c: any) => [number, number];
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
     readonly __externref_table_alloc: () => number;
