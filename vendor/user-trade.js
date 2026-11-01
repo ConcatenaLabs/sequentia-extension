@@ -1070,6 +1070,20 @@ export function createEngine (deps) {
     return put(rec)
   }
 
+  // The participation of the wallet's own that took coin `c`: named on a coin given up to it
+  // (`refresh_waiting`, or the library's note "participation <id>"), and on one it spent once
+  // released (`spent_by`). -> id | null
+  function roundOf (c) {
+    if (!c) return null
+    const named = (v) => ((/^participation ([0-9a-f]{64})$/.exec(String(v || '')) || [])[1]) || null
+    if (c.state === 'given') return c.refresh_waiting || named(c.note)
+    if (c.state === 'spent') return named(c.spent_by)
+    return null
+  }
+  // A coin the wallet paid on, or put into an order, a distribution or an offboard of its own,
+  // after the trade brought it.
+  const movedOn = (c) => c.state === 'spent' || c.state === 'given'
+
   // The operator's limit on reassignments since a round (`info.depth_limit`); null when unknown.
   async function depthLimit () {
     const info = await operatorInfo()
@@ -1083,42 +1097,54 @@ export function createEngine (deps) {
 
   // The coins a trade brings, or leaves as change on a reassignment, settled in the operator's
   // next round at no more than the fees its ticket showed: { settle: { coins, participations } }
-  // on the record once asked; 'settled' once every round is final. -> 'waiting'|'settled'
+  // on the record once asked; 'settled' once every round is final. A coin the library has already
+  // given up to a round of its own (its refresh of received coins takes a coin as soon as it lands)
+  // is settled by that round, followed under its own id; one paid on out of round leaves nothing of
+  // the trade to settle. -> 'waiting'|'settled'
   async function settleStep (rec) {
     const targets = rec.settleTargets || []
     if (!targets.length) return 'settled'
     if (!rec.settle) {
-      const fresh = ((await run('coins')) || []).filter((c) => !(rec.before || []).includes(c.leaf_id) && c.state === 'live')
+      const all = ((await run('coins')) || []).filter((c) => c && !(rec.before || []).includes(c.leaf_id))
       const coins = []
+      const taken = []
+      const used = new Set()
+      const targetOf = new Map()
       for (const t of targets) {
         // A target that names its coin is that coin; otherwise the coin of its asset and value.
-        const c = fresh.find((x) => !coins.includes(x) && x.asset === t.asset && (t.leaf_id ? x.leaf_id === t.leaf_id : String(x.value) === String(t.value)))
-        if (!c) {
-          const why = t.leaf_id ? `coin ${t.leaf_id} is not live yet` : `no live coin of ${t.value} of ${t.asset} yet`
-          if (rec.settleWhy !== why) { rec.settleWhy = why; put(rec); log('[user trade] settle waits:', why) }
-          return 'waiting'
-        }
-        coins.push(c)
+        const c = t.leaf_id ? all.find((x) => x.leaf_id === t.leaf_id)
+          : all.find((x) => !used.has(x) && x.asset === t.asset && String(x.value) === String(t.value) && (x.state === 'live' || roundOf(x)))
+        if (c) used.add(c)
+        const pid = roundOf(c)
+        if (pid) { taken.push({ coin: c.leaf_id, participation: pid }); continue }
+        if (c && c.state === 'live') { coins.push(c); targetOf.set(c.leaf_id, t); continue }
+        if (c && t.leaf_id && movedOn(c)) continue
+        const why = t.leaf_id ? `coin ${t.leaf_id} is not live yet` : `no live coin of ${t.value} of ${t.asset} yet`
+        if (rec.settleWhy !== why) { rec.settleWhy = why; put(rec); log('[user trade] settle waits:', why) }
+        return 'waiting'
       }
       // Only a coin one reassignment short of the operator's limit needs a round now: the rest stay
       // spendable at once (a round can take minutes, and holds the coin meanwhile), and the wallet's
       // own upkeep refreshes them before their dates. A library that does not count hops settles
       // every coin, as before.
-      const limit = await depthLimit()
+      const limit = coins.length ? await depthLimit() : null
       const deep = coins.filter((c) => c.hops == null || limit == null || Number(c.hops) >= limit - 1)
-      if (!deep.length) return 'settled'
-      coins.splice(0, coins.length, ...deep)
-      let q
-      try { q = await run('quote', { leaves: coins.map((c) => c.leaf_id), max_fee_ppm: MAX_FEE_PPM }) } catch (e) { log('[user trade] settle quote:', e.message); return 'waiting' }
-      for (const qc of q.coins || []) {
-        const t = targets[coins.findIndex((c) => c.leaf_id === qc.leaf_id)]
-        if (!t || big(qc.fee) > big(t.fee)) { log('[user trade] a settle fee rose above the ticket:', qc.leaf_id, String(qc.fee)); return 'waiting' }
+      if (!deep.length && !taken.length) return 'settled'
+      const parts = []
+      if (deep.length) {
+        let q
+        try { q = await run('quote', { leaves: deep.map((c) => c.leaf_id), max_fee_ppm: MAX_FEE_PPM }) } catch (e) { log('[user trade] settle quote:', e.message); return 'waiting' }
+        for (const qc of q.coins || []) {
+          const t = targetOf.get(qc.leaf_id)
+          if (!t || big(qc.fee) > big(t.fee)) { log('[user trade] a settle fee rose above the ticket:', qc.leaf_id, String(qc.fee)); return 'waiting' }
+        }
+        let r
+        try { r = await run('participate', { leaves: deep.map((c) => c.leaf_id), max_fee_ppm: MAX_FEE_PPM, shown: q.coins }) } catch (e) { log('[user trade] participate:', e.message); return 'waiting' }
+        const ok = ((r && r.participations) || []).filter((p) => p && !p.error && p.participation)
+        if (!ok.length) { log('[user trade] participate:', JSON.stringify(r)); return 'waiting' }
+        parts.push(...ok.map((p) => p.participation))
       }
-      let r
-      try { r = await run('participate', { leaves: coins.map((c) => c.leaf_id), max_fee_ppm: MAX_FEE_PPM, shown: q.coins }) } catch (e) { log('[user trade] participate:', e.message); return 'waiting' }
-      const parts = ((r && r.participations) || []).filter((p) => p && !p.error && p.participation)
-      if (!parts.length) { log('[user trade] participate:', JSON.stringify(r)); return 'waiting' }
-      rec.settle = { coins: coins.map((c) => c.leaf_id), participations: parts.map((p) => p.participation) }
+      rec.settle = { coins: [...deep.map((c) => c.leaf_id), ...taken.map((t) => t.coin)], participations: [...new Set([...parts, ...taken.map((t) => t.participation)])] }
       put(rec)
       return 'waiting'
     }
