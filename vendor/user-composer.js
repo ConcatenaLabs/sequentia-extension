@@ -348,7 +348,8 @@ export function mountUserComposer (ctx) {
   // Open trades are moved on every few seconds while any is open, and once when the page opens.
   // The wallet answers one command at a time, and moving a trade on asks it to sync: never while
   // a person is pricing or confirming one, and every half minute for a trade older than two
-  // minutes, so an open trade does not hold up the next.
+  // minutes (one still waiting for the other side excepted), so an open trade does not hold up
+  // the next.
   async function follow () {
     clearTimeout(S.timer)
     const openRecs = ctx.engine.records().filter((r) => !['settled', 'returned', 'failed'].includes(r.state))
@@ -356,7 +357,9 @@ export function mountUserComposer (ctx) {
     if (S.busy) { S.timer = setTimeout(follow, ctx.followMs || 4000); return }
     try { await ctx.engine.resume() } catch (e) { console.warn('[user composer] resume:', e && e.message) }
     paintTrades()
-    const young = openRecs.some((r) => Date.now() - (r.sentAt || r.at || 0) < FOLLOW_FAST_MS)
+    // A purchase paid with BTC that waits for its asset to be final is followed every few seconds
+    // however long it waits: its BTC is paid the moment the asset is, and the person watches it.
+    const young = openRecs.some((r) => r.state === 'waiting' || Date.now() - (r.sentAt || r.at || 0) < FOLLOW_FAST_MS)
     S.timer = setTimeout(follow, young ? (ctx.followMs || 4000) : (ctx.followSlowMs || FOLLOW_SLOW_MS))
   }
 
