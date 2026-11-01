@@ -205,6 +205,8 @@ function renderOverview() {
     if (r.restricted && r.legend) {
       const meta = el('div', 'ln-meta'); meta.appendChild(el('div', null, r.legend)); row.appendChild(meta);
     }
+    // BTC leaving the Bitcoin ark alone: what happened and what it cost, in both modes.
+    if (r.exitNote) row.appendChild(el('div', 'sub exit-line', r.exitNote));
     const fmt = (v) => fmtAtoms(v, r.precision);
     if (!dev) {
       // A tap opens the row's details: what is staked of it, and hiding it (never BTC).
@@ -223,7 +225,10 @@ function renderOverview() {
     }
     // Developer mode: every rail of the asset on one line. BTC is never a leaf.
     if (r.key !== 'BTC' && !r.restricted) row.appendChild(el('div', 'sub rail-split', developerSplit(r, fmt)));
-    if (r.key === 'BTC' && BigInt(r.ark || 0) > 0n) row.appendChild(el('div', 'sub rail-split', fmt(r.onchain) + ' on-chain · ' + fmt(r.ark) + ' on the Bitcoin ark' + (BigInt(r.ln || 0) > 0n ? ' · ' + fmt(r.ln) + ' Lightning' : '')));
+    if (r.key === 'BTC' && BigInt(r.ark || 0) > 0n) {
+      row.appendChild(el('div', 'sub rail-split', fmt(r.onchain) + ' on-chain · ' + fmt(r.ark) + ' on the Bitcoin ark' + (BigInt(r.ln || 0) > 0n ? ' · ' + fmt(r.ln) + ' Lightning' : '')));
+      row.appendChild(exitPanel());
+    }
     const lnAtoms = BigInt(r.ln || 0);
     const canMove = (r.key === 'BTC' || r.feePriced) && !r.restricted;
     if (OV.lnDeployed && canMove && (lnAtoms > 0n || BigInt(r.onchain) > 0n)) {
@@ -424,6 +429,40 @@ function updateSendUi() {
 }
 $('sendTo').addEventListener('input', updateSendUi);
 // A refusal as the mode shows it: in user mode a coin its issuer froze is said plainly.
+// Developer mode: Bark's unilateral exit of BTC on the Bitcoin ark, by hand. Each coin is priced
+// alone and a coin not worth its exit says why; the fees are paid from the wallet's Bitcoin
+// address, and each coin is claimed to it when its exit is done.
+function exitPanel() {
+  const box = el('div', 'ln-meta');
+  const go = el('button', 'ghost tiny', 'Exit…');
+  go.title = 'Take coins out of the Bitcoin ark to your Bitcoin address without the ark server, paying the Bitcoin fees from that address';
+  const out = el('div', 'sub');
+  go.onclick = async (ev) => {
+    ev.stopPropagation(); go.disabled = true; out.textContent = 'Pricing each coin…';
+    try {
+      const e = await rpc('default.exitEstimate');
+      out.textContent = '';
+      for (const k of e.coins || []) out.appendChild(el('div', null, fmtAtoms(k.amount, 8) + ' BTC, ' + k.blocks_left + ' blocks to expiry, exit costs ' + (k.cost != null ? fmtAtoms(k.cost, 8) + ' BTC' : 'unknown') + (k.worth ? '' : ' — ' + (k.why_not || 'not worth its exit'))));
+      if (!(e.coins || []).length) out.textContent = 'No coin in the ark to exit.';
+      const w = e.worth;
+      if (w) {
+        out.appendChild(el('div', null, 'Together: ' + fmtAtoms(w.cost, 8) + ' BTC in fees (' + w.transactions + ' transactions), paid from ' + e.address + ', which holds ' + fmtAtoms(e.funding_confirmed, 8) + ' BTC confirmed.' + (w.fundable ? '' : ' That is not enough for the whole walk: receive more BTC there first.')));
+        if (w.fundable) {
+          const start = el('button', 'ghost tiny', 'Exit the coins worth it');
+          start.onclick = async (e2) => {
+            e2.stopPropagation(); start.disabled = true;
+            try { const r = await rpc('default.exitStart', { vtxos: w.vtxos }); out.appendChild(el('div', null, 'Exit started for ' + r.started.length + ' coin(s): ' + fmtAtoms(r.amount, 8) + ' BTC to ' + e.address + ', about ' + fmtAtoms(r.cost, 8) + ' BTC in fees. It moves on by itself while the wallet runs.')); }
+            catch (err) { out.appendChild(el('div', null, String((err && err.message) || err))); start.disabled = false; }
+          };
+          out.appendChild(start);
+        }
+      }
+    } catch (err) { out.textContent = 'The exit could not be priced: ' + String((err && err.message) || err); }
+    go.disabled = false;
+  };
+  box.appendChild(go); box.appendChild(out);
+  return box;
+}
 const refusalShown = (e) => (OV && OV.mode === 'developer' ? e.message : plainRefusal(e).message);
 
 $('btnReview').onclick = async () => {

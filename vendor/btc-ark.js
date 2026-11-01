@@ -52,7 +52,54 @@ export const BTC_WORDS = Object.freeze({
   payUpTo: (amount) => `You can pay up to ${amount} BTC this way now.`,
   payHint: 'Paste an invoice',
   notBtc: (ticker) => `This invoice asks for ${ticker}. Only invoices for BTC are paid here.`,
+  // When the ark refuses the wallet or stops answering and BTC there would soon need renewing,
+  // the wallet moves it to the wallet's own Bitcoin address by itself (exitNoteOf).
+  exitStarted: (amount, fee) => `The service holding ${amount} BTC for instant payments stopped renewing it, so it is moving to your Bitcoin address. Bitcoin network fees: about ${fee} BTC, paid from your Bitcoin address.`,
+  exitMoving: (amount) => `Moving ${amount} BTC to your Bitcoin address, one Bitcoin block at a time.`,
+  exitArrived: (amount, fee) => `${amount} BTC arrived at your Bitcoin address, moved there because the service holding it for instant payments stopped renewing it.` + (fee ? ` Bitcoin network fees: about ${fee} BTC.` : ''),
+  exitNeedsFees: (amount, need) => `The service holding ${amount} BTC for instant payments stopped renewing it, and it needs renewing within a day. To move it to your Bitcoin address yourself, first receive about ${need} BTC at your Bitcoin address: it pays the Bitcoin network fees once confirmed.`,
+  exitNotWorth: (amount) => `The service holding ${amount} BTC for instant payments stopped renewing it. Moving that out alone would cost more than it holds, so it stays there and is renewed once the service answers again.`,
 })
+
+// What default mode says about a coin leaving the Ark alone, from the wallet's answer to
+// `exit_auto` (`r`), what it holds leaving (`pendingSats`), and the cost and amount the last start
+// priced (`lastCost`, `lastAmount`, sats). `fmt(sats)` formats a BTC amount. -> { kind, text } or null.
+export function exitNoteOf (r, { pendingSats = 0n, lastCost = null, lastAmount = null, fmt = fmtBtc } = {}) {
+  if (!r) return null
+  const claimed = r.progress && r.progress.claimed
+  if (claimed) return { kind: 'arrived', text: BTC_WORDS.exitArrived(fmt(big(claimed.amount)), lastCost != null ? fmt(big(lastCost)) : null) }
+  if (r.action === 'started' && r.started) return { kind: 'started', text: BTC_WORDS.exitStarted(fmt(big(r.started.amount)), fmt(big(r.started.cost))) }
+  if (leaving(r)) {
+    const amount = big(pendingSats) > 0n ? big(pendingSats) : big(lastAmount)
+    if (amount > 0n) return { kind: 'moving', text: BTC_WORDS.exitMoving(fmt(amount)) }
+  }
+  if (r.action === 'cannot_start') {
+    const need = r.needed != null ? big(r.needed) - big(r.available) : null
+    if (need != null && need > 0n) return { kind: 'needs', text: BTC_WORDS.exitNeedsFees(fmt(big(r.amount)), fmt(need)) }
+    return null
+  }
+  const small = (r.not_worth || []).reduce((n, c) => n + big(c.amount), 0n)
+  if (r.ark && r.ark !== 'answering' && small > 0n) return { kind: 'not-worth', text: BTC_WORDS.exitNotWorth(fmt(small)) }
+  return null
+}
+
+// Whether a coin is still on its way out (a claim already sent is not).
+const LEAVING = ['starting', 'on_its_way', 'waiting_out_its_delay', 'claimable']
+export function leaving (r) {
+  return !!(r && r.progress && (r.progress.exits || []).some((e) => LEAVING.includes(e.state)))
+}
+
+// A BTC amount from sats, as the page shows BTC: eight decimals, trailing zeros dropped.
+export function fmtBtc (sats) {
+  const n = big(sats), neg = n < 0n, a = neg ? -n : n
+  const frac = (a % 100_000_000n).toString().padStart(8, '0').replace(/0+$/, '')
+  return (neg ? '-' : '') + (a / 100_000_000n).toString() + (frac ? '.' + frac : '')
+}
+
+// How often default mode asks the wallet whether a coin must leave the Ark alone (`exit_auto`),
+// and how often while one is leaving.
+export const EXIT_CHECK_MS = 5 * 60_000
+export const EXIT_MOVING_MS = 60_000
 
 // How long a worker request may take before the page stops waiting on it (a payment waits for
 // its route; everything else answers in seconds).
@@ -146,8 +193,11 @@ export function boardAmount (utxos, info, boardFee, feerate = BOARD_FEERATE) {
 //   decode(bolt11)          bolt11.js decodeBolt11
 //   onChange()              called when the balance changes
 //   log(...)
-export function mountBtcArk ({ makeWorker, mnemonic, config, decode, onChange = () => {}, log = () => {}, now = () => Date.now() }) {
-  let worker = null, seq = 0, opened = null, isOpen = false, figures = arkFigures(null), info = null, timer = null
+//   fmt(sats)               formats a BTC amount for exitNote() (fmtBtc by default)
+//   store                   { get(key), set(key, value) }: where the cost of a leaving coin is kept
+//                           across reloads (none by default)
+export function mountBtcArk ({ makeWorker, mnemonic, config, decode, onChange = () => {}, log = () => {}, now = () => Date.now(), fmt = fmtBtc, store = null }) {
+  let worker = null, seq = 0, opened = null, isOpen = false, figures = arkFigures(null), info = null, timer = null, read = false
   const waiting = new Map()
 
   function call (op, args, timeout = RUN_TIMEOUT_MS) {
@@ -206,12 +256,49 @@ export function mountBtcArk ({ makeWorker, mnemonic, config, decode, onChange = 
     return renewing
   }
 
+  // A coin leaves the Ark alone only by the wallet's one rule (`exit_auto`): when the Ark refused
+  // the wallet or cannot be reached, for the coins worth it within a day of needing renewal. Its fees
+  // are paid from the wallet's own Bitcoin address, and it arrives there. Every few minutes, and
+  // every minute while a coin is leaving; nothing is asked. Developer mode starts one by hand
+  // (exitEstimate, exitStart).
+  let exitNote = null, exitBusy = null, exitAt = 0, exitPending = false, exitHolds = false
+  const kept = (k) => { try { return store ? store.get(k) : null } catch { return null } }
+  const keep = (k, v) => { try { if (store) store.set(k, v) } catch {} }
+  const keptCost = () => kept('btcArk.exitCost')
+  const keepCost = (c, a) => { keep('btcArk.exitCost', c); keep('btcArk.exitAmount', a) }
+  function exitCheck (force) {
+    if (!isOpen) return Promise.resolve(null)
+    if (exitBusy) return exitBusy
+    if (!force && now() - exitAt < (exitPending ? EXIT_MOVING_MS : EXIT_CHECK_MS)) return Promise.resolve(null)
+    exitAt = now()
+    exitBusy = run('exit_auto', {}, PAY_TIMEOUT_MS)
+      .then(async (r) => {
+        if (r && r.action === 'started' && r.started) { keepCost(String(r.started.cost), String(r.started.amount)); log('[btc ark] leaving alone:', r.started.started, 'cost', r.started.cost) }
+        const b = await run('balance').catch(() => null)
+        const pending = big(b && b.pending_exit)
+        exitPending = leaving(r) || !!(r && r.progress && r.progress.pending > 0)
+        const note = exitNoteOf(r, { pendingSats: pending, lastCost: keptCost(), lastAmount: kept('btcArk.exitAmount'), fmt })
+        if (note && note.kind === 'arrived' && !leaving(r)) keepCost(null, null)
+        // What arrived stays said until something else happens; a coin too small to leave is said after it.
+        if (exitNote && exitNote.kind === 'arrived' && (!note || note.kind === 'not-worth')) {
+          if (note) exitNote = { kind: 'arrived', text: exitNote.text.split(' The service holding')[0] + ' ' + note.text }
+        } else exitNote = note
+        exitHolds = exitPending || !!(r && (r.action === 'started' || r.action === 'cannot_start'))
+        await refresh().catch(() => {})
+        try { onChange(figures) } catch {}
+        return r
+      })
+      .catch((e) => { log('[btc ark] leaving alone:', e && e.message); return null })
+      .finally(() => { exitBusy = null })
+    return exitBusy
+  }
+
   async function refresh () {
     if (!isOpen) return figures
     const b = await run('balance')
     const f = arkFigures(b)
     const changed = f.total !== figures.total || f.spendable !== figures.spendable || f.arriving !== figures.arriving
-    figures = f
+    figures = f; read = true
     if (changed) { try { onChange(f) } catch {} }
     return f
   }
@@ -226,12 +313,12 @@ export function mountBtcArk ({ makeWorker, mnemonic, config, decode, onChange = 
         info = await run('info')
         await refresh()
         log('[btc ark] open in', now() - t0, 'ms')
-        catchUp().then(() => renewDue())
+        catchUp().then(() => renewDue()).then(() => exitCheck(true))
         if (!timer) {
           let lastSync = now(), lastCatchUp = now()
           timer = setInterval(() => {
             if (now() - lastCatchUp >= CATCH_UP_MS) { lastCatchUp = now(); catchUp() }
-            else if (now() - lastSync >= SYNC_MS) { lastSync = now(); run('sync').then(() => refresh()).then(() => renewDue()).catch(() => {}) } else refresh().catch(() => {})
+            else if (now() - lastSync >= SYNC_MS) { lastSync = now(); run('sync').then(() => refresh()).then(() => renewDue()).then(() => exitCheck()).catch(() => {}) } else refresh().catch(() => {})
           }, REFRESH_MS)
         }
         return true
@@ -385,8 +472,14 @@ export function mountBtcArk ({ makeWorker, mnemonic, config, decode, onChange = 
   }
 
   return {
-    open, isOpen: () => isOpen, refresh, renewDue, figures: () => figures, info: () => info,
+    open, isOpen: () => isOpen, read: () => isOpen && read, refresh, renewDue, figures: () => figures, info: () => info,
     route: (to) => routeOf(to, decode), quote, send, payOutcome, board, invoice, received, lightning, run,
+    // Leaving the Ark alone: what default mode says (exitNote), whether the wallet keeps what arrives
+    // at its address out of the Ark meanwhile (exitHolds), and developer mode's own steps.
+    exitCheck, exitNote: () => exitNote && exitNote.text, exitHolds: () => exitHolds,
+    exitEstimate: () => run('exit_estimate', {}, PAY_TIMEOUT_MS),
+    exitStart: (vtxos) => run('exit_start', vtxos ? { vtxos } : {}, PAY_TIMEOUT_MS).then((r) => { keepCost(String(r.cost), String(r.amount)); exitAt = 0; exitPending = true; exitHolds = true; return r }),
+    exitStatus: () => run('exit_status', {}),
     close () { if (timer) clearInterval(timer); timer = null; if (worker) worker.terminate(); worker = null; isOpen = false; opened = null },
   }
 }

@@ -37,7 +37,13 @@ confidential `tsqb1…` addresses are an explicit opt-in).
   users (`ARCA.watchtowers`), so any one of them takes a coin on the chain under its
   owner's key should its batch be released, or a sender take back an earlier coin,
   while the wallet is away. BTC is held on the Bitcoin ark
-  (`BTC_ARK`, Bark's wallet in `btc-ark/`, opened in both modes). Receive shows one
+  (`BTC_ARK`, Bark's wallet in `btc-ark/`, opened in both modes). When the ark's
+  server refuses the wallet or stops answering and a coin worth its exit is within a
+  day of expiry, the wallet takes it to the chain alone (the web wallet's
+  `btc-ark.js` rule, `exit_auto`): the fees come from the wallet's own Bitcoin
+  address, the coin is claimed to it, and BTC's row says what happened and what it
+  cost. Developer mode adds **Exit…** under BTC, which prices each coin and refuses
+  one not worth its exit. Receive shows one
   receive code, `BITCOIN:<TB1>?ark=<ARK ADDRESS>&sequentia=<SQR1…>` (the web wallet's
   `pay-code.js`, kept in `vendor/`), with
   an optional "Amount in BTC" that adds `amount=` and an ark invoice as

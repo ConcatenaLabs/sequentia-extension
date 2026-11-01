@@ -44,7 +44,10 @@ async function fingerprint(text) {
 function emit(event, data) {
   chrome.runtime.sendMessage({ scope: 'ark-event', event, data }).catch(() => {});
 }
-const figuresWire = (f) => ({ total: String(f.total), spendable: String(f.spendable), arriving: String(f.arriving) });
+// The figures, and what default mode says about BTC leaving the ark alone (vendor/btc-ark.js exitNoteOf).
+const figuresWire = (f) => ({ total: String(f.total), spendable: String(f.spendable), arriving: String(f.arriving),
+  exitNote: (A.ark && A.ark.exitNote && A.ark.exitNote()) || null });
+const fmtBtc8 = (sats) => { const n = BigInt(sats), w = n / 100000000n, f = (n % 100000000n).toString().padStart(8, '0').replace(/0+$/, ''); return w.toString() + (f ? '.' + f : ''); };
 
 async function start({ mnemonic }) {
   if (!mnemonic) throw { message: 'the wallet is locked' };
@@ -60,6 +63,8 @@ async function start({ mnemonic }) {
     decode: (s) => decodeBolt11(s),
     onChange: (f) => emit('arkBalance', figuresWire(f)),
     log: (...a) => console.info(...a),
+    fmt: fmtBtc8,
+    store: { get: (k) => localStorage.getItem(k + '.' + fp), set: (k, v) => v == null ? localStorage.removeItem(k + '.' + fp) : localStorage.setItem(k + '.' + fp, v) },
   });
   await A.ark.open();
   emit('arkBalance', figuresWire(A.ark.figures()));
@@ -118,6 +123,8 @@ async function broadcast(hex) {
 }
 async function board({ lim = 20, changeNext = 0 } = {}) {
   if (!A.ark || !A.ark.isOpen()) return null;
+  // While BTC leaves the ark alone, or needs the address's BTC to pay its way out, nothing goes in.
+  if (A.ark.exitHolds && A.ark.exitHolds()) return null;
   const sel = await utxos(Math.max(1, Math.min(200, Number(lim) || 20)));
   const r = await A.ark.board({ utxos: async () => sel, buildUnsigned: drain(sel, Number(changeNext) || 0), broadcast });
   A.lastBoard = { at: Date.now(), value: r ? { txid: r.txid, amount: r.amount } : null };
@@ -145,6 +152,10 @@ async function handle(op, args) {
       return toWire(await l[m](fromWire(args.args)));
     }
     case 'board': return await board(args);
+    // Developer mode's exit by hand: each coin priced, then the coins worth it taken out.
+    case 'exitEstimate': return await need().exitEstimate();
+    case 'exitStart': { const r = await need().exitStart(Array.isArray(args.vtxos) ? args.vtxos.map(String) : null); emit('arkBalance', figuresWire(A.ark.figures())); return r; }
+    case 'exitStatus': return await need().exitStatus();
     default: throw { message: 'no operation ' + op };
   }
 }
