@@ -80,7 +80,8 @@ export async function rememberArkSum(f) {
   const tag = await walletTag();
   if (!tag || !f) return;
   const all = (await stGet('local', ARK_SUM_KEY)) || {};
-  all[tag] = { total: String(f.total || 0), spendable: String(f.spendable || 0), arriving: String(f.arriving || 0), at: Date.now() };
+  all[tag] = { total: String(f.total || 0), spendable: String(f.spendable || 0), arriving: String(f.arriving || 0),
+    exitNote: typeof f.exitNote === 'string' ? f.exitNote : null, at: Date.now() };
   await stSet('local', ARK_SUM_KEY, all);
 }
 export async function arkSum() {
@@ -121,6 +122,10 @@ export async function boardBtcFor(sats) {
   if (r) { console.info('[btc ark] boarded', r.amount, 'sat in', r.txid, 'for a trade asking', String(sats)); engine.sync().catch(() => {}); }
   return r;
 }
+// Developer mode's exit of BTC from the Bitcoin ark by hand (offscreen-ark.js).
+export async function exitEstimate() { await ensureArk(); return arkHost('exitEstimate'); }
+export async function exitStart(vtxos) { await ensureArk(); return arkHost('exitStart', { vtxos }); }
+
 // BTC at the wallet's address (the kit wallet's figure), in default mode, as a string of sats.
 export async function btcAtAddress() { return (await isDefault()) ? String(engine.availableFor('BTC')) : '0'; }
 

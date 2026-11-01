@@ -328,6 +328,7 @@ async function overview({ withLn = false } = {}) {
       leaves: key === 'BTC' ? null : leafAtoms.toString(),
       staked: staked.toString(),
       ark: ark.toString(),
+      exitNote: key === 'BTC' && arkKept ? (arkKept.exitNote || null) : null,
       arriving: String(arrivingPer[key] || '0'),
       moving: moving.toString(),
       redoing: key === 'BTC' ? '0' : String(redoingPer[key] || '0'),
@@ -622,6 +623,8 @@ const uiMethods = {
   'default.ark': async ({ method, args }) => await dm.arkLightning(String(method), args),
   'default.boardBtcFor': async ({ sats }) => { dm.boardBtcFor(sats).catch((e) => console.warn('[btc ark] board:', (e && e.message) ?? e)); return { ok: true }; },
   'default.btcAtAddress': async () => ({ sats: await dm.btcAtAddress() }),
+  'default.exitEstimate': async () => await dm.exitEstimate(),
+  'default.exitStart': async ({ vtxos }) => await dm.exitStart(vtxos),
   // Removes the wallet from this browser: its leaf and ark wallets are closed first, so a
   // wallet made next shows none of their coins. The phrase is the way back.
   'removeWallet': async ({ password }) => {
