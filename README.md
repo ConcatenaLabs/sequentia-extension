@@ -153,7 +153,9 @@ confidential `tsqb1…` addresses are an explicit opt-in).
   asks, and would refuse it again however often it were asked (the server's code
   `declined`): the payment is refused for good. The library puts the coins back at
   once and sends nothing again; user mode reads "This payment was declined; nothing
-  was sent.", and developer mode shows the operator's own words, which name the
+  was sent.", or, when the operator declines because the wallet needs updating,
+  "This wallet is out of date for this: update it, then try again. Nothing was
+  taken.", and developer mode shows the operator's own words, which name the
   code. An operator that cannot be reached is no refusal: the payment stands, and
   the next sync sends it again.
 - **Issuer-operated assets** — the operator may serve an asset issuer-operated:
