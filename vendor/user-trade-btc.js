@@ -59,9 +59,11 @@ export function btcTrades ({ run, deps, put, log, now, settleStep, maxFeePpm, fi
   // it holds what an offer gives until the offer is released.
   const releaseNow = async (maker, swap) => { if (maker && swap) { try { await post(maker + '/v1/btc/release', { swap }) } catch {} } }
 
-  // Firm terms of one entry (source 'btc-gateway') for `pay` of the pay asset.
-  async function firm (entry, payAsset, receiveAsset, pay, have, sized) {
+  // Firm terms of one entry (source 'btc-gateway') for `pay` of the pay asset. `onStep(key)`, when
+  // given, is told each step as it starts (user-trade.js tradeSteps).
+  async function firm (entry, payAsset, receiveAsset, pay, have, sized, onStep = null) {
     if (!B()) return null
+    const step = (k) => { if (onStep) try { onStep(k) } catch {} }
     let size = sized
     if (receiveAsset === 'BTC') {
       // Selling an asset for BTC: the wallet's invoice first, so the maker's receive is under the
@@ -69,10 +71,13 @@ export function btcTrades ({ run, deps, put, log, now, settleStep, maxFeePpm, fi
       let sats = size.receive
       for (let i = 0; i < 4; i++) {
         let inv, o, q
+        step('invoice')
         try { inv = await B().invoice({ sats, description: 'trade' }) } catch (e) { log('[user trade] btc invoice:', e.message); return null }
+        step('firm')
         try { o = await post(entry.maker + '/v1/btc/firm', { give_asset: 'BTC', want_asset: payAsset, give: String(sats), invoice: inv.invoice }) }
         catch (e) { log('[user trade] maker btc firm:', e.message); B().cancelInvoice(inv.payment_hash).catch(() => {}); return null }
         const drop = () => { release(entry.maker, o.swap); B().cancelInvoice(inv.payment_hash).catch(() => {}) }
+        step('check')
         try { q = await run('lightning_pay_quote', { invoice: o.invoice, asset: payAsset, max_fee_ppm: maxFeePpm }) } catch (e) { log('[user trade] lightning_pay_quote:', e.message); drop(); return null }
         // The maker's invoice is under the wallet's own hash, for the asset paid, at the price quoted.
         const fair = ceilDiv(sats * entry.rateNum, entry.rateDen)
@@ -106,8 +111,10 @@ export function btcTrades ({ run, deps, put, log, now, settleStep, maxFeePpm, fi
     let give = size.receive
     for (let i = 0; i < 4; i++) {
       let o, d, rq, sq
+      step('firm')
       try { o = await post(entry.maker + '/v1/btc/firm', { give_asset: receiveAsset, want_asset: 'BTC', give: String(give) }) }
       catch (e) { log('[user trade] maker btc firm:', e.message); return null }
+      step('check')
       try { d = await B().decode(o.invoice) } catch (e) { log('[user trade] btc decode:', e.message); release(entry.maker, o.swap); return null }
       const fair = ceilDiv(give * entry.rateNum, entry.rateDen)
       if (big(d.sats) !== big(o.want) || big(d.sats) > fair || d.expires_at * 1000 - now() < (INVOICE_LEFT_SECONDS + 1800) * 1000) {
@@ -158,6 +165,10 @@ export function btcTrades ({ run, deps, put, log, now, settleStep, maxFeePpm, fi
       put(rec)
       const r = await run('lightning_pay', { invoice: o.invoice, asset: choice.btc.quote.asset, max_fee_ppm: maxFeePpm, shown: choice.btc.quote })
       rec.change = r.change || null
+      // The change coin by its id: the payment's transfer makes the payment's leaf, then the change.
+      // Named, it is followed even once the wallet pays on it, which the next trade often does.
+      const outs = r.transfer && Array.isArray(r.transfer.outputs) ? r.transfer.outputs : []
+      if (rec.settleTargets.length === 1 && big(r.change) > 0n && typeof outs[1] === 'string' && outs[1]) rec.settleTargets = [{ ...rec.settleTargets[0], leaf_id: outs[1] }]
       rec.state = 'sent'; rec.sentAt = now()
       put(rec)
       post(rec.maker + '/v1/btc/paid', { swap: rec.swap }).catch(() => {})
