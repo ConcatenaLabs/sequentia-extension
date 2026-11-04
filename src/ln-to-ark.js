@@ -47,6 +47,9 @@ const move = mountLightningToArk({
     invoice: (sats, description) => dm.arkInvoice(sats, description),
     received: (hash) => dm.invoiceReceived(hash),
     refresh: async () => {},
+    // The Bitcoin ark server's limits (its largest coin), as the wallet last read them: a move
+    // over the largest is cut to it, and nothing moves before they are read.
+    info: () => dm.arkInfo(),
     claimable: () => dm.arkClaimable(),
   },
   leaves: {

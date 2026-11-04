@@ -108,12 +108,12 @@ export interface InitOutput {
     readonly rustsecp256k1_v0_10_0_default_error_callback_fn: (a: number, b: number) => void;
     readonly rustsecp256k1_v0_10_0_default_illegal_callback_fn: (a: number, b: number) => void;
     readonly wasm_bindgen__convert__closures_____invoke__hd8f2a7b8acf89793: (a: number, b: number, c: any) => [number, number];
-    readonly wasm_bindgen__convert__closures_____invoke__haddd5fbbc7cb7dbf: (a: number, b: number, c: any) => [number, number];
+    readonly wasm_bindgen__convert__closures_____invoke__h27641e35bb09d8e0: (a: number, b: number, c: any) => [number, number];
     readonly wasm_bindgen__convert__closures_____invoke__h10333b0ac7481f4e: (a: number, b: number, c: any, d: any) => void;
-    readonly wasm_bindgen__convert__closures_____invoke__h46e9966e9d145e27: (a: number, b: number, c: any) => any;
+    readonly wasm_bindgen__convert__closures_____invoke__hbeac2d5ad36aa10e: (a: number, b: number, c: any) => any;
     readonly wasm_bindgen__convert__closures_____invoke__hab3485ff77d16161: (a: number, b: number, c: any) => void;
     readonly wasm_bindgen__convert__closures_____invoke__h1b0fb8c68ed6b8c5: (a: number, b: number, c: any) => void;
-    readonly wasm_bindgen__convert__closures_____invoke__h8638e2097ab44c0b: (a: number, b: number, c: any) => void;
+    readonly wasm_bindgen__convert__closures_____invoke__hb7d382d40aa9ad74: (a: number, b: number, c: any) => void;
     readonly wasm_bindgen__convert__closures_____invoke__h913b58eb6cc53c14: (a: number, b: number) => void;
     readonly wasm_bindgen__convert__closures_____invoke__h368ab34e133bac9b: (a: number, b: number) => void;
     readonly wasm_bindgen__convert__closures_____invoke__h27b2e45e12fe920e: (a: number, b: number) => void;

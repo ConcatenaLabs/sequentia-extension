@@ -18,6 +18,8 @@
 //   'start' { mnemonic }              -> opens the wallet of that phrase (or leaves it open)
 //   'stop'                            -> closes it and forgets the phrase
 //   'status'                          -> { open, figures, lastBoard, lastError }
+//   'info'                            -> the server's limits, the wallet's `info` (max_vtxo_sat,
+//                                        min_board_sat, required_board_confirmations…), or null
 //   'run'   { command, args }         -> the wallet's answer (e.g. 'address')
 //   'quote' { to, sats } / 'send' { to, sats } -> vendor/btc-ark.js quote/send, amounts as strings
 //   'payOutcome' { hash, untilMs? }        -> a held payment followed to 'complete', 'came-back' or 'pending'
@@ -138,6 +140,8 @@ async function handle(op, args) {
     case 'start': return await start(args);
     case 'stop': stop(); return true;
     case 'status': return { open: !!(A.ark && A.ark.isOpen()), figures: A.ark ? figuresWire(A.ark.figures()) : null, lastBoard: A.lastBoard, lastError: A.lastError };
+    // The server's limits as the wallet last read them (vendor/btc-ark.js info()), or null before.
+    case 'info': return A.ark && A.ark.isOpen() ? A.ark.info() : null;
     case 'run': return await need().run(String(args.command), args.args || {});
     case 'quote': return toWire(await need().quote(String(args.to), BigInt(args.sats || 0)));
     case 'send': return toWire(await need().send(String(args.to), BigInt(args.sats || 0)));
