@@ -1406,6 +1406,8 @@ async function relayPairBook(base, quote) {
 // document: each method asked there (BigInt crosses as { $big }).
 const arkBtc = new Proxy({}, { get: (_, method) => async (arg) => fromWire(await rpc('default.ark', { method: String(method), args: toWire(arg) })) });
 let arkUp = false;
+// The confirmations the Bitcoin ark's server waits for before a board's BTC can be traded.
+let arkBoardConfs = null;
 // An amount's value in the reference currency, in words ("≈ $12.30"), from the overview's own
 // valuation of what is held; '' for an asset it does not value.
 function refValue(h, atoms) {
@@ -1472,6 +1474,7 @@ async function renderTrade() {
       knownAssets, held, vestingAtoms: vestingAtomsOf,
       isHidden: (h) => !!(OV && (OV.hidden || []).includes(h)),
       refValue,
+      btcMoveBlocks: () => arkBoardConfs,
       admittedReceives: (pay) => admittedReceives(served(), genesis, pay),
       // The chosen pair's market above the inputs, from the relay's one trade log.
       market: { relay: () => seqob.seqobBase(), pairOf: (a, b) => displayPair(a, b, (h) => metaOf(h).ticker),
@@ -1505,7 +1508,7 @@ async function loadTradeContext() {
   redraw();
   // The second step is not waited on: a slow leaf wallet holds back no retry of the first.
   if (!tradeRefine) tradeRefine = Promise.all([
-    rpc('default.joined').then((j) => { arkUp = !!j.ark; }, () => {}),
+    rpc('default.joined').then((j) => { arkUp = !!j.ark; arkBoardConfs = j.boardConfirmations || null; }, () => {}),
     rpc('default.leafInfo').then((i) => { supervised = supervisedAssets(i); }, () => {}),
   ]).then(redraw).finally(() => { tradeRefine = null; });
 }

@@ -42,7 +42,12 @@ confidential `tsqb1…` addresses are an explicit opt-in).
   users (`ARCA.watchtowers`), so any one of them takes a coin on the chain under its
   owner's key should its batch be released, or a sender take back an earlier coin,
   while the wallet is away. BTC is held on the Bitcoin ark
-  (`BTC_ARK`, Bark's wallet in `btc-ark/`, opened in both modes). Before it schedules
+  (`BTC_ARK`, Bark's wallet in `btc-ark/`, opened in both modes). Every limit of that ark
+  is its server's own, read from its `info`: a board carries at most the server's largest
+  coin and none is made below its least board or before the server has answered; a move
+  from the wallet's own Lightning channel is held to the largest coin too; renewals are
+  made in groups that fit in it, and a coin larger than the server takes now is
+  offboarded to the wallet's own address and boarded again from there. Before it schedules
   the server's renewals it asks the library's Bitcoin ark watchtower plan, so a coin a
   tower holds is never also renewed; it deposits coins with `BTC_ARK.towers` only when
   `tower_deposits` is true. When the ark's

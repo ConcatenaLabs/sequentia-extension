@@ -72,7 +72,8 @@ wasm. Read this before changing anything.
   and reads the mailbox every 10 s in default mode (`defaults`). BTC lives on the
   Bitcoin ark in the offscreen document (`offscreen-ark.js`, scope `ark`), open in
   both modes so its BTC is in BTC's figure; it boards the wallet's confirmed tb1
-  coins in default mode, signed in that document with the phrase's own keys. The
+  coins in default mode, signed in that document with the phrase's own keys, within
+  the limits the ark's server publishes (`info`, op `info`), never figures of its own. The
   popup's composer reaches the leaf library (`default.leaf`) and the ark's
   Lightning (`default.ark`) through the service worker. What the wallet's own
   Lightning channels hold moves to the ark and the tree by itself in default mode

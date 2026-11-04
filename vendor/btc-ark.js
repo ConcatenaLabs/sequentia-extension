@@ -376,6 +376,13 @@ export function mountBtcArk ({ makeWorker, mnemonic, config, decode, onChange = 
     return exitBusy
   }
 
+  // The server's limits (its largest coin, its least board, the confirmations a board waits for),
+  // read again at each sync: an operator that changes them is followed without a reload. A read
+  // that fails keeps the last answer.
+  function readInfo () {
+    return run('info').then((i) => { if (i) info = i }, (e) => log('[btc ark] info:', e && e.message))
+  }
+
   async function refresh () {
     if (!isOpen) return figures
     const b = await run('balance')
@@ -401,7 +408,7 @@ export function mountBtcArk ({ makeWorker, mnemonic, config, decode, onChange = 
           let lastSync = now(), lastCatchUp = now()
           timer = setInterval(() => {
             if (now() - lastCatchUp >= CATCH_UP_MS) { lastCatchUp = now(); catchUp() }
-            else if (now() - lastSync >= SYNC_MS) { lastSync = now(); run('sync').then(() => refresh()).then(() => renewDue()).then(() => exitCheck()).catch(() => {}) } else refresh().catch(() => {})
+            else if (now() - lastSync >= SYNC_MS) { lastSync = now(); run('sync').then(() => readInfo()).then(() => refresh()).then(() => renewDue()).then(() => exitCheck()).catch(() => {}) } else refresh().catch(() => {})
           }, REFRESH_MS)
         }
         return true

@@ -16,12 +16,13 @@
 // counted in the asset's one figure; while it is on its way it stays in the figure and the line
 // under it reads "Moving <amount> <TICKER> so it can be sent in seconds." (DEFAULT_WORDS.moving);
 // a payment that fails comes back to the channel. A move is paid only from a channel that is
-// locked in, held within the daily limit the page's Lightning signer sets (none by default), and
-// never made while a person is using the wallet, nor in developer mode, where channels are the
-// person's to use. A payment refused before it left gives its receive up, and the move is tried
-// again later. Once a channel is emptied and closing it is cheap and safe, it is closed to an
-// address of the wallet, whose coins are then boarded by themselves; otherwise it stays, and
-// developer mode says why (closeWhy).
+// locked in, held within the daily limit the page's Lightning signer sets (none by default) and,
+// for BTC, within the largest coin the ark's server publishes, and never made while a person is
+// using the wallet, nor in developer mode, where channels are the person's to use. A payment
+// refused before it left gives its receive up, and the move is tried again later. Once a channel
+// is emptied and closing it is cheap and safe, it is closed to an address of the wallet, whose
+// coins are then boarded by themselves; otherwise it stays, and developer mode says why
+// (closeWhy).
 //
 // The same move, in the same words, is Ambra's (app/lib/src/data/lightning_to_ark.dart) and the
 // extension's. Every amount, fee and refusal is the ark's, the leaf library's or the Lightning
@@ -74,6 +75,16 @@ export function withinAllowance (amount, allowance, min = MIN_MOVE_SATS) {
   const cap = big(allowance) * 9n / 10n
   const a = big(amount) < cap ? big(amount) : cap
   return a >= big(min) && a > 0n ? a : null
+}
+
+// A BTC move held to the ark's largest coin (`info`, the ark wallet's `info`: its server's published
+// `max_vtxo_sat`, null when it names none): a receive over it is refused, so the move carries at
+// most that and the rest of the channel moves on a later pass. Null when the ark has not said its
+// limits yet (nothing moves on a guess).
+export function withinArk (amount, info) {
+  if (amount == null || !info) return null
+  const most = info.max_vtxo_sat != null ? big(info.max_vtxo_sat) : null
+  return most != null && big(amount) > most ? most : big(amount)
 }
 
 // What the page's Lightning payment limits (window.SEQ_LN_PAYMENT_LIMITS, as seqln.js hands them to
@@ -235,8 +246,9 @@ export function closeVerdict ({ channel, left, spendable, fee, min = MIN_MOVE_SA
 //   pay({ node_key, bolt11 }) the node pays the invoice -> { paid, preimage? } (throws when refused)
 //   payStatus({ node_key, payment_hash }) -> { state: 'none'|'pending'|'complete'|'failed' }
 //   ark                       { isOpen(), invoice(sats, description), received(hash), refresh(),
-//                               claimable()? (sats the ark can claim of Lightning payments to it,
-//                               answered at once) } or null
+//                               info() (the ark wallet's `info`, its server's limits, or null
+//                               before it is read), claimable()? (sats the ark can claim of
+//                               Lightning payments to it, answered at once) } or null
 //   leaves                    { isOpen(), info(), coins(), run(command, args), refresh()? } or null
 //   allowance(kind)           -> what the daily limit lets a payment of kind reach, atoms, or null
 //   closeFee(kind, channel)   -> the estimated cost of closing it to this side, atoms, or null
@@ -287,8 +299,10 @@ export function mountLightningToArk (deps) {
     const chans = await deps.channels()
     const n = payingNode(chans, 'BTC', kindOf)
     if (!n) return why('BTC: no channel that is locked in')
-    const amount = withinAllowance(amountToMove(n.spendable), await deps.allowance('btc'))
-    if (amount == null) { why(`BTC: ${n.spendable} sat in the channel, too little to move`); return closeEmptied('BTC') }
+    const allowed = withinAllowance(amountToMove(n.spendable), await deps.allowance('btc'))
+    if (allowed == null) { why(`BTC: ${n.spendable} sat in the channel, too little to move`); return closeEmptied('BTC') }
+    const amount = withinArk(allowed, ark.info ? await ark.info() : null)
+    if (amount == null) return why('BTC: waiting for the ark to say its limits')
     S.btcRunning = true
     S.btcLast = now()
     try {

@@ -95,6 +95,8 @@ export async function arkSum() {
   const all = (await stGet('local', ARK_SUM_KEY)) || {};
   return (tag && all[tag]) || null;
 }
+// The Bitcoin ark server's limits, as the wallet last read them (its `info`), or null before.
+export async function arkInfo() { try { return await arkHost('info'); } catch { return null; } }
 // An invoice of the wallet's own ark, and whether it was paid (claimed as the server holds it).
 export async function arkInvoice(sats, description) { return await arkHost('invoice', { sats: String(sats), description }); }
 // The trade composer's BTC, on the ark (vendor/btc-ark.js `lightning()`), one method at a time.
