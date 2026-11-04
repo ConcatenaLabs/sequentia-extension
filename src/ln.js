@@ -235,7 +235,7 @@ export async function requestInbound({ kind, atoms }) {
   await waitNodeReadyPatient(prov.key, meta.ticker);
   say('Requesting inbound capacity…');
   const node_key = kind === 'BTC' ? await btcNodeKey() : await assetNodeKey(kind);
-  const r = await seqlnChannelInbound({ node_key, asset: kind === 'BTC' ? undefined : kind, amount: Number(atoms) });
+  const r = await seqlnChannelInbound({ node_key, asset: kind, amount: Number(atoms) });
   return { ok: true, result: r ?? null };
 }
 
@@ -252,7 +252,7 @@ export async function createInvoice({ kind, atoms, memo }) {
   await waitNodeReadyPatient(prov.key, meta.ticker);
   const node_key = kind === 'BTC' ? await btcNodeKey() : await assetNodeKey(kind);
   say('Ensuring inbound liquidity…');
-  try { await seqlnChannelInbound({ node_key, asset: kind === 'BTC' ? undefined : kind, amount: Number(atoms) }); } catch {}
+  try { await seqlnChannelInbound({ node_key, asset: kind, amount: Number(atoms) }); } catch {}
   say('Creating the invoice…');
   const inv = await seqlnNodeReceive({ node_key, amount: Number(atoms), description: memo || ('Receive ' + meta.ticker) });
   if (!inv || !inv.bolt11) throw new Error((inv && inv.error) || 'no invoice returned');
