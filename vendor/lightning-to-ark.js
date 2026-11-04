@@ -40,6 +40,8 @@ export const LIMIT_WAIT_MS = 6 * 3600_000
 export const ASSET_EVERY_MS = 2 * 60_000
 // How long a BTC move is followed for (the ark invoice's own life bounds it too).
 export const BTC_FOLLOW_MS = 10 * 60_000
+// How long after a BTC move landed a channel read that predates it is taken for stale.
+export const LANDED_MS = 10 * 60_000
 // What the close of an emptied channel must bring back, as a multiple of its fee, to be worth it.
 export const CLOSE_WORTH = 4n
 // How long a cooperative close is given before the node's own (device-signed) unilateral close.
@@ -193,6 +195,19 @@ export function channelPart (read, moving, from) {
   return big(read) + big(moving)
 }
 
+// The BTC channels' part of BTC's figure while a move of `moving` sats from channels that held
+// `from` is on its way or has just landed, `read` as last read. Until the ark holds it, the move
+// counts here (`from`, whether the read predates the payment or not). Once the ark holds it
+// (`landed`), the ark's own figure counts it, so this counts only what stays: what the read shows,
+// or, while the read still predates the payment (the service's status lags it), `from` less the move.
+export function btcChannelPart (read, { moving = null, from = null, landed = false } = {}) {
+  if (moving == null || big(moving) <= 0n || from == null) return channelPart(read, moving, from)
+  if (!landed) return big(from)
+  const left = big(from) - big(moving)
+  if (big(read) <= left) return big(read)
+  return left > 0n ? left : 0n
+}
+
 // Whether an emptied channel is closed now, and if not, why it stays (developer mode's words).
 // `left`: this side's balance in it; `fee`: what its close is estimated to cost this side, or null
 // when it cannot be priced; `min`: the least a move is. Default mode never pays from a channel, so
@@ -219,7 +234,9 @@ export function closeVerdict ({ channel, left, spendable, fee, min = MIN_MOVE_SA
 //   connect(kind)             brings the wallet's own node for `kind` online -> its node key
 //   pay({ node_key, bolt11 }) the node pays the invoice -> { paid, preimage? } (throws when refused)
 //   payStatus({ node_key, payment_hash }) -> { state: 'none'|'pending'|'complete'|'failed' }
-//   ark                       { isOpen(), invoice(sats, description), received(hash), refresh() } or null
+//   ark                       { isOpen(), invoice(sats, description), received(hash), refresh(),
+//                               claimable()? (sats the ark can claim of Lightning payments to it,
+//                               answered at once) } or null
 //   leaves                    { isOpen(), info(), coins(), run(command, args), refresh()? } or null
 //   allowance(kind)           -> what the daily limit lets a payment of kind reach, atoms, or null
 //   closeFee(kind, channel)   -> the estimated cost of closing it to this side, atoms, or null
@@ -307,6 +324,7 @@ export function mountLightningToArk (deps) {
         let r = null
         try { r = await ark.received(rec.hash) } catch (e) { log('BTC receive status:', (e && e.message) || e) }
         if (r && r.state === 'paid') {
+          S.btcArkHas = rec.hash
           log('BTC move received in the ark,', rec.sats, 'sat, in', Math.round((now() - rec.at) / 1000), 's')
           return await done(true)
         }
@@ -326,17 +344,26 @@ export function mountLightningToArk (deps) {
           // Still held on the way: followed again at the next look, and shown as moving meanwhile.
           if (now() - t0 > BTC_FOLLOW_MS) return false
         }
-        await sleep(3000)
+        await sleep(1500)
       }
     } finally { S.btcFollowing = false }
 
     async function done (ok) {
-      update((s) => { s.btc = null })
+      update((s) => { s.btc = null; if (ok) s.landed = { from: String(rec.from), sats: String(rec.sats), at: now() } })
       try { await ark.refresh() } catch {}
       try { await deps.refreshChannels() } catch {}
       changed()
-      if (ok) await closeEmptied('BTC')
+      if (ok) {
+        // The service's status can lag the payment by a minute: the close waits for a read that
+        // shows the channel emptied, so it never acts on the balance from before the move.
+        for (let i = 0; i < 6 && stale(); i++) { await sleep(10_000); try { await deps.refreshChannels() } catch {} changed() }
+        await closeEmptied('BTC')
+      }
       return ok
+    }
+    function stale () {
+      let c = null; try { c = deps.channels() } catch {}
+      return Array.isArray(c) && kindBalance(c, 'BTC', kindOf) > big(rec.from) - big(rec.sats)
     }
   }
 
@@ -441,7 +468,12 @@ export function mountLightningToArk (deps) {
     const mins = deps.leaves && (await deps.leaves.isOpen()) ? minLeaves(await deps.leaves.info()) : new Map()
     const min = kind === 'BTC' ? MIN_MOVE_SATS : (mins.get(kind) ?? 1n)
     const moving = kind === 'BTC' ? !!s.btc : S.movingAssets.has(kind)
-    for (const c of (await deps.channels()) || []) {
+    const chans = (await deps.channels()) || []
+    // A read from before the BTC move landed is not acted on: its balance is the moved one.
+    if (kind === 'BTC' && s.landed && now() - s.landed.at < LANDED_MS && kindBalance(chans, 'BTC', kindOf) > big(s.landed.from) - big(s.landed.sats)) {
+      return why('BTC channels: their balance is not read since the move yet')
+    }
+    for (const c of chans) {
       if (!c || !c.node_key || kindOf(c) !== kind) continue
       const id = c.short_channel_id || c.node_key
       const was = s.closed[id]
@@ -503,6 +535,26 @@ export function mountLightningToArk (deps) {
   // What of an asset is moving, read again from the last receives and the coins the leaf wallet
   // holds now, where it answers at once: the leaf counts in the figure the moment it is the
   // wallet's, so the move must stop counting at that same moment, not at the next pass.
+  // BTC's channel part (btcChannelPart): a move on its way counts here until the ark holds it,
+  // which the ark says at once by what it can claim (`ark.claimable()`, sats, where the page has
+  // it) and the follow says when it is paid; a move that landed counts only what stays, until a
+  // read shows the payment gone or LANDED_MS has passed.
+  function btcPart (read) {
+    const b = load().btc
+    if (b) return btcChannelPart(read, { moving: big(b.sats), from: big(b.from), landed: arkHolds(b) })
+    const l = load().landed
+    if (!l || now() - l.at >= LANDED_MS) return big(read)
+    const v = btcChannelPart(read, { moving: big(l.sats), from: big(l.from), landed: true })
+    if (big(read) <= big(l.from) - big(l.sats)) update((s) => { s.landed = null })
+    return v
+  }
+  function arkHolds (b) {
+    if (S.btcArkHas === b.hash) return true
+    let c = null
+    try { c = deps.ark && deps.ark.claimable ? deps.ark.claimable() : null } catch {}
+    if (c != null && typeof c !== 'object' && big(c) >= big(b.sats)) { S.btcArkHas = b.hash; return true }
+    return false
+  }
   function liveMoving (kind) {
     if (S.lastReceives && deps.leaves && deps.leaves.coins) {
       let c = null; try { c = deps.leaves.coins() } catch {}
@@ -521,7 +573,7 @@ export function mountLightningToArk (deps) {
     moving: (kind) => kind === 'BTC' ? (load().btc ? big(load().btc.sats) : null) : liveMoving(kind),
     // The channels' part of `kind`'s figure, `read` as last read.
     channelPart: (kind, read) => {
-      if (kind === 'BTC') { const b = load().btc; return (b ? channelPart(read, big(b.sats), big(b.from)) : big(read)) + closing(kind) }
+      if (kind === 'BTC') return btcPart(read) + closing(kind)
       return channelPart(read, liveMoving(kind), S.movingFrom.get(kind) ?? null) + closing(kind)
     },
     // Asks whether each close's payment is counted yet (each pass does).

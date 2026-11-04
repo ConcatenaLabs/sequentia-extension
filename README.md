@@ -42,7 +42,10 @@ confidential `tsqb1…` addresses are an explicit opt-in).
   users (`ARCA.watchtowers`), so any one of them takes a coin on the chain under its
   owner's key should its batch be released, or a sender take back an earlier coin,
   while the wallet is away. BTC is held on the Bitcoin ark
-  (`BTC_ARK`, Bark's wallet in `btc-ark/`, opened in both modes). When the ark's
+  (`BTC_ARK`, Bark's wallet in `btc-ark/`, opened in both modes). Before it schedules
+  the server's renewals it asks the library's Bitcoin ark watchtower plan, so a coin a
+  tower holds is never also renewed; it deposits coins with `BTC_ARK.towers` only when
+  `tower_deposits` is true. When the ark's
   server refuses the wallet or stops answering and a coin worth its exit is within a
   day of expiry, the wallet takes it to the chain alone (the web wallet's
   `btc-ark.js` rule, `exit_auto`): the fees come from the wallet's own Bitcoin
@@ -463,7 +466,7 @@ git archive --format=zip -o ambra-extension.zip HEAD -- manifest.json background
   ```
 - `btc-ark/` (the worker and its wasm) is copied from the web wallet's
   `btc-ark/`, built there by `tooling/build-btc-ark.sh` from the `arca`
-  repository's `bark-wasm/`.
+  repository's `bark-wasm/`; `btc-ark/pkg/BUILT_FROM` names the commit.
 - Update the leaf wallet (`leaves/pkg/`, the `arca` repository's
   `wallet-wasm/`): `scripts/fetch-leaf-wallet.sh <arca master commit>` copies
   that repository's CI build exactly, with `BUILT_FROM` (the commit) and

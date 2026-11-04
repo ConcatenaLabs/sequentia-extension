@@ -45,7 +45,7 @@ function emit(event, data) {
   chrome.runtime.sendMessage({ scope: 'ark-event', event, data }).catch(() => {});
 }
 // The figures, and what default mode says about BTC leaving the ark alone (vendor/btc-ark.js exitNoteOf).
-const figuresWire = (f) => ({ total: String(f.total), spendable: String(f.spendable), arriving: String(f.arriving),
+const figuresWire = (f) => ({ total: String(f.total), spendable: String(f.spendable), arriving: String(f.arriving), claimable: String(f.claimable || 0),
   exitNote: (A.ark && A.ark.exitNote && A.ark.exitNote()) || null });
 const fmtBtc8 = (sats) => { const n = BigInt(sats), w = n / 100000000n, f = (n % 100000000n).toString().padStart(8, '0').replace(/0+$/, ''); return w.toString() + (f ? '.' + f : ''); };
 

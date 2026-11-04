@@ -47,6 +47,7 @@ const move = mountLightningToArk({
     invoice: (sats, description) => dm.arkInvoice(sats, description),
     received: (hash) => dm.invoiceReceived(hash),
     refresh: async () => {},
+    claimable: () => dm.arkClaimable(),
   },
   leaves: {
     isOpen: async () => { try { return !!(await leaves.status()).open; } catch { return false; } },
