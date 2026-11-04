@@ -460,8 +460,17 @@ git archive --format=zip -o ambra-extension.zip HEAD -- manifest.json background
   profile with the same figures, and the second wallet is removed and made again
   (BTC alone). One browser runs at a time. Every default-mode tab is read against the
   forbidden words, and any error in the extension's contexts fails it. `FAUCET` names
-  the asset asked for (the faucet pays each asset once an hour to one address);
+  the asset asked for (the faucet pays each asset once per wallet, and once a day to
+  one network);
   `ONLY_A=1` runs the first wallet alone (faucet and trade).
+- The testnet faucet, once per wallet, from the service worker's own code against a
+  real faucet with a stand-in node (no chain, no coins):
+  `FAUCET_DIR=/path/to/sequentia-faucet node test/regtest/faucet-once.mjs`. Every
+  request names the wallet by its id (`vendor/faucet-wallet.js`, the web wallet's
+  `faucet-wallet.js`: sha256 of a tag and the scriptPubKey of the wallet's first
+  receive address, so one phrase is one wallet in every Sequentia wallet); the
+  faucet card reads which assets the wallet has received, says so on their buttons,
+  and shows a refusal in the faucet's own words.
 - Icons: `node scripts/gen-icons.mjs`
 - Rebuild the SWK wasm (needs the SWK checkout + clang):
   ```sh

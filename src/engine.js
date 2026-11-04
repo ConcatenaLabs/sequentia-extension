@@ -309,6 +309,13 @@ export function btcWindow() {
   return { lim: Math.max(btcScanState.externalNext, btcScanState.changeNext) + 20, changeNext: btcScanState.changeNext };
 }
 
+// The scriptPubKey of the wallet's first receive address (index 0), which names the wallet to
+// the testnet faucet (vendor/faucet-wallet.js).
+export function firstScriptPubKey() {
+  if (!wollet) throw new Error('wallet is locked');
+  return wollet.address(0).address().scriptPubkey().bytes();
+}
+
 export function currentAddress(confidential = false) {
   if (!wollet) throw new Error('wallet is locked');
   const r = wollet.address(addrIndex == null ? undefined : addrIndex);

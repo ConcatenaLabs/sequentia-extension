@@ -10,6 +10,7 @@ import { chainGenesis } from '../src/chain-genesis.js';
 import { DEFAULT_WORDS, heldAssetList, anchorDepth } from '../vendor/default-arca.js';
 import { BTC_WORDS } from '../vendor/btc-ark.js';
 import { SPEED_WORDS } from '../vendor/speed-up.js';
+import { FAUCET_WORDS, faucetLabel } from '../vendor/faucet-wallet.js';
 import { createEngine as createUserTrade } from '../vendor/user-trade.js';
 import { mountUserComposer } from '../vendor/user-composer.js';
 import { attachChooser, PICKER_WORDS } from '../vendor/asset-picker.js';
@@ -1248,6 +1249,7 @@ function applyMode() {
   $('recvDefault').classList.toggle('hide', !d);
   $('recvDev').classList.toggle('hide', d);
   $('faucetCard').classList.remove('hide');
+  paintFaucet();
   if (!d && !$('tTrade').classList.contains('hide')) tab('balance');
 }
 
@@ -1306,6 +1308,21 @@ $('btnDNew').onclick = () => { $('recvDStatus').textContent = ''; renderDefaultR
 { let t = null; $('recvDAmt').addEventListener('input', () => { clearTimeout(t); t = setTimeout(() => { recvWatch++; renderDefaultReceive(); }, 600); }); }
 
 // ---- the testnet faucet: it pays the receive code ----
+// It pays each asset once per wallet: a button whose asset this wallet has received says so.
+$('faucetRule').textContent = FAUCET_WORDS.rule;
+let faucetGot = new Set();
+function markFaucet() {
+  for (const x of document.querySelectorAll('#faucetBtns button')) {
+    const label = faucetLabel(x.dataset.faucet);
+    const got = faucetGot.has(label);
+    x.textContent = got ? FAUCET_WORDS.received(label) : label;
+    x.disabled = got;
+  }
+}
+async function paintFaucet() {
+  try { const r = await rpc('default.faucetReceived', {}); if (r && r.claimed) { faucetGot = new Set(r.claimed); markFaucet(); } }
+  catch (e) { console.warn('[faucet] what this wallet has received:', e.message); }
+}
 for (const b of document.querySelectorAll('#faucetBtns button')) b.onclick = async () => {
   const btns = [...document.querySelectorAll('#faucetBtns button')];
   btns.forEach((x) => { x.disabled = true; });
@@ -1315,8 +1332,11 @@ for (const b of document.querySelectorAll('#faucetBtns button')) b.onclick = asy
     $('faucetStatus').className = 'status ok'; $('faucetStatus').textContent = r.text;
     refreshOverview();
     if (isDefault()) renderDefaultReceive();
-  } catch (e) { $('faucetStatus').className = 'status err'; $('faucetStatus').textContent = 'The faucet could not pay: ' + e.message; }
-  finally { btns.forEach((x) => { x.disabled = false; }); }
+  } catch (e) {
+    $('faucetStatus').className = 'status err';
+    // The faucet's own refusal is a sentence a person can act on; anything else is a failure.
+    $('faucetStatus').textContent = /from the faucet\.|the faucet has already/i.test(e.message) ? e.message : 'The faucet could not pay: ' + e.message;
+  } finally { btns.forEach((x) => { x.disabled = false; }); await paintFaucet(); }
 };
 
 // ---- send: one recipient field ----

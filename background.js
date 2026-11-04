@@ -616,6 +616,7 @@ const uiMethods = {
   'default.receiveCode': async ({ sats, fresh }) => await dm.receiveCode({ sats, fresh }),
   'default.invoiceReceived': async ({ hash }) => await dm.invoiceReceived(hash),
   'default.faucet': async ({ asset }) => await dm.faucet(asset || ''),
+  'default.faucetReceived': async () => ({ claimed: await dm.faucetReceived() }),
   'default.prepareSend': async (p) => await dm.prepareSend(p || {}),
   'default.confirmSend': async (p) => { const r = await dm.confirmSend(p || {}); engine.sync().catch(() => {}); return r; },
   'default.joined': async () => ({ joined: !!(await leaves.config()), open: !!((await leaves.status().catch(() => ({}))).open), ark: await dm.arkIsOpen(),

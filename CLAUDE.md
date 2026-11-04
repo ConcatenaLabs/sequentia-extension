@@ -133,7 +133,7 @@ wasm. Read this before changing anything.
   `vendor/seqob.js`, `vendor/covenant.js`, `vendor/covenant-order.js`, `vendor/covenant-flow.js`,
   `vendor/covenant-fill-host.js`, `vendor/noble-ciphers.js`, `vendor/contracts.js`, `vendor/bolt11.js`,
   `vendor/lnupgrade.js`, `vendor/own-txs.js`, `vendor/stake-records.js`,
-  `vendor/default-arca.js`, `vendor/pay-code.js`, `vendor/btc-ark.js`, `vendor/lightning-to-ark.js`, `vendor/speed-up.js`,
+  `vendor/default-arca.js`, `vendor/pay-code.js`, `vendor/faucet-wallet.js`, `vendor/btc-ark.js`, `vendor/lightning-to-ark.js`, `vendor/speed-up.js`,
   `vendor/user-trade.js`, `vendor/user-trade-btc.js`, `vendor/user-composer.js`,
   `vendor/asset-picker.js`, `vendor/market-view.js`, `vendor/chart.js`, `vendor/indicators.js`,
   `vendor/vendor/lightweight-charts/` (`vendor/` mirrors the web wallet's root, so the market
