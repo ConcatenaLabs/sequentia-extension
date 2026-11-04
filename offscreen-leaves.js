@@ -196,6 +196,13 @@ async function sync(by) {
   S.heldFor = null;
   S.lastSync = { at: Date.now(), by };
   console.info(`[leaves] sync (${by}): mailbox accepted ${((r.mailbox && r.mailbox.accepted) || []).length}`);
+  // The library's catch-up with the phrase's other wallets (at most every ten minutes): coins they
+  // made taken in, coins of this store they gave up dropped.
+  const cu = r.caught_up;
+  if (cu && cu.error) console.info(`[leaves] catch up: ${cu.error}`);
+  else if (cu && ((cu.restored || []).length || (cu.given_elsewhere || []).length)) {
+    console.info(`[leaves] caught up: ${(cu.restored || []).length} coin(s) taken in, ${(cu.given_elsewhere || []).length} given up by another wallet of the phrase`);
+  }
   arrivals(r.mailbox);
   emit('leafSynced', { by, mailbox: r.mailbox || null });
   try {
