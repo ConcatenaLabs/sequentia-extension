@@ -36,6 +36,7 @@ import { buildPayCode, readPayCode, expandRequest } from '../vendor/pay-code.js'
 import { BTC_WORDS, destination } from '../vendor/btc-ark.js';
 import { decodeBolt11 } from '../vendor/bolt11.js';
 import { forbiddenIn } from '../vendor/user-trade.js';
+import { faucetWalletId, faucetClaimed, faucetAlreadyPaid } from '../vendor/faucet-wallet.js';
 
 const CODE_KEY = 'ext.default.code';     // { [walletTag]: { text, owner, until } }
 const ARK_SUM_KEY = 'ext.ark.sum';       // { [walletTag]: { total, spendable, arriving } }
@@ -236,16 +237,34 @@ export async function receiveCode({ sats = null, fresh = false } = {}) {
 export async function invoiceReceived(hash) { return await arkHost('received', { hash }); }
 
 // ---- the testnet faucet: it pays the receive code, else the address ----
+// It pays each asset once per wallet: every request names the wallet by its id, the same one
+// phrase has in every Sequentia wallet (vendor/faucet-wallet.js).
+async function faucetWallet() {
+  await engine.ensureOpen();
+  return await faucetWalletId(engine.firstScriptPubKey());
+}
+// -> the faucet labels of the assets this wallet has received from it, or null when the faucet
+// could not be asked.
+export async function faucetReceived() {
+  const got = await faucetClaimed(fetch, FAUCET_URL, await faucetWallet());
+  return got ? [...got] : null;
+}
 export async function faucet(asset) {
+  const wallet = await faucetWallet();
   const post = async (body) => {
-    const r = await fetch(FAUCET_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const r = await fetch(FAUCET_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...body, wallet }) });
     const j = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+    if (!r.ok) {
+      const e = new Error(j.error || ('HTTP ' + r.status));
+      if (faucetAlreadyPaid(r.status, j)) e.alreadyPaid = true;
+      throw e;
+    }
     return j;
   };
   const what = (j) => `${Number(j.amount).toLocaleString('en-US', { maximumFractionDigits: 8 })} ${j.asset}`;
   const t0 = Date.now();
-  if ((await isDefault()) && (await leafOpen())) {
+  // BTC is paid on chain to the wallet's address, which boards it into the Bitcoin ark by itself.
+  if (asset !== 'BTC' && (await isDefault()) && (await leafOpen())) {
     try {
       const code = await leafCode(false);
       const j = await post(asset ? { request: code.text, asset } : { request: code.text });
@@ -254,11 +273,16 @@ export async function faucet(asset) {
       await leaves.hostOp('sync').catch(() => {});
       console.info(`[faucet] paid the receive code in ${Date.now() - t0} ms`);
       return { text: DEFAULT_WORDS.faucetReceived(what(j)), to: 'code', ms: Date.now() - t0 };
-    } catch (e) { console.warn('[faucet] to the receive code:', e.message, '; to the address instead'); }
+    } catch (e) {
+      // The wallet has the asset: the address is the same wallet, so it is not asked again.
+      if (e.alreadyPaid) throw e;
+      console.warn('[faucet] to the receive code:', e.message, '; to the address instead');
+    }
   }
   await engine.ensureOpen();
   const j = await post(asset ? { address: engine.currentAddress(false).address, asset } : { address: engine.currentAddress(false).address });
   engine.sync().catch(() => {});
+  if (j.asset === 'BTC') return { text: BTC_WORDS.sentBlock(j.amount).replace(/^Sent/, 'The faucet sent'), to: 'address', ms: Date.now() - t0 };
   return { text: DEFAULT_WORDS.faucetReceived(what(j)), to: 'address', ms: Date.now() - t0 };
 }
 

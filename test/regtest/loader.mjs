@@ -23,7 +23,8 @@ export async function load(url, context, nextLoad) {
     if (cfg.unbondDepth != null) s = replaceOnce(s, 'export const UNBOND_ANCHOR_DEPTH = 2016;', `export const UNBOND_ANCHOR_DEPTH = ${JSON.stringify(cfg.unbondDepth)};`, url);
     return { ...r, source: s };
   }
-  if (url.endsWith('/src/engine.js')) {
+  // Without a chain's genesis the engine keeps the testnet's network (a drive that needs no chain).
+  if (url.endsWith('/src/engine.js') && cfg.genesis) {
     const s = replaceOnce(String(r.source), 'network = Network.sequentiaTestnet();',
       `network = Network.regtestWithGenesis(new AssetId(${JSON.stringify(cfg.policyAsset)}), ${JSON.stringify(cfg.genesis)});`, url);
     return { ...r, source: s };
