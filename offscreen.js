@@ -141,7 +141,7 @@ async function runSwap(job, p, marks) {
     progress(job, 'Ensuring inbound capacity on your receiving leg…');
     try {
       if (p.side === 'buy') await seqlnChannelInbound({ node_key: provBase.key, asset: p.base, amount: Number(p.recvAtoms) });
-      else await seqlnChannelInbound({ node_key: provCounter.key, asset: p.counterKind === 'BTC' ? undefined : p.counterKind, amount: Number(p.recvAtoms) });
+      else await seqlnChannelInbound({ node_key: provCounter.key, asset: p.counterKind, amount: Number(p.recvAtoms) });
     } catch {}
     mark('inbound-ensured');
     await waitHintable(job, recvProv.key, recvAsset, recvLabel);
