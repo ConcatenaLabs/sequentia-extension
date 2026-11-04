@@ -5,6 +5,9 @@
 // default mode never says; then Send asked for AMOUNT of it, which needs what has not vested: it
 // must be refused with the sentence, nothing signed.
 //
+// After the date (AFTER=1, with TO a receive code to pay): the line is gone, the figure still
+// holds the coins (taken up by the wallet itself), and Send of AMOUNT to TO is sent.
+//
 //   CHROME=… PHRASE_FILE=… ASSET=<hex> TICKER=EURX AMOUNT=0.05 \
 //     node test/leaves/vesting-live-check.mjs <evidence-dir> <work-dir>
 //
@@ -42,6 +45,7 @@ async function main() {
   note('version ' + (await pop.eval('chrome.runtime.getManifest().version')));
   await pop.click('[data-tab=balance]');
   let row = null;
+  if (process.env.AFTER === '1') return after(pop);
   for (let i = 0; i < 150; i++) { row = await rowOf(pop, ASSET); if (row && row.vests.length) break; await sleep(4000); }
   check(`default mode: the ${TICKER} row shows what vests, with its date`, !!row && new RegExp(`^[0-9.,]+ ${esc(TICKER)} vests on \\d{1,2} [A-Z][a-z]+ \\d{4}$`).test(row.vests[0] || ''), row);
   check('the row carries no developer word and none of the words default mode never says', !!row && developerWordsIn(row.text).length === 0 && forbiddenIn(row.text).length === 0, row && [developerWordsIn(row.text), forbiddenIn(row.text)]);
@@ -57,5 +61,37 @@ async function main() {
   check(`Send of ${AMOUNT} ${TICKER} before the date: refused with the sentence, nothing signed`, new RegExp(`^${esc(AMOUNT)} ${esc(TICKER)} of this vests on \\d{1,2} [A-Z][a-z]+ \\d{4}, and can be used from then\\. Nothing has moved\\.$`).test(err) && !(await pop.eval("!!document.querySelector('.modal')")), { err, to: to.slice(0, 12) });
   await pop.shot(join(out, 'send-refused.png'));
 }
+async function after(pop) {
+  let row = null;
+  for (let i = 0; i < 150; i++) {
+    row = await rowOf(pop, ASSET);
+    if (row && !row.vests.length && /[1-9]/.test(row.figure) && !/arriving/i.test(row.text)) break;
+    await sleep(4000);
+  }
+  check(`after the date: no vesting line, and the ${TICKER} figure holds the coins`, !!row && !row.vests.length && /[1-9]/.test(row.figure), row);
+  await pop.shot(join(out, 'after-row.png'));
+  const to = process.env.TO || '';
+  let sent = '', err = '';
+  for (let tries = 0; tries < 10 && !/^Sent /.test(sent); tries++) {
+    await pop.click('[data-tab=send]'); await sleep(800);
+    await pop.eval(`(()=>{ document.querySelector('#sendDErr').textContent=''; const s=document.querySelector('#sendDAsset'); s.value=${JSON.stringify(ASSET)}; s.dispatchEvent(new Event('change')); return s.value })()`);
+    await pop.set('sendDTo', to); await pop.set('sendDAmt', AMOUNT);
+    await pop.click('#btnDReview');
+    await pop.waitFor("document.querySelector('#sendDErr').textContent.length > 0 || !!document.querySelector('.modal button.primary')", 120000).catch(() => {});
+    err = (await pop.text('#sendDErr')).trim();
+    if (!err) {
+      await pop.eval("document.querySelector('.modal button.primary').click()");
+      await pop.waitFor("[...document.querySelectorAll('.modal .status')].some(s=>/^Sent |declined|refused|nothing|arriving/i.test(s.textContent))", 180000).catch(() => {});
+      sent = await pop.eval("[...document.querySelectorAll('.modal .status')].map(s=>s.textContent).join(' | ')");
+    }
+    if (/^Sent /.test(sent)) break;
+    note(`     try ${tries + 1}: ${err || sent}`);
+    await pop.eval("document.querySelectorAll('.modal').forEach(m=>m.remove())");
+    await sleep(30000);
+  }
+  check(`after the date: Send of ${AMOUNT} ${TICKER} is sent`, /^Sent /.test(sent), err || sent);
+  await pop.shot(join(out, 'after-sent.png'));
+}
+
 main().then(async () => { await b.close().catch(() => {}); note(`done, ${failures} failed`); process.exit(failures ? 1 : 0); },
   async (e) => { note('FAIL ' + (e && e.stack || e)); await b.close().catch(() => {}); process.exit(1); });
