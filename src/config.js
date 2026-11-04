@@ -42,7 +42,9 @@ export const ARCA = {
 };
 // The Bitcoin ark that holds default mode's BTC (vendor/btc-ark.js): its server (gRPC-web) and
 // the Esplora server its wallet reads testnet4 from.
-export const BTC_ARK = { server: BASE, esplora: T4_API, network: 'testnet4' };
+// The Bitcoin ark, and the watchtower this site runs for it: the wallet deposits its coins there
+// only once tower_deposits is true (vendor/btc-ark.js towerPass).
+export const BTC_ARK = { server: BASE, esplora: T4_API, network: 'testnet4', towers: [BASE + '/btc-watchtower'], tower_deposits: false };
 // The testnet faucet, which pays a receive code (or an address).
 export const FAUCET_URL = BASE + '/faucet';
 // The pairs the trade composer offers in default mode (the web wallet's user-mode/pairs.json).

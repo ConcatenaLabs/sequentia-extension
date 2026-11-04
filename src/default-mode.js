@@ -76,7 +76,13 @@ export async function arkIsOpen() { return await arkOpen(); }
 async function arkOpen() {
   try { return !!(await arkHost('status')).open; } catch { return false; }
 }
+// What the ark can claim of Lightning payments to it, in sats, as its host last said: the move of a
+// BTC channel to the ark (src/ln-to-ark.js) reads it at once, to count a payment the ark already
+// holds once.
+let arkClaimableNow = null;
+export function arkClaimable() { return arkClaimableNow; }
 export async function rememberArkSum(f) {
+  if (f && f.claimable != null) { try { arkClaimableNow = BigInt(f.claimable); } catch {} }
   const tag = await walletTag();
   if (!tag || !f) return;
   const all = (await stGet('local', ARK_SUM_KEY)) || {};
