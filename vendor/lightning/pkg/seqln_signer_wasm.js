@@ -188,9 +188,10 @@ export class Signer {
      * @param {Uint8Array} remote_funding
      * @param {boolean} option_static_remotekey
      * @param {boolean} option_anchors
+     * @param {boolean} option_tcov
      * @returns {boolean}
      */
-    armChannel(node_id, dbid, funding_sats, funding_txid, funding_txout, local_to_self_delay, remote_to_self_delay, remote_revocation, remote_payment, remote_htlc, remote_delayed, remote_funding, option_static_remotekey, option_anchors) {
+    armChannel(node_id, dbid, funding_sats, funding_txid, funding_txout, local_to_self_delay, remote_to_self_delay, remote_revocation, remote_payment, remote_htlc, remote_delayed, remote_funding, option_static_remotekey, option_anchors, option_tcov) {
         const ptr0 = passArray8ToWasm0(node_id, wasm.__wbindgen_malloc);
         const len0 = WASM_VECTOR_LEN;
         const ptr1 = passArray8ToWasm0(funding_txid, wasm.__wbindgen_malloc);
@@ -205,7 +206,7 @@ export class Signer {
         const len5 = WASM_VECTOR_LEN;
         const ptr6 = passArray8ToWasm0(remote_funding, wasm.__wbindgen_malloc);
         const len6 = WASM_VECTOR_LEN;
-        const ret = wasm.signer_armChannel(this.__wbg_ptr, ptr0, len0, dbid, funding_sats, ptr1, len1, funding_txout, local_to_self_delay, remote_to_self_delay, ptr2, len2, ptr3, len3, ptr4, len4, ptr5, len5, ptr6, len6, option_static_remotekey, option_anchors);
+        const ret = wasm.signer_armChannel(this.__wbg_ptr, ptr0, len0, dbid, funding_sats, ptr1, len1, funding_txout, local_to_self_delay, remote_to_self_delay, ptr2, len2, ptr3, len3, ptr4, len4, ptr5, len5, ptr6, len6, option_static_remotekey, option_anchors, option_tcov);
         if (ret[2]) {
             throw takeFromExternrefTable0(ret[1]);
         }
@@ -304,6 +305,21 @@ export class Signer {
         return this;
     }
     /**
+     * The payment limit for one asset (`asset` a display-order asset id or
+     * `"btc"`), in its atoms per period; undefined when it has none.
+     * @param {string} asset
+     * @returns {number | undefined}
+     */
+    paymentLimit(asset) {
+        const ptr0 = passStringToWasm0(asset, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.signer_paymentLimit(this.__wbg_ptr, ptr0, len0);
+        if (ret[3]) {
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        return ret[0] === 0 ? undefined : ret[1];
+    }
+    /**
      * The channels that predate validation (they came from the store of a
      * device that validated nothing, and this device signs no commitment
      * step for them; their peer closes them), as JSON: an array of
@@ -339,6 +355,23 @@ export class Signer {
         return v2;
     }
     /**
+     * Give the rate the reference limit is converted at for one asset
+     * (`asset` a display-order asset id or `"btc"`), as the node's fee
+     * exchange rates give it: reference atoms per 10^8 atoms of the asset.
+     * `rate` undefined, null or 0 forgets it, and the asset is then held to
+     * 10,000,000 of its own atoms.
+     * @param {string} asset
+     * @param {number | null} [rate]
+     */
+    setAssetRate(asset, rate) {
+        const ptr0 = passStringToWasm0(asset, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.signer_setAssetRate(this.__wbg_ptr, ptr0, len0, !isLikeNone(rate), isLikeNone(rate) ? 0 : rate);
+        if (ret[1]) {
+            throw takeFromExternrefTable0(ret[0]);
+        }
+    }
+    /**
      * Turn the M4 validating policy on (`enforce`) or off (`permissive`). The
      * browser build has no env, so this is how a caller selects enforce mode.
      * @param {boolean} enforce
@@ -349,8 +382,8 @@ export class Signer {
     /**
      * Set the payment limit, in atoms per period, for one asset (`asset` a
      * display-order asset id or `"btc"`) or, with `asset` undefined, the
-     * default for every asset. `atoms` undefined or null: no limit. The
-     * default is 10,000,000 atoms of each asset per day.
+     * same number of atoms for every asset in place of the default in the
+     * reference unit. `atoms` undefined or null: no limit.
      * @param {string | null} [asset]
      * @param {number | null} [atoms]
      */
@@ -369,6 +402,19 @@ export class Signer {
      */
     setPaymentPeriod(seconds) {
         const ret = wasm.signer_setPaymentPeriod(this.__wbg_ptr, seconds);
+        if (ret[1]) {
+            throw takeFromExternrefTable0(ret[0]);
+        }
+    }
+    /**
+     * Set the default payment limit, in reference atoms per period, that
+     * every asset without a limit of its own is held to at its rate
+     * (`setAssetRate`). `reference` undefined or null: no limit. The default
+     * is 1,000 reference units (10^11 reference atoms) a day.
+     * @param {number | null} [reference]
+     */
+    setReferencePaymentLimit(reference) {
+        const ret = wasm.signer_setReferencePaymentLimit(this.__wbg_ptr, !isLikeNone(reference), isLikeNone(reference) ? 0 : reference);
         if (ret[1]) {
             throw takeFromExternrefTable0(ret[0]);
         }

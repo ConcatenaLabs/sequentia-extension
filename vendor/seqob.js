@@ -157,8 +157,14 @@ export function encodeSwapRequest(reqJson){
 // finalize only needs the maker's co-signed PSET in `transaction`).
 export function decodeSwapAccept(bytes){
   const f = readFields(bytes);
+  // A seqdex.v1.SwapFail shares fields 1-2 and has the failure code at 3 (a varint) and its
+  // message at 4: a maker that cannot co-sign answers one at once, sealed like an accept.
+  const v3 = f[3] && f[3][0];
+  if (typeof v3 === 'bigint' || (f[4] && f[4][0] instanceof Uint8Array && !firstStrSafe(f, 3)))
+    return { id: firstStr(f,1), request_id: firstStr(f,2), transaction: '', failure_code: typeof v3 === 'bigint' ? Number(v3) : 0, failure_message: firstStr(f,4) };
   return { id: firstStr(f,1), request_id: firstStr(f,2), transaction: firstStr(f,3) };
 }
+function firstStrSafe(fields, n){ const v = fields[n] && fields[n][0]; return (v instanceof Uint8Array) ? td.decode(v) : ''; }
 
 // seqdex.v1.SwapComplete -> wire bytes.
 export function encodeSwapComplete(c){
@@ -517,10 +523,28 @@ export function normRelayOffer(o){
   }
   return o;
 }
+// What each resting offer can still be filled for, in base atoms, as the relay reports it (the
+// book's statuses, and order_status deltas on the live book): a part fill lowers it while the
+// offer's signed amounts stay as signed, and a take past it is refused by the relay ("take_amount
+// exceeds active_amount"). Keyed by maker:offer_id; read with offerActive().
+const _active = new Map();
+function noteActive(st){
+  const id = st && (st.offer_id || st.offerId), mk = st && (st.maker_pubkey || st.makerPubkey);
+  const a = st && (st.active_amount ?? st.activeAmount);
+  if (!id || a == null) return;
+  _active.set(String(mk || '').toLowerCase() + ':' + id, BigInt(a));
+}
+// The offer's remaining size in base atoms: what the relay last said, never above what it signed.
+export function offerActive(o){
+  const base = BigInt(o.base_amount ?? o.baseAmount ?? 0);
+  const a = _active.get(String(o.maker_pubkey || o.makerPubkey || '').toLowerCase() + ':' + (o.offer_id || o.offerId));
+  return (a == null || a > base) ? base : (a < 0n ? 0n : a);
+}
 export async function fetchBook(baseAsset, quoteAsset, opts){
   const conf = !!(opts && opts.confidential);
   const q = conf ? '?confidential=1' : '';
   const j = await getJSON(`/v1/market/${baseAsset}/${quoteAsset}/orderbook${q}`, conf ? SEQOB_CONF : undefined);
+  for (const st of (j.statuses || j.Statuses || [])) noteActive(st);
   const offers = (j.offers || j.Offers || []).map(o => { normRelayOffer(o); return { ...o, _verified: verifyOffer(o) }; });
   return { pair: j.pair || { base_asset: baseAsset, quote_asset: quoteAsset }, offers };
 }
@@ -695,6 +719,9 @@ export async function lift(offer, takeAtoms, feeAsset, hooks){
       if (sm && sm.ciphertext){
         const opened = await crypter.open(b64decode(sm.ciphertext));
         acc = decodeSwapAccept(opened);
+        // The maker refused the co-sign and said so: stop now, nothing is signed.
+        if (acc.failure_message != null && !acc.transaction)
+          throw new Error('maker refused: ' + (acc.failure_message || 'the maker could not co-sign this lift') + '; this wallet signed nothing, so nothing was traded');
       }
     }
     if (!acc || !acc.transaction) throw new Error('no co-signed swap returned by the maker');
@@ -749,6 +776,7 @@ export function openRelay(markets, handlers){
     }
     if (created && handlers.onOfferCreated){ try { normRelayOffer(created); handlers.onOfferCreated({ ...created, _verified: verifyOffer(created) }); } catch {} }
     if (matched && handlers.onMatched)         { try { handlers.onMatched(matched); } catch {} }
+    if (status) noteActive(status);
     if (status && handlers.onOrderStatus)      { try { handlers.onOrderStatus(status); } catch {} }
     if (removed && handlers.onOfferRemoved)    { try { handlers.onOfferRemoved(removed); } catch {} }
     if (m.error && handlers.onError)           { try { handlers.onError(m.error); } catch {} }
@@ -780,4 +808,4 @@ export function makerKeyFromSeed(seedHex){
 }
 
 // test surface
-export const __test__ = { encodeSwapRequest, decodeSwapAccept, encodeSwapComplete, canonicalOfferBytes, encodeCovenantTerms, signOffer, verifyOffer, bytesToHex, hexToBytes, derEncode, derDecode };
+export const __test__ = { noteActive, encodeSwapRequest, decodeSwapAccept, encodeSwapComplete, canonicalOfferBytes, encodeCovenantTerms, signOffer, verifyOffer, bytesToHex, hexToBytes, derEncode, derDecode };

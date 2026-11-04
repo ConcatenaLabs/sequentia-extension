@@ -13,7 +13,7 @@
 // The two legs settle atomically on one preimage. Both hosted nodes are KEYLESS
 // (no hsm_secret): the browser device is the sole signer for BOTH. It signs only
 // commitments it has validated and approves each payment only within its payment
-// limit for the asset (SEQ_LN_PAYMENT_LIMITS). That does not protect the user
+// limit set for the asset, when a page sets one (SEQ_LN_PAYMENT_LIMITS). That does not protect the user
 // from an operator who runs both the hosted node and its channel peer: the node
 // still collects the device's signature on each commitment before the device
 // revokes it (the preempt slot), so the two together could broadcast a revoked
@@ -34,8 +34,11 @@
 // ---------------------------------------------------------------------------
 
 import { makeNoteStore, channelFate } from './lnupgrade.js';
+import { makeCreditStore } from './lncredit.js';
 
 const W = (typeof window !== 'undefined') ? window : {};
+// No limit on Lightning payments: the signer's own default reference limit, lifted.
+const NO_PAYMENT_LIMIT = Object.freeze({ reference: null });
 
 const DEFAULTS = {
   lspUrl: W.SEQ_LSP_URL
@@ -58,12 +61,13 @@ const DEFAULTS = {
   // The wasm signer SDK (vendored under /lightning). Dynamic-imported so a wallet
   // with LN unconfigured never loads the 1.5MB wasm.
   sdkPath: W.SEQ_LSP_SDK || './lightning/seqln-signer-sdk.js',
-  // The device's payment limits: { default: atoms|null, period: seconds,
-  // assets: { <asset id>|'btc': atoms|null } }, each in the asset's own atoms,
-  // null for no limit. The device approves a payment only within what its
-  // limit leaves for the period. Unset, the device's own default applies
-  // (10,000,000 atoms of each asset per day).
-  paymentLimits: W.SEQ_LN_PAYMENT_LIMITS || null,
+  // The device's payment limits. None: the wallet sets no limit on what its
+  // Lightning payments may spend, so it lifts the signer's own default (1,000
+  // reference units a day) with `reference: null`. A page may set limits with
+  // window.SEQ_LN_PAYMENT_LIMITS: { default: atoms|null, period: seconds,
+  // assets: { <asset id>|'btc': atoms|null } }, `default` the same atoms of
+  // every asset, `assets` an asset's own limit in its atoms, null none.
+  paymentLimits: W.SEQ_LN_PAYMENT_LIMITS || NO_PAYMENT_LIMIT,
 };
 
 const NODES = ['asset', 'btc'];
@@ -91,7 +95,7 @@ const nodeState = { asset: freshNode(), btc: freshNode() };
 function cloneCfg(src) {
   return {
     lspUrl: src.lspUrl, token: src.token, sdkPath: src.sdkPath, sdk: src.sdk || null, wsBase: src.wsBase || null,
-    paymentLimits: src.paymentLimits || null,
+    paymentLimits: src.paymentLimits || NO_PAYMENT_LIMIT,
     nodes: {
       asset: { ...src.nodes.asset },
       btc: { ...src.nodes.btc },
@@ -220,7 +224,7 @@ export function clearSignerRefusal(label) { _lastRefusal.delete(label); }
 // refusal hooks, and the configured payment limits.
 function signerOpts(key) {
   const o = { channelStore: chStoreFor(key), onUntracked: onUntrackedFor(key), onReject: onRejectFor(key),
-    onPredating: onPredatingFor(key) };
+    onPredating: onPredatingFor(key), onCredit: onCreditFor(key) };
   if (CFG.paymentLimits) o.paymentLimits = CFG.paymentLimits;
   return o;
 }
@@ -253,6 +257,22 @@ export function dismissPredating(label, { closedOnly = false, node = null, oncha
   noteStore.dismiss(label, { channels, onchainMsat: msat });
 }
 export function idleDismissed(label, onchainMsat) { return noteStore.idleDismissed(label, onchainMsat); }
+
+// Credit notes (lncredit.js): what a node's provider owes the user, signed while the device was
+// away. The device reports the notes it holds whenever it learns one (the SDK's `onCredit`); the
+// wallet keeps the latest of each channel, so it holds what a claim needs on its own.
+const creditStore = makeCreditStore({
+  getItem: (k) => localStorage.getItem(k),
+  setItem: (k, v) => localStorage.setItem(k, v),
+});
+function onCreditFor(label) {
+  return (notes) => {
+    if (!creditStore.record(label, notes)) return;
+    if (onChange) { try { onChange(seqlnState()); } catch {} }
+  };
+}
+// { [label]: [note, ...] }: each node's latest note per channel.
+export function creditNotes() { return creditStore.notes(); }
 
 function onRejectFor(label) {
   return ({ name, reason }) => {
@@ -519,6 +539,7 @@ async function lspFetch(path, { allowNotOk = false, ...opts } = {}) {
     const detail = j.detail ? String(j.detail).trim().split('\n').filter(Boolean).slice(-2).join(' · ') : '';
     const err = new Error((j.error || ('HTTP ' + r.status)) + (detail ? ` — ${detail.slice(0, 300)}` : ''));
     err.status = r.status;
+    err.body = j;   // the answer's own fields (e.g. lp_short, fundable), for callers that word them
     throw err;
   }
   return j;
@@ -577,6 +598,13 @@ export function seqlnNodeOnchain(node_key) {
   return lspFetch('/node/onchain?node=' + encodeURIComponent(node_key));
 }
 
+// Send every coin of one of the device's OWN nodes outside its channels to `destination`, the
+// wallet's own address. The device signs it only once the wallet has named that address to it
+// (approveCloseDestination), so call that first. Returns { txid, destination }.
+export function seqlnNodeWithdraw(node_key, destination) {
+  return lspFetch('/node/withdraw', { method: 'POST', body: JSON.stringify({ node: node_key, destination }) });
+}
+
 // --- Sub-asset BUY (pay BTC on-chain, receive asset over Lightning) HODL primitives ------------
 // Ensure inbound asset liquidity to the user's OWN node so the maker can pay the asset over LN
 // (JIT 0-conf inbound channel). amount in ASSET SATS.
@@ -585,6 +613,13 @@ export function seqlnNodeOnchain(node_key) {
 export function seqlnChannelInbound({ node_key, asset, amount, mode, fee_txid, months }) {
   return lspFetch('/channel/inbound', { method: 'POST', timeoutMs: 180_000,
     body: JSON.stringify({ node_key, asset, amount, mode, fee_txid, months }) });
+}
+// Pay the fee for room to receive BTC over Lightning, from the user's own BTC node: without
+// payment_hash the service invoices what this node owes ({ owed, bolt11, payment_hash }, or owed 0);
+// with it, it checks that invoice was paid and clears the debt ({ settled, paid, owed }).
+export function seqlnInboundSettle({ node_key, asset, payment_hash }) {
+  return lspFetch('/channel/inbound/settle', { method: 'POST',
+    body: JSON.stringify({ node_key, asset, ...(payment_hash ? { payment_hash } : {}) }) });
 }
 // The price of room to receive `amount` atoms of `asset` over Lightning, and where a prepaid fee
 // goes. Returns the service's answer as it is, an out-of-range amount included ({ ok:false, reason,
@@ -604,10 +639,13 @@ export async function seqlnInboundQuote({ asset, amount, node_key, months }) {
 // LSP-sized bridge_terms.hold_expiry_secs so its hold on H stays SETTLEABLE until strictly after the maker's
 // latest asset claim (T_seq) + margin — without it a short hold could lapse before the maker reveals P,
 // stranding the taker (dead hold, asset gone). Omitted for the sub-asset HODL buy (plugin default).
-export function seqlnNodeInvoice({ node_key, asset, amount, payment_hash, expiry }) {
-  return lspFetch('/node/invoice', { method: 'POST', body: JSON.stringify({ node_key, asset, amount, payment_hash, expiry }) });
+// `bolt11: true` (with a payment_hash) also asks for a BOLT11 under H that the node signed, for a
+// payer that pays only an invoice; the node still never learns P (lsp/hold-bolt11.mjs).
+export function seqlnNodeInvoice({ node_key, asset, amount, payment_hash, expiry, bolt11, description }) {
+  return lspFetch('/node/invoice', { method: 'POST', body: JSON.stringify({ node_key, asset, amount, payment_hash, expiry, ...(bolt11 ? { bolt11: true } : {}), ...(description ? { description } : {}) }) });
 }
-// Poll the HODL invoice state on the user's node: { state, held /* maker's payment accepted+held */, settled }.
+// Poll the HODL invoice state on the user's node: { state, held /* maker's payment accepted+held */, settled,
+// amount_msat /* registered */, received_msat /* held */, htlc_expiry, btc_tip }.
 export function seqlnInvoiceStatus({ node_key, payment_hash }) {
   return lspFetch('/node/invoice-status?node=' + encodeURIComponent(node_key) + '&payment_hash=' + encodeURIComponent(payment_hash));
 }
@@ -621,6 +659,17 @@ export function seqlnNodeSettle({ node_key, payment_hash, preimage }) {
 export function seqlnNodeReceive({ node_key, amount, description }) {
   return lspFetch('/node/receive', { method: 'POST', body: JSON.stringify({ node_key, amount, description }) });
 }
+// What the user's own hosted node received and paid over Lightning: { items: [{ dir: 'in'|'out',
+// kind: 'invoice'|'hold'|'pay', asset, amount_msat, fee_msat, at (unix seconds), payment_hash,
+// description, note }] }, newest first: paid invoices, settled holds and completed payments.
+export function seqlnNodeHistory(node_key) {
+  return lspFetch('/node/history?node_key=' + encodeURIComponent(node_key), { method: 'GET' });
+}
+// Keep the account of a settled swap on the user's own hosted node, read back by /node/history as
+// the item's `note`: { pay: { asset, atoms, rail }, recv: { asset, atoms, rail }, title }.
+export function seqlnSwapNote({ node_key, payment_hash, note }) {
+  return lspFetch('/node/swap-note', { method: 'POST', body: JSON.stringify({ node_key, payment_hash, note }) });
+}
 // Generic Lightning SEND: the user's own hosted node PAYS `bolt11` (device co-signs every HTLC).
 // Returns { paid, preimage, amount_msat, destination }.
 //
@@ -633,13 +682,22 @@ export function seqlnNodeReceive({ node_key, amount, description }) {
 // (payment_hash === H, amount == the offer price, min_final_cltv can't settle past T_seq) remain the PRIMARY
 // guard; the /node/pay handler now ENFORCES them too: it refuses an invoice whose payment_hash, amount or
 // min_final_cltv disagree, and passes maxCltv to CLN as maxdelay (the direct-hop fallback is bounded alike).
-export function seqlnNodePay({ node_key, bolt11, wantHash, amountMsat, minFinalCltv, maxCltv }) {
+export function seqlnNodePay({ node_key, bolt11, wantHash, amountMsat, minFinalCltv, maxCltv, maxFeeMsat }) {
   const body = { node_key, bolt11 };
+  if (maxFeeMsat != null) body.maxfee_msat = Number(maxFeeMsat);
   if (wantHash) body.wantHash = String(wantHash).toLowerCase();
   if (amountMsat != null) body.amount_msat = Number(amountMsat);
   if (minFinalCltv != null) body.min_final_cltv = Number(minFinalCltv);
   if (maxCltv != null) body.max_cltv = Number(maxCltv);
   return lspFetch('/node/pay', { method: 'POST', body: JSON.stringify(body) });
+}
+// How the node's payments under a hash stand: { state: 'none'|'pending'|'complete'|'failed', preimage }.
+export function seqlnNodePayStatus({ node_key, payment_hash }) {
+  return lspFetch('/node/pay-status?node=' + encodeURIComponent(node_key) + '&payment_hash=' + encodeURIComponent(payment_hash));
+}
+// The route a payment of `bolt11` from the node would take now: { route_found, fee_msat, delay }.
+export function seqlnNodePayQuote({ node_key, bolt11 }) {
+  return lspFetch('/node/pay-quote?node=' + encodeURIComponent(node_key) + '&bolt11=' + encodeURIComponent(bolt11));
 }
 // BARE-HASH Lightning SEND — the user's own hosted node commits an HTLC to `node_id` keyed on `hash`
 // (NO bolt11) with a final-hop CLTV of min_final_cltv blocks. This is the LSP PAYER leg-bridge primitive:

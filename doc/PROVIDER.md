@@ -54,12 +54,21 @@ Returns provider metadata; safe to call before connecting.
 ```js
 { provider: 'sequentia-wallet-extension', version, network: 'sequentia-testnet',
   methods: [...], features: [...],
-  events: ['accountsChanged', 'disconnect', 'modeChanged', 'leafArrived', 'leafSyncDue', 'leafTake'] }
+  events: ['accountsChanged', 'disconnect', 'modeChanged', 'leafArrived', 'leafSyncDue', 'leafTake',
+           'dexProgress', 'dexJobDone'] }
 ```
 
 ### `getNetwork()` — silent
 `{ network: 'sequentia-testnet', genesis: 'ddd11d54…a92e' }`: the network's name
 and its genesis block hash, which a contract instance names as its chain.
+
+### `debugState()` — silent, no connection needed
+`{ lastError, heartbeat }`, the wallet's own diagnostics, for a support page
+that has to tell a dead wallet from a slow one. `lastError` is
+`{ at, msg, src?, line? }` for the last uncaught error in the service worker
+(`null` if none was recorded); `heartbeat` is
+`{ at, bootAt, aliveSecs, stage }`, written while the worker runs. Times are
+milliseconds since the epoch. Neither carries keys, addresses or balances.
 
 ### `connect()` — prompts once per origin
 ```js
@@ -252,6 +261,40 @@ assets cannot travel over Lightning). Returns `{ bolt11 }`.
 Pays a bolt11 invoice from the user's Lightning balance for that asset
 (default BTC). Returns `{ paid: true, preimage }`.
 
+## Bitcoin (parent chain) methods
+
+The wallet holds Bitcoin beside its Sequentia assets. These methods let a site
+that builds a cross-chain contract, such as a loan with Bitcoin collateral,
+name the wallet's Bitcoin side and have it fund and sign that side. Amounts
+are in satoshis, as strings.
+
+### `getBtcAddress({ index? })` — silent, requires connection and an unlocked wallet
+`{ address, index }`: a testnet4 address the wallet owns and watches, at the
+next unused receive index or at `index` when given. A contract that pays coins
+back to the wallet names this address, never a bare key, so the wallet sees and
+can spend what comes back.
+
+### `getBtcPublicKey()` — silent, requires connection and an unlocked wallet
+`{ pubkey_x }`: the x-only key the wallet signs a collateral script with
+(`signBtcTaproot`). It is derived from the seed for this purpose alone and is
+none of the wallet's receive keys, so it holds nothing until a contract puts
+coins under it. Every site gets the same key.
+
+### `prepareBtcSend({ address, amount })` — approval per request
+Builds and signs a testnet4 transaction paying `amount` satoshis to `address`
+from the wallet's Bitcoin coins, and returns it unbroadcast:
+`{ txid, vout, hex }`, where `vout` is the output paying `address`. The site
+broadcasts it (`broadcast({ hex, chain: 'bitcoin' })`) only once the other
+side of its contract is in place.
+
+### `signBtcTaproot({ sighash, display? })` — approval per request
+`{ signature }`: a BIP340 signature, 64 bytes of hex, with the key
+`getBtcPublicKey` returns, over `sighash` (32 bytes of hex, a taproot
+signature hash the site computed). `display.detail` replaces the approval
+window's explanation. The wallet cannot read a contract out of a bare
+signature hash, so the approval shows the hash as given: a site should only
+ask for one over a script the user has already agreed to on that site.
+
 ## v0.2 methods (added for the SeqDEX site)
 
 ### `getUtxos({ asset? })` — silent, requires connection
@@ -319,6 +362,17 @@ documents, or `{ done: true, ok: false, error }` when it failed. Without a
 `jobId` it returns the newest job (plus its `jobId`), so a page that lost the
 id to a restart can still recover the outcome; `{ done: false, none: true }`
 means no job exists.
+
+### DEX job events
+
+Delivered to connected sites while a DEX job (`dexSwapLn`, `dexMarketOrder`,
+`dexPlaceLimit`) runs, as a progress line for a page that shows one; the
+outcome is still `dexJobResult`'s:
+
+- `dexProgress` — `{ text, job? }`, a line of progress in words, with the job
+  id when the step came from the wallet's engine.
+- `dexJobDone` — `{ job }` when that job has finished; read its outcome with
+  `dexJobResult({ jobId: job })`.
 
 ## OpenAMP account methods
 

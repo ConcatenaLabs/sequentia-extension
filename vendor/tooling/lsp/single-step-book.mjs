@@ -47,7 +47,7 @@ export function makerEntries (maker, quotes, { payAsset, receiveAsset }) {
     if (rateNum <= 0n || rateDen <= 0n || max <= 0n || max < min) continue
     const source = q.give_asset === 'BTC' || q.want_asset === 'BTC' ? 'btc-gateway' : 'leaf-maker'
     out.push({ source, id: `${maker}#${q.give_asset}:${q.want_asset}`, maker, rateNum, rateDen,
-      maxReceive: max, minReceive: min > 0n ? min : 1n, lot: 0n, raw: q })
+      maxReceive: max, minReceive: min > 0n ? min : 1n, lot: 0n, raw: q, ...(q.after_next_round ? { soon: true } : {}) })
   }
   return out
 }

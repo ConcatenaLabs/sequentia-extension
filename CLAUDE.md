@@ -129,7 +129,7 @@ wasm. Read this before changing anything.
 
 ## Provenance / sync obligations
 
-- `vendor/btc.js`, `vendor/seqln.js`, `vendor/seqln-keys.js`,
+- `vendor/btc.js`, `vendor/seqln.js`, `vendor/lncredit.js`, `vendor/seqln-keys.js`,
   `vendor/seqob.js`, `vendor/covenant.js`, `vendor/covenant-order.js`, `vendor/covenant-flow.js`,
   `vendor/covenant-fill-host.js`, `vendor/noble-ciphers.js`, `vendor/contracts.js`, `vendor/bolt11.js`,
   `vendor/lnupgrade.js`, `vendor/own-txs.js`, `vendor/stake-records.js`,
@@ -139,6 +139,9 @@ wasm. Read this before changing anything.
   `vendor/vendor/lightweight-charts/` (`vendor/` mirrors the web wallet's root, so the market
   view's relative import finds the library), `vendor/tooling/lsp/` and `vendor/lightning/` are copied from
   `sequentia-web-wallet` — fix bugs THERE and re-copy, don't fork them silently.
+  `node scripts/vendor-check.mjs --sync` re-copies whatever differs from the web
+  wallet's main; `test/vendor-drift.test.mjs` fails while anything does, so sync
+  before every release.
   `btc-ark/worker.js` and `btc-ark/pkg/` are the web wallet's `btc-ark/`, copied.
   `popup/picker.css` is the web wallet's CSS for those modules, copied from its `index.html`;
   `src/pair.js` is its `canonicalPair` and `displayPair` (`swap.js`). Every asset `<select>` in the popup gets the shared

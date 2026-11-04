@@ -104,8 +104,14 @@ function emitToOrigin(origin, event, data) {
   if (!s) return;
   for (const p of s) { try { p.postMessage({ event, data }); } catch {} }
 }
+// Every page that calls window.sequentia holds a port, connected or not, so an
+// event goes only to the origins the user connected: a trade's progress is
+// nothing an unconnected page may read.
 function emitToAll(event, data) {
-  for (const origin of dappPorts.keys()) emitToOrigin(origin, event, data);
+  perms.sites().then((sites) => {
+    const connected = new Set(Object.keys(sites || {}));
+    for (const origin of dappPorts.keys()) if (connected.has(origin)) emitToOrigin(origin, event, data);
+  }).catch(() => {});
 }
 
 // Events that must reach a page whether or not this worker has been asleep since the
