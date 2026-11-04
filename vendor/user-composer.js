@@ -2,8 +2,10 @@
 //
 // The engine (user-trade.js) reads the single-step book, prices the trade with the wallet's
 // own leaf library and settles it in one native step; this module draws it. Before the button
-// confirms, it shows three lines: what you pay, what you get, and the fees. After it, the trade
-// reads "Sent", then "Settled", or "Returned: nothing traded." Market trades only. Both pickers
+// confirms, it shows three lines: what you pay, what you get, and the fees. After it, a card over
+// the page follows the trade: "Sent", then "Settled", or "Returned: nothing traded."; closed, the
+// trade goes on in Your trades, under the button, and its end is said wherever the person is
+// (ctx.notify). Market trades only. Both pickers
 // list BTC first. Every word it can show is in USER_WORDS, and none is a word of
 // USER_MODE_FORBIDDEN_WORDS (user-trade.test.mjs checks both, the browser drive the page).
 //
@@ -13,15 +15,18 @@
 //   of it that vest later (optional: an asset held only so is listed to pay), admittedReceives(pay)
 //   -> [hex] (optional: the receive picker lists those after what is offered now),
 //   market: { relay() -> the relay's base URL, pairOf(a, b) -> {base, quote} } (optional: the
-//   chosen pair's market above the inputs, market-view.js), isHidden(hex) -> the person hid it
-//   (optional), refValue(hex, atoms) -> its value in words, "≈ $…" (optional) }
+//   chosen pair's market under the inputs, market-view.js), isHidden(hex) -> the person hid it
+//   (optional), refValue(hex, atoms) -> its value in words, "≈ $…" (optional),
+//   links(record) -> [{ chain, href, text }] the transactions a trade made on a chain, in their
+//   explorers (optional), notify(text, { sticky, link }) -> said wherever the person is (optional),
+//   openHistory() -> shows History (optional) }
 // Both pickers are the shared asset chooser (asset-picker.js): a search box, your assets first
 // with their balances, BTC always, what the book offers now next, the rest found by searching.
 // The receive picker lists BTC first, then every asset the book offers for what is paid in one
 // step now (engine.offered), then the admitted rest, then every other asset known; it starts on
 // the first one offered.
 
-import { USER_WORDS, pickerOrder, costLine, tradeStateWord } from './user-trade.js'
+import { USER_WORDS, pickerOrder, costLine, tradeStateWord, tradeSteps } from './user-trade.js'
 import { mountMarketView } from './market-view.js'
 import { openPicker, PICKER_WORDS } from './asset-picker.js'
 
@@ -48,7 +53,7 @@ export function payAssets (known, held, current, name) {
 
 export function mountUserComposer (ctx) {
   const S = { pay: null, get: null, amount: '', recv: '', fixed: 'pay', ticket: null, choice: null, busy: false, note: '', error: '', timer: null,
-    estTimer: null, estSeq: 0,
+    estTimer: null, estSeq: 0, card: null, ended: null, progress: null, openedAt: Date.now(),
     offered: { pay: null, list: [], at: 0, loading: false } }
   const OFFERS_MS = ctx.offersMs || 60000
   // The pair and the amount typed are kept for the browser tab's session (ctx.session, a
@@ -126,14 +131,15 @@ export function mountUserComposer (ctx) {
     const e = await ctx.engine.estimate({ payAsset: S.pay, receiveAsset: S.get, ...(S.fixed === 'pay' ? { pay: String(atoms) } : { receive: String(atoms) }) })
     if (seq !== S.estSeq || S.ticket) return
     if (!e.ok) {
-      S.note = e.why === 'not-listed' ? USER_WORDS.notListed(name(S.get), name(S.pay)) : e.why === 'too-small' ? USER_WORDS.tooSmall : USER_WORDS.notOffered(name(S.get), name(S.pay))
+      S.note = e.why === 'not-listed' ? USER_WORDS.notListed(name(S.get), name(S.pay)) : e.why === 'too-small' ? USER_WORDS.tooSmall
+        : e.why === 'soon' ? USER_WORDS.notOfferedSoon(name(S.get), name(S.pay)) : USER_WORDS.notOffered(name(S.get), name(S.pay))
       if (other && doc.activeElement !== other) other.value = ''
       paintNote(); return
     }
     const fill = S.fixed === 'pay' ? ctx.fmtAtoms(big(e.receive), prec(S.get)) : ctx.fmtAtoms(big(e.pay), prec(S.pay))
     if (other && doc.activeElement !== other) other.value = fill
     if (S.fixed === 'pay') S.recv = fill; else S.amount = fill
-    S.note = e.short ? USER_WORDS.bookUpTo(amt(S.get, e.short.receive)) : ''
+    S.note = e.short ? (e.short.soon ? USER_WORDS.bookUpToSoon : USER_WORDS.bookUpTo)(amt(S.get, e.short.receive)) : ''
     paintNote()
     paintAbout()
   }
@@ -168,6 +174,21 @@ export function mountUserComposer (ctx) {
     const pa = ctx.root.querySelector('#ucPayAbout'), ra = ctx.root.querySelector('#ucRecvAbout')
     if (pa) pa.textContent = S.fixed === 'receive' && !S.ticket && String(S.amount || '').trim() ? USER_WORDS.about : ''
     if (ra) ra.textContent = S.fixed !== 'receive' && !S.ticket && String(S.recv || '').trim() ? USER_WORDS.about : ''
+    paintValues()
+  }
+  // Under each amount, its value in the currency the page shows values in (ctx.refValue, "≈ 50 USD"),
+  // when the asset has a price; nothing otherwise.
+  function valueOf (asset, typed) {
+    if (!ctx.refValue || !asset || !String(typed || '').trim()) return ''
+    let atoms
+    try { atoms = ctx.parseAtoms(String(typed).trim(), prec(asset)) } catch { return '' }
+    if (!(big(atoms) > 0n)) return ''
+    try { return ctx.refValue(asset, big(atoms)) || '' } catch { return '' }
+  }
+  function paintValues () {
+    const pv = ctx.root.querySelector('#ucPayValue'), rv = ctx.root.querySelector('#ucRecvValue')
+    if (pv) pv.textContent = valueOf(S.pay, S.amount)
+    if (rv) rv.textContent = valueOf(S.get, S.recv)
   }
 
   function render () {
@@ -175,18 +196,20 @@ export function mountUserComposer (ctx) {
     if (!S.pay || !S.payChosen) S.pay = defaultPay()
     r.innerHTML = ''
     const box = el('div', 'ucomp'); box.id = 'userComposer'
-    // The chosen pair's market: its chart, price, book and recent trades.
+    // The chosen pair's market (its chart, price, book and recent trades) goes under the button:
+    // the assets are chosen first, then the market of the pair they make.
     const mk = el('div', 'uc-market'); mk.id = 'ucMarket'
-    if (ctx.market) box.appendChild(mk)
     // You pay
     const row1 = el('div', 'uc-row')
     row1.appendChild(el('label', 'lbl', USER_WORDS.pay))
     row1.appendChild(chooser('ucPay', payList(), S.pay, (v) => { S.pay = v; S.payChosen = true; S.getChosen = false; S.get = null; reset(); render() }))
     const inp = el('input', 'uc-amount'); inp.id = 'ucAmount'; inp.inputMode = 'decimal'; inp.placeholder = USER_WORDS.amount; inp.value = S.amount
     const payAbout = el('span', 'sub uc-about'); payAbout.id = 'ucPayAbout'
-    inp.oninput = () => { S.amount = inp.value; S.fixed = 'pay'; S.error = ''; keep(); if (S.ticket) { reset(); paintTicket() } schedule() }
+    inp.oninput = () => { S.amount = inp.value; S.fixed = 'pay'; S.error = ''; keep(); if (S.ticket) { reset(); paintTicket() } paintValues(); schedule() }
     row1.appendChild(payAbout)
     row1.appendChild(inp)
+    const payValue = el('div', 'sub uc-value'); payValue.id = 'ucPayValue'
+    row1.appendChild(payValue)
     const have = el('div', 'sub uc-have'); have.id = 'ucHave'
     have.appendChild(el('span', null, USER_WORDS.balance(amt(S.pay, ctx.held(S.pay) || 0n))))
     const max = el('button', 'ghost uc-max', USER_WORDS.max); max.type = 'button'; max.id = 'ucMax'
@@ -217,15 +240,18 @@ export function mountUserComposer (ctx) {
     // one ("about"); Review's ticket gives the exact amounts.
     const recvAbout = el('span', 'sub uc-about'); recvAbout.id = 'ucRecvAbout'
     row2.appendChild(recvAbout)
-    rin.oninput = () => { S.recv = rin.value; S.fixed = 'receive'; S.error = ''; keep(); if (S.ticket) { reset(); paintTicket() } schedule() }
+    rin.oninput = () => { S.recv = rin.value; S.fixed = 'receive'; S.error = ''; keep(); if (S.ticket) { reset(); paintTicket() } paintValues(); schedule() }
     row2.appendChild(rin)
+    const recvValue = el('div', 'sub uc-value'); recvValue.id = 'ucRecvValue'
+    row2.appendChild(recvValue)
     box.appendChild(row2)
     // The ticket and the button
     const t = el('div', 'uc-ticket'); t.id = 'ucTicket'; box.appendChild(t)
     const note = el('div', 'sub uc-note'); note.id = 'ucNote'; box.appendChild(note)
     const act = el('div', 'row uc-act'); act.id = 'ucAct'; box.appendChild(act)
-    // Trades
+    // Trades, under the button and above the market, where a trade just sent is seen.
     const list = el('div', 'uc-trades'); list.id = 'ucTrades'; box.appendChild(list)
+    if (ctx.market) box.appendChild(mk)
     r.appendChild(box)
     keep()
     paintTicket()
@@ -274,8 +300,12 @@ export function mountUserComposer (ctx) {
     if (!(big(atoms) > 0n)) { S.error = USER_WORDS.enter; paintTicket(); return }
     if (!S.get) { S.error = USER_WORDS.nothingOffered(name(S.pay)); paintTicket(); return }
     S.busy = true; paintTicket()
+    const withBtc = S.pay === 'BTC' || S.get === 'BTC'
+    if (withBtc) openProgress(S.pay, S.get)
     try {
-      const q = await ctx.engine.quote({ payAsset: S.pay, receiveAsset: S.get, amount: String(atoms) })
+      const q = await ctx.engine.quote({ payAsset: S.pay, receiveAsset: S.get, amount: String(atoms),
+        onStep: withBtc ? (k) => paintProgress(k) : null })
+      if (withBtc && q.ok) paintProgress('priced')
       if (q.ok) { S.ticket = q.ticket; S.choice = q.choice; S.moving = !!q.moving }
       else S.error = q.why === 'vesting' ? USER_WORDS.notVested(show(big(q.atoms), prec(S.pay)), name(S.pay), q.vests) : q.why === 'no-funds' ? USER_WORDS.noFunds(name(S.pay)) : q.why === 'not-ready' ? USER_WORDS.notReady(name(S.pay), q.soon) : q.why === 'redoing' ? USER_WORDS.redoing(name(S.pay)) : q.why === 'busy' ? USER_WORDS.busy(name(S.pay)) : q.why === 'freeing' ? USER_WORDS.freeing(name(S.pay), q.soon) : q.why === 'readying' ? USER_WORDS.readying(name(S.pay), q.soon) : q.why === 'part-ready' ? USER_WORDS.partReady(amt(S.pay, q.ready), name(S.pay), q.soon) : q.why === 'too-small' ? USER_WORDS.tooSmall
         : q.why === 'no-firm-offer' ? USER_WORDS.noFirmOffer
@@ -287,7 +317,57 @@ export function mountUserComposer (ctx) {
     } catch (e) {
       console.warn('[user composer] quote:', e && e.message)
       S.error = USER_WORDS.notOffered(name(S.get), name(S.pay))
-    } finally { S.busy = false; paintTicket() }
+    } finally { S.busy = false; closeProgress(); paintTicket() }
+  }
+
+  // ---- The price's progress ----
+  // While the price of a trade with BTC is made (up to a minute), a pop-up says each step as it
+  // starts, with a bar. It never holds the page: its Close, a click outside it and Escape all close
+  // it, and closing it stops nothing. It closes by itself once the price is in or refused, which
+  // the page then shows as always.
+  function openProgress (payAsset, receiveAsset) {
+    closeProgress()
+    const m = el('div', 'modal uc-progress-modal'); const c = el('div', 'card uc-progress'); m.appendChild(c)
+    m.onclick = (e) => { if (e.target === m) closeProgress() }
+    const onKey = (e) => { if (e.key === 'Escape') closeProgress() }
+    doc.addEventListener('keydown', onKey)
+    doc.body.appendChild(m)
+    S.progress = { m, onKey, payAsset, receiveAsset, at: null }
+    paintProgress(null)
+  }
+  function closeProgress () {
+    if (!S.progress) return
+    doc.removeEventListener('keydown', S.progress.onKey)
+    S.progress.m.remove(); S.progress = null
+  }
+  function paintProgress (k) {
+    const P = S.progress; if (!P) return
+    if (k) P.at = k
+    const c = P.m.querySelector('.uc-progress'); c.innerHTML = ''
+    c.appendChild(el('div', 'sent-title', USER_WORDS.pricingTitle))
+    // The steps before the price, and the first after it, greyed: what Confirm starts.
+    const steps = tradeSteps({ quote: P.at, payAsset: P.payAsset, receiveAsset: P.receiveAsset, name })
+    const upTo = steps.findIndex((s) => s.key === 'priced')
+    stepList(c, steps.slice(0, upTo + 1))
+    const act = el('div', 'row'); act.style.marginTop = '14px'
+    const close = el('button', 'ghost', USER_WORDS.closeProgress); close.type = 'button'; close.onclick = closeProgress; act.appendChild(close)
+    c.appendChild(act)
+    c.appendChild(el('div', 'sub', USER_WORDS.closeHint))
+  }
+  // A trade's steps as a bar and a list: done ones ticked, the current one turning, the rest grey.
+  function stepList (c, steps) {
+    const done = steps.filter((s) => s.state === 'done').length, now = steps.some((s) => s.state === 'now') ? 0.5 : 0
+    const bar = el('div', 'uc-bar'); const fill = el('div', 'uc-bar-fill')
+    fill.style.width = Math.round(100 * Math.min(1, (done + now) / Math.max(1, steps.length))) + '%'
+    bar.appendChild(fill); c.appendChild(bar)
+    const ol = el('ol', 'uc-steps')
+    for (const s of steps) {
+      const li = el('li', 'uc-step uc-step-' + s.state); li.dataset.step = s.key
+      if (s.state === 'now') li.appendChild(el('span', 'spin'))
+      li.appendChild(el('span', null, s.text))
+      ol.appendChild(li)
+    }
+    c.appendChild(ol)
   }
 
   let readyTimer = null, readyTries = 0
@@ -307,15 +387,22 @@ export function mountUserComposer (ctx) {
   async function confirm () {
     if (!S.choice) return
     S.busy = true; paintTicket()
+    seenEnds()
+    const before = new Set(ctx.engine.records().map((r) => r.id))
     try {
       const done = ctx.engine.confirm(S.choice, S.ticket)
       const later = Symbol('later')
       const first = await Promise.race([done, new Promise((r) => setTimeout(() => r(later), ctx.confirmShownMs ?? CONFIRM_SHOWN_MS))])
       if (first === later) done.catch((e) => console.warn('[user composer] confirm:', e && e.message)).finally(() => { paintTrades(); follow() })
+      // The engine writes the trade's record before its step: the new one is this trade.
+      const rec = first !== later && first && first.id ? first : ctx.engine.records().find((r) => !before.has(r.id))
+      if (rec) openCard(rec.id)
       reset(); S.amount = ''; S.recv = ''
       for (const id of ['#ucAmount', '#ucReceive']) { const i = ctx.root.querySelector(id); if (i) i.value = '' }
     } catch (e) {
       console.warn('[user composer] confirm:', e && e.message)
+      // A trade refused at once is said here, under the button: no notice repeats it.
+      seenEnds()
       // A price no longer held is priced again, and shown before anything is signed.
       if (e && e.code === 'lapsed') { reset(); S.note = USER_WORDS.priceMoved; S.busy = false; await review(); S.note = S.ticket ? USER_WORDS.priceMoved : S.note; paintTicket(); return }
       reset(); S.error = USER_WORDS.failed
@@ -327,25 +414,98 @@ export function mountUserComposer (ctx) {
     return tradeStateWord(r, Date.now())
   }
 
+  const ENDED = ['settled', 'returned', 'failed']
+  const what = (r) => `${amt(r.ticket.payAsset, r.ticket.amountIn)} → ${amt(r.ticket.receiveAsset, r.ticket.amountOut)}`
+
   function paintTrades () {
+    noteEnds()
+    paintCard()
     const list = ctx.root.querySelector('#ucTrades'); if (!list) return
     list.innerHTML = ''
     // A trade whose step did not answer is shown while it is looked for.
     // A trade being sent shows at once, as "Sending…".
-    const recs = ctx.engine.records().filter((r) => (r.state !== 'confirming' || r.uncertain || Date.now() - (r.at || 0) < 10 * 60_000) && r.ticket).slice(-12).reverse()
+    // An ended trade stays here only while the page that saw it end is open; after a reload it is
+    // in History alone, so trades never push the market down the page.
+    const endedAt = (r) => r.settledAt || r.returnedAt || r.failedAt || r.at || 0
+    const recs = ctx.engine.records().filter((r) => (r.state !== 'confirming' || r.uncertain || Date.now() - (r.at || 0) < 10 * 60_000) && r.ticket)
+      .filter((r) => !ENDED.includes(r.state) || endedAt(r) >= S.openedAt).slice(-12).reverse()
+    list.classList.toggle('uc-has-open', recs.some((r) => !ENDED.includes(r.state)))
     if (!recs.length) return
     list.appendChild(el('label', 'lbl', USER_WORDS.recent))
-    // The person's open trades, then the past ones.
-    const done = (r) => ['settled', 'returned', 'failed'].includes(r.state)
+    // The person's open trades, then the past ones. A trade opens its card again.
+    const done = (r) => ENDED.includes(r.state)
     for (const [word, group] of [[USER_WORDS.openTrades, recs.filter((r) => !done(r))], [USER_WORDS.pastTrades, recs.filter(done).slice(0, 8)]]) {
       if (!group.length) continue
       list.appendChild(el('div', 'sub uc-group', word))
       for (const r of group) {
-        const d = el('div', 'kv uc-trade'); d.dataset.trade = r.id; d.dataset.state = r.state
-        d.appendChild(el('span', 'k', `${amt(r.ticket.payAsset, r.ticket.amountIn)} → ${amt(r.ticket.receiveAsset, r.ticket.amountOut)}`))
+        const d = el('button', 'kv uc-trade'); d.type = 'button'; d.dataset.trade = r.id; d.dataset.state = r.state
+        d.onclick = () => openCard(r.id)
+        d.appendChild(el('span', 'k', what(r)))
         d.appendChild(el('span', 'v uc-state', stateWord(r)))
         list.appendChild(d)
       }
+    }
+  }
+
+  // ---- A trade's card ----
+  // Once a trade is sent, a card over the page says so: what is paid, what is received, the fees,
+  // and the trade's status, which it follows until the trade ends. A transaction the trade made on
+  // a chain links to that chain's explorer (ctx.links); a trade settled without one has no link.
+  // Closed, the trade goes on in Your trades.
+  function openCard (id) {
+    closeCard()
+    const m = el('div', 'modal uc-card-modal'); m.appendChild(el('div', 'card uc-card'))
+    m.onclick = (e) => { if (e.target === m) closeCard() }
+    doc.body.appendChild(m)
+    S.card = { id, m }
+    paintCard()
+  }
+  function closeCard () { if (S.card) { S.card.m.remove(); S.card = null } }
+  function paintCard () {
+    if (!S.card) return
+    if (!S.card.m.isConnected) { S.card = null; return }
+    const r = ctx.engine.records().find((x) => x.id === S.card.id)
+    if (!r || !r.ticket) { closeCard(); return }
+    const c = S.card.m.querySelector('.uc-card'); c.innerHTML = ''
+    const ended = ENDED.includes(r.state), ok = r.state === 'settled'
+    const head = el('div', 'sent-head')
+    const mark = el('div', 'sent-check uc-mark' + (ended && !ok ? ' uc-back' : ''), ok ? USER_WORDS.markDone : ended ? USER_WORDS.markBack : null)
+    if (!ended) mark.appendChild(el('span', 'spin'))
+    head.appendChild(mark)
+    const ht = el('div')
+    ht.appendChild(el('div', 'sent-title', ok ? USER_WORDS.cardSettled : ended ? USER_WORDS.cardReturned : USER_WORDS.cardSent))
+    ht.appendChild(el('div', 'sub', `${name(r.ticket.payAsset)} → ${name(r.ticket.receiveAsset)}`))
+    head.appendChild(ht); c.appendChild(head)
+    const line = (label, value, cls) => { const d = el('div', 'kv'); d.appendChild(el('span', 'k', label)); const v = el('span', 'v' + (cls ? ' ' + cls : '')); if (typeof value === 'string') v.textContent = value; else v.appendChild(value); d.appendChild(v); c.appendChild(d); return d }
+    line(USER_WORDS.amountIn, amt(r.ticket.payAsset, r.ticket.amountIn))
+    line(USER_WORDS.amountOut, amt(r.ticket.receiveAsset, r.ticket.amountOut))
+    c.appendChild(el('div', 'sub uc-cost', costLine(r.ticket.fees, amt, r.ticket.payAsset)))
+    line(USER_WORDS.cardState, stateWord(r), 'uc-card-state').dataset.state = r.state
+    if (r.source === 'btc-gateway') {
+      const steps = tradeSteps({ r, name })
+      if (steps) { c.appendChild(el('div', 'lbl uc-steps-title', USER_WORDS.stepsTitle)); stepList(c, steps) }
+    }
+    for (const k of (ctx.links ? ctx.links(r) : [])) {
+      const a = el('a', null, k.text); a.href = k.href; a.target = '_blank'; a.rel = 'noopener'
+      line(USER_WORDS.txOn(k.chain), a, 'mono')
+    }
+    const act = el('div', 'row'); act.style.marginTop = '16px'
+    const close = el('button', 'primary', USER_WORDS.done); close.type = 'button'; close.onclick = closeCard; act.appendChild(close)
+    if (ctx.openHistory) { const h = el('button', 'ghost', USER_WORDS.viewHistory); h.type = 'button'; h.onclick = () => { closeCard(); ctx.openHistory() }; act.appendChild(h) }
+    c.appendChild(act)
+  }
+
+  // A trade that ends while its card is closed is said wherever the person is (ctx.notify), once.
+  // The trades ended before the page looked are not said again.
+  function endedIds () { return ctx.engine.records().filter((r) => r.ticket && ENDED.includes(r.state)).map((r) => r.id) }
+  function seenEnds () { S.ended = new Set(endedIds()) }
+  function noteEnds () {
+    if (!S.ended) { seenEnds(); return }
+    for (const r of ctx.engine.records()) {
+      if (!r.ticket || !ENDED.includes(r.state) || S.ended.has(r.id)) continue
+      S.ended.add(r.id)
+      if ((S.card && S.card.id === r.id) || !ctx.notify) continue
+      ctx.notify(USER_WORDS.ended(what(r), stateWord(r)), { sticky: r.state !== 'settled', link: (ctx.links ? ctx.links(r) : [])[0] || null })
     }
   }
 
@@ -360,6 +520,7 @@ export function mountUserComposer (ctx) {
     if (!openRecs.length) return
     if (S.busy) { S.timer = setTimeout(follow, ctx.followMs || 4000); return }
     try { await ctx.engine.resume() } catch (e) { console.warn('[user composer] resume:', e && e.message) }
+    // Painted whether the tab is shown or not: an ending is said wherever the person is.
     paintTrades()
     // A purchase paid with BTC that waits for its asset to be final is followed every few seconds
     // however long it waits: its BTC is paid the moment the asset is, and the person watches it.

@@ -57,9 +57,27 @@ export const DEFAULT_WORDS = Object.freeze({
   addressTip: 'Your address, the same tb1 address on both chains. For BTC, and for senders that ask for an address.',
   sendTitle: (amount, ticker) => `Send ${amount} ${ticker}?`,
   sendLine: 'It arrives in seconds.',
+  // The fee line of a payment in the Ark: none, said so rather than left out.
+  feeLabel: 'Fee',
+  noFee: 'No fees',
+  // Max for an asset held in the Ark, to a destination it pays with a fee: type the amount.
+  maxArkElsewhere: 'Max sizes a payment to a receive code. For this recipient, type the amount.',
   // A receive code paid at its address, because nothing the wallet holds pays it in seconds.
   byAddress: (arrives) => `This can't arrive in seconds from what you hold now, so it goes to the address. ${arrives}`,
   arrivesNextBlock: 'It arrives after the next block, in about a minute.',
+  // A receive code of a wallet elsewhere whose invoice is not used (asset-lightning.js): above the
+  // page's limit, or when the way to that wallet cannot carry the payment now.
+  byAddressAbove: (limit) => `A payment of more than ${limit} USD to this wallet goes to the address.`,
+  byAddressLarge: (usd) => `A payment of ${usd} USD or more goes to the address.`,
+  byAddressNoWay: 'This can’t arrive in seconds right now, so it goes to the address.',
+  // A payment to a wallet elsewhere, in seconds: held until that wallet takes it; refused or come
+  // back, it is offered to the address.
+  lnOnItsWay: 'On its way: it arrives once the other wallet takes it.',
+  lnNotThrough: 'This couldn’t go through in seconds, and nothing was sent. Send it to the address instead? It arrives after the next block, in about a minute.',
+  lnCameBack: 'This couldn’t go through in seconds and came back to you. Send it to the address instead? It arrives after the next block, in about a minute.',
+  toAddress: 'Send to the address',
+  // Receive: the optional amount when it is asked in an asset rather than BTC.
+  amountHint: 'Amount (optional)',
   send: 'Send',
   sending: 'Sending\u2026',
   sent: (amount, ticker, seconds) => `Sent ${amount} ${ticker} (${seconds} s).`,

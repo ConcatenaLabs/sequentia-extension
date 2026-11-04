@@ -478,6 +478,12 @@ git archive --format=zip -o ambra-extension.zip HEAD -- manifest.json background
   CARGO_PROFILE_RELEASE_OPT_LEVEL=z ./build-web.sh pkg_ext   # build paths remapped
   cp pkg_ext/{lwk_wasm.js,lwk_wasm.d.ts,lwk_wasm_bg.wasm,package.json} ../../sequentia-extension/pkg/
   ```
+- Copies of the web wallet's files (everything under `vendor/`, `btc-ark/`,
+  `leaves/worker.js` and `leaves/pkg/`) are that repository's main branch, byte
+  for byte. `node scripts/vendor-check.mjs` names every one that differs (exit 1)
+  and `--sync` copies the web wallet's version in; `--from DIR` uses a web
+  wallet checkout instead of GitHub. `test/vendor-drift.test.mjs` runs the same
+  check with the other tests.
 - `btc-ark/` (the worker and its wasm) is copied from the web wallet's
   `btc-ark/`, built there by `tooling/build-btc-ark.sh` from the `arca`
   repository's `bark-wasm/`; `btc-ark/pkg/BUILT_FROM` names the commit.
@@ -505,7 +511,7 @@ btc-ark/               the Bitcoin ark wallet's worker and its wasm (committed)
 content/               inpage provider (MAIN world) + relay (isolated world)
 popup/                 wallet UI     approval/  site-request approval window
 vendor/                modules copied from sequentia-web-wallet (btc.js,
-                       seqln.js, seqln-keys.js, seqob.js, covenant.js,
+                       seqln.js, lncredit.js, seqln-keys.js, seqob.js, covenant.js,
                        covenant-order.js, covenant-fill-host.js,
                        noble-ciphers.js, contracts.js, bolt11.js,
                        lnupgrade.js, own-txs.js, lightning/ signer SDK,

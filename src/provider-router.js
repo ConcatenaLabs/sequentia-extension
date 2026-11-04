@@ -172,7 +172,7 @@ export async function handleDappRequest(origin, method, params = {}) {
         // ORDER_FEATURES name placeOrder's limit options (post only, rest: false, min_fill,
         // take_back_after), served in either mode.
         features: ['pset-site-built', 'contract-spend', 'leaves', 'leaf-orders', 'leaf-swaps', 'resting-orders', 'orders', 'balances-total', ...ORDER_FEATURES],
-        events: ['accountsChanged', 'disconnect', 'modeChanged', 'leafArrived', 'leafSyncDue', 'leafTake'],
+        events: ['accountsChanged', 'disconnect', 'modeChanged', 'leafArrived', 'leafSyncDue', 'leafTake', 'dexProgress', 'dexJobDone'],
       };
 
     case 'getNetwork':

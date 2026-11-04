@@ -68,7 +68,7 @@ export class Signer {
      * to overwrite a tracked channel (returns false). `funding_txid` is the
      * DISPLAY-order 32 bytes (as RPC JSON shows it); reversed internally.
      */
-    armChannel(node_id: Uint8Array, dbid: bigint, funding_sats: bigint, funding_txid: Uint8Array, funding_txout: number, local_to_self_delay: number, remote_to_self_delay: number, remote_revocation: Uint8Array, remote_payment: Uint8Array, remote_htlc: Uint8Array, remote_delayed: Uint8Array, remote_funding: Uint8Array, option_static_remotekey: boolean, option_anchors: boolean): boolean;
+    armChannel(node_id: Uint8Array, dbid: bigint, funding_sats: bigint, funding_txid: Uint8Array, funding_txout: number, local_to_self_delay: number, remote_to_self_delay: number, remote_revocation: Uint8Array, remote_payment: Uint8Array, remote_htlc: Uint8Array, remote_delayed: Uint8Array, remote_funding: Uint8Array, option_static_remotekey: boolean, option_anchors: boolean, option_tcov: boolean): boolean;
     /**
      * The persistable channel store (canonical payload + seed-keyed MAC).
      */
@@ -94,6 +94,11 @@ export class Signer {
      */
     constructor(hsm_secret_bytes: Uint8Array);
     /**
+     * The payment limit for one asset (`asset` a display-order asset id or
+     * `"btc"`), in its atoms per period; undefined when it has none.
+     */
+    paymentLimit(asset: string): number | undefined;
+    /**
      * The channels that predate validation (they came from the store of a
      * device that validated nothing, and this device signs no commitment
      * step for them; their peer closes them), as JSON: an array of
@@ -103,6 +108,14 @@ export class Signer {
     predatingChannels(): string;
     processFrame(frame_bytes: Uint8Array): Uint8Array;
     /**
+     * Give the rate the reference limit is converted at for one asset
+     * (`asset` a display-order asset id or `"btc"`), as the node's fee
+     * exchange rates give it: reference atoms per 10^8 atoms of the asset.
+     * `rate` undefined, null or 0 forgets it, and the asset is then held to
+     * 10,000,000 of its own atoms.
+     */
+    setAssetRate(asset: string, rate?: number | null): void;
+    /**
      * Turn the M4 validating policy on (`enforce`) or off (`permissive`). The
      * browser build has no env, so this is how a caller selects enforce mode.
      */
@@ -110,8 +123,8 @@ export class Signer {
     /**
      * Set the payment limit, in atoms per period, for one asset (`asset` a
      * display-order asset id or `"btc"`) or, with `asset` undefined, the
-     * default for every asset. `atoms` undefined or null: no limit. The
-     * default is 10,000,000 atoms of each asset per day.
+     * same number of atoms for every asset in place of the default in the
+     * reference unit. `atoms` undefined or null: no limit.
      */
     setPaymentLimit(asset?: string | null, atoms?: number | null): void;
     /**
@@ -119,6 +132,13 @@ export class Signer {
      * day).
      */
     setPaymentPeriod(seconds: number): void;
+    /**
+     * Set the default payment limit, in reference atoms per period, that
+     * every asset without a limit of its own is held to at its rate
+     * (`setAssetRate`). `reference` undefined or null: no limit. The default
+     * is 1,000 reference units (10^11 reference atoms) a day.
+     */
+    setReferencePaymentLimit(reference?: number | null): void;
     /**
      * The store changed since last asked (take-and-clear) — the cue to
      * persist `exportChannels`.
@@ -172,18 +192,21 @@ export interface InitOutput {
     readonly noisesession_readActTwo: (a: number, b: number, c: number) => [number, number, number, number];
     readonly noisesession_writeActOne: (a: number) => [number, number, number, number];
     readonly signer_approveCloseDestination: (a: number, b: number, c: number) => void;
-    readonly signer_armChannel: (a: number, b: number, c: number, d: bigint, e: bigint, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number, s: number, t: number, u: number, v: number) => [number, number, number];
+    readonly signer_armChannel: (a: number, b: number, c: number, d: bigint, e: bigint, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number, s: number, t: number, u: number, v: number, w: number) => [number, number, number];
     readonly signer_exportChannels: (a: number) => [number, number];
     readonly signer_fromMnemonic: (a: number, b: number) => [number, number, number];
     readonly signer_hasChannel: (a: number, b: number, c: number, d: bigint) => [number, number, number];
     readonly signer_importChannels: (a: number, b: number, c: number) => [number, number, number];
     readonly signer_lastReject: (a: number) => [number, number];
     readonly signer_new: (a: number, b: number) => [number, number, number];
+    readonly signer_paymentLimit: (a: number, b: number, c: number) => [number, number, number, number];
     readonly signer_predatingChannels: (a: number) => [number, number];
     readonly signer_processFrame: (a: number, b: number, c: number) => [number, number, number, number];
+    readonly signer_setAssetRate: (a: number, b: number, c: number, d: number, e: number) => [number, number];
     readonly signer_setEnforce: (a: number, b: number) => void;
     readonly signer_setPaymentLimit: (a: number, b: number, c: number, d: number, e: number) => [number, number];
     readonly signer_setPaymentPeriod: (a: number, b: number) => [number, number];
+    readonly signer_setReferencePaymentLimit: (a: number, b: number, c: number) => [number, number];
     readonly signer_takeChannelsDirty: (a: number) => number;
     readonly signer_takeLastUntracked: (a: number) => [number, number];
     readonly signer_walletSweepScript: (a: number, b: number, c: number) => [number, number];

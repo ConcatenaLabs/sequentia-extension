@@ -11,7 +11,9 @@
 //
 // Neither extra parameter is required (no `req-` prefix), so a wallet that knows neither sees a
 // plain bitcoin: request for the address. Other BIP321 parameters (amount, label, message,
-// lightning) are read and kept.
+// lightning) are read and kept. A code that asks an amount of a Sequentia asset carries an invoice
+// in that asset as `lightning` (its network and asset are in the invoice) and no `amount`, which
+// BIP321 counts in BTC.
 //
 // The code is made to be scanned at a glance. The scheme and every bech32 part (the address, the
 // ark address, an invoice, the receive request) are written in upper case, which a QR code holds
