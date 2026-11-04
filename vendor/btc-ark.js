@@ -114,9 +114,10 @@ export const PAY_TIMEOUT_MS = 180_000
 export const REFRESH_MS = 3_000
 export const SYNC_MS = 30_000
 // How often the wallet asks its server what the phrase's other wallets did (`catch_up`: the coins
-// they made or received, a board once its wallet has registered it, and the coins of this store
-// they spent), besides once at each open. A browser that opened the phrase before another one
-// boarded or was paid learns of it this way.
+// they made or received, and the coins of this store they spent; and the boards the phrase's own
+// Bitcoin coins funded that no wallet registered, found on the chain), besides once at each open.
+// A browser that opened the phrase before another one boarded or was paid learns of it this way,
+// and so does one restored after the browser that boarded lost its data.
 export const CATCH_UP_MS = 5 * 60_000
 // The least a board leaves the on-chain fee and the ark's board fee, over the ark's own least.
 export const BOARD_MARGIN_SATS = 1_000n
@@ -262,6 +263,11 @@ export function mountBtcArk ({ makeWorker, mnemonic, config, decode, onChange = 
       .then((r) => {
         const got = (r && r.recovered) || [], gone = (r && r.spent_elsewhere) || []
         log('[btc ark] caught up in', now() - t0, 'ms:', got.length, 'coin(s) taken in (', (r && r.recovered_sat) || '0', 'sat),', gone.length, 'spent elsewhere')
+        // Boards no wallet of the phrase registered, found on the chain (a browser whose data was
+        // lost before its board's confirmations): each taken in, or why not.
+        const boards = r && r.boards
+        if (Array.isArray(boards)) for (const b of boards) log('[btc ark] board on the chain', b.funding, b.amount, 'sat:', b.outcome)
+        else if (boards && boards.error) log('[btc ark] boards on the chain:', boards.error)
         return refresh()
       })
       .catch((e) => log('[btc ark] catch up:', e && e.message))
