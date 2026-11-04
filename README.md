@@ -365,7 +365,9 @@ git archive --format=zip -o ambra-extension.zip HEAD -- manifest.json background
   `CHROME=… PHRASE_FILE=… ASSET=<hex> TICKER=EURX AMOUNT=0.05 node
   test/leaves/vesting-live-check.mjs <evidence-dir> <work-dir>` imports the
   phrase, reads the asset row's "vests on <date>" line, and checks that Send of
-  an amount needing what has not vested is refused with the sentence.
+  an amount needing what has not vested is refused with the sentence. After
+  the date, `AFTER=1 TO=<receive code>` checks the line is gone, the figure
+  holds the coins, and Send of `AMOUNT` to that code is sent.
 - What the wallet does by itself with leaves, the same way:
   `CHROME=/path/to/chrome ARCA_OPERATOR_CONTROL=127.0.0.1:18640
   ARCA_CLI=/path/to/arca node test/leaves/care-drive.mjs <evidence-dir> <work-dir>`
