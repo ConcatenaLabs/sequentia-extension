@@ -219,6 +219,10 @@ token (already public in sequentia-web-wallet) — not a secret.
   `CHROME=… ARCA_OPERATOR_CONTROL=… ARCA_CLI=… node test/leaves/drive.mjs
   <evidence-dir> <work-dir>` (README, Development). Start the operator harness
   fresh for each run: the drive moves the chain's median time.
+- Every coin home with the operator gone, on the live testnet, through the web wallet's
+  `tooling/live-proxy.mjs --cors` (`--refuse /arca` for the outage): `CHROME=… PROXY=…
+  node test/leaves/outage-drive.mjs <work> setup|receive|settle|drill|home` (its header
+  gives the order).
 - What the wallet does by itself with leaves: `CHROME=… ARCA_OPERATOR_CONTROL=…
   ARCA_CLI=… node test/leaves/care-drive.mjs <evidence-dir> <work-dir>` (a
   distribution's claim taken up with no click and shown in the popup's figure in
