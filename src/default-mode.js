@@ -275,8 +275,12 @@ export async function receiveCode({ sats = null, fresh = false } = {}) {
     let info = null;
     if (n > 0n && !large && open) { try { info = await leafInfo(); } catch { /* the fallback */ } }
     if (n > 0n && !large && lnFits({ info, kind: 'BTC', dir: 'in', atoms: n, price })) {
-      const inv = await arkHost('invoice', { sats: String(n), description: 'Receive' });
-      lightning = inv.invoice; invoiceHash = inv.payment_hash;
+      // The ark's server has a limit of its own on what it takes over Lightning: an invoice it
+      // refuses leaves the code without one, paid at the ark or the address.
+      try {
+        const inv = await arkHost('invoice', { sats: String(n), description: 'Receive' });
+        lightning = inv.invoice; invoiceHash = inv.payment_hash;
+      } catch (e) { console.warn('[btc ark] no invoice for the code:', e.message); }
     }
   }
   const qr = (text) => { try { return engine.qrFor(text); } catch (e) { console.warn('[default] no picture for the code:', e.message); return null; } };
@@ -456,7 +460,7 @@ async function prepareBtc(text, amtS) {
   // One payment of the band's `direct` or more goes to a receive code's address, never into an ark
   // (src/ark-band.js), and the review says so.
   let why = null;
-  if (/^bitcoin:/i.test(text) && d.route !== 'chain') {
+  if (/^bitcoin:/i.test(text)) {
     const usd = direct({ sats, override: await bandOverride(), price: A.priceFor('BTC') });
     const c = usd != null ? (() => { try { return readPayCode(text); } catch { return null; } })() : null;
     if (c && c.address) { text = c.address; d = destination(text, (s) => decodeBolt11(s)); why = DEFAULT_WORDS.byAddressLarge(usd.toLocaleString('en-US')); }
