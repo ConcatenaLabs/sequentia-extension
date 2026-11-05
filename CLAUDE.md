@@ -73,7 +73,14 @@ wasm. Read this before changing anything.
   Bitcoin ark in the offscreen document (`offscreen-ark.js`, scope `ark`), open in
   both modes so its BTC is in BTC's figure; it boards the wallet's confirmed tb1
   coins in default mode, signed in that document with the phrase's own keys, within
-  the limits the ark's server publishes (`info`, op `info`), never figures of its own. The
+  the limits the ark's server publishes (`info`, op `info`) and the web wallet's band
+  (`vendor/ark-limits.js`, applied by `src/ark-band.js`, the service worker's `boardBtcSoon`,
+  `moveDownSoon` and `receiveCode`): refilled only below a quarter of its resting level, the
+  excess over it moved to the wallet's address once it holds the ceiling, and a payment of the
+  band's `direct` figure or more sent to the address, never into the ark. One Lightning payment
+  is held to the operator's published `max_payment` (`vendor/asset-lightning.js`
+  `lnMaxPayment`), else to 1,500 USD; the figures are the web wallet's and never decided here
+  (a test may set `ext.arkLimits` in local storage). The
   popup's composer reaches the leaf library (`default.leaf`) and the ark's
   Lightning (`default.ark`) through the service worker. What the wallet's own
   Lightning channels hold moves to the ark and the tree by itself in default mode
@@ -88,6 +95,16 @@ wasm. Read this before changing anything.
   Quoting and sending are `homeQuote`/`homeTake` of `vendor/default-arca.js`, run by the
   host on the library: each exit is broadcast only on the fees its quote showed. Developer
   mode's Exit drill is per leaf (`leaves.exitQuote`, `leaves.exit`).
+- **Channels are the library's, read by the host.** `care` runs with `channels`
+  (`careArgs`), so the library opens a channel leaf in each asset the operator makes them
+  of, reads it and folds its credit. In default mode the host reads the channels
+  (`channel_sync`) every 300 ms while the popup is open (its `seq-ui` port, op `inUse`) and
+  the wallet was used, opened or paid within three minutes, else every 5 s, never while
+  another command runs, and never while a send review is open (`holdReads`); a channel paid
+  reports the balance at once. When the channels a payer can pay change it sends
+  `channelsChanged`, and the receive code is made again to name them (`codeNamesChannels`).
+  Which channel pays, and every refusal, is the library's (`send` routes over a channel by
+  itself when the receive code names one).
 - **Care is the library's, run by the host.** The offscreen host runs `care` once
   after the leaf wallet opens and after a sync at most every ten minutes
   (`careDue`, `src/leaf-schedule.js`, the web wallet's rules), in either mode,
@@ -223,6 +240,13 @@ token (already public in sequentia-web-wallet) — not a secret.
   `tooling/live-proxy.mjs --cors` (`--refuse /arca` for the outage): `CHROME=… PROXY=…
   node test/leaves/outage-drive.mjs <work> setup|receive|settle|drill|home` (its header
   gives the order).
+- Payments that arrive at once over channel leaves, two wallets in default mode against a local
+  operator started with `ARCA_OPERATOR_CHANNELS=1000000`: `CHROME=… ARCA_OPERATOR_CONTROL=…
+  ARCA_CLI=… node test/leaves/channel-drive.mjs <evidence-dir> <work-dir>` (twelve payments, each
+  in the receiver's figure under a second with no block made, then one the channel cannot take).
+- The Bitcoin ark's band and the Lightning limit on a receive, on the live testnet: `CHROME=…
+  node test/default/band-drive.mjs <work> setup|refill|down|codes|state` (its header gives the
+  order; the faucet's BTC is the only coin it uses).
 - What the wallet does by itself with leaves: `CHROME=… ARCA_OPERATOR_CONTROL=…
   ARCA_CLI=… node test/leaves/care-drive.mjs <evidence-dir> <work-dir>` (a
   distribution's claim taken up with no click and shown in the popup's figure in

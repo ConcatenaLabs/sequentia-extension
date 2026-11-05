@@ -6,8 +6,10 @@
 // `onPredating`); this module keeps that report per node, minus what the user dismissed, and
 // builds what the wallet says from what the node itself reports (`GET /node/onchain`: whether it
 // is up, its channels by funding outpoint and state, and what it holds on chain). A channel is
-// called closed only when the node reports it on chain or no longer lists it; any other channel
-// is described as it is; while the node does not answer, nothing is said about it.
+// called closed only when the node reports it on chain, or no longer lists it and the chain shows
+// its funding output spent in a block; any other channel is described as it is; while the node
+// does not answer, or the chain cannot be read for a channel the node forgot, nothing is said
+// about it.
 //
 // The device moves a node's coins only to the node's own addresses or into a channel the node
 // opens, so the money a close paid stays at the node's own address until the user opens a new
@@ -80,25 +82,41 @@ const CLOSED = new Set(['ONCHAIN', 'CLOSED']);
 const CLOSING = new Set(['FUNDING_SPEND_SEEN', 'AWAITING_UNILATERAL']);
 
 // What became of an old channel, from the node's report. 'unknown' while the node does not
-// answer (or reports no channel list); 'closed' when it reports the channel on chain or no
-// longer lists it; 'closing' while its close waits for a block; 'stuck' for a mutual close that
-// was agreed and never reached the chain; 'open' otherwise.
+// answer (or reports no channel list); 'closed' when it reports the channel on chain, or no
+// longer lists it and its funding output is spent in a block; 'closing' while its close waits
+// for a block; 'stuck' for a mutual close that was agreed and never reached the chain, and for a
+// channel the node forgot whose funding output is still unspent; 'open' otherwise. For a channel
+// the node no longer lists, `node.fundings` says what the chain shows, by funding outpoint:
+// 'confirmed' (spent in a block), 'unspent', or nothing when it could not be read ('unknown').
 export function channelFate(c, node) {
   if (!node || !node.node_up || !Array.isArray(node.channel_states)) return 'unknown';
   const op = outpointOf(c);
   const s = node.channel_states.find((x) => (String(x.funding_txid || '').toLowerCase() + ':' + Number(x.funding_outnum)) === op);
-  if (!s) return 'closed';
+  if (!s) {
+    const chain = node.fundings && node.fundings[op];
+    if (chain === 'confirmed') return 'closed';
+    if (chain === 'unspent') return 'stuck';
+    return 'unknown';
+  }
   if (CLOSED.has(s.state)) return 'closed';
   if (CLOSING.has(s.state)) return 'closing';
   if (s.state === 'CLOSINGD_COMPLETE') return 'stuck';
   return 'open';
 }
 
+// The old channels of a node that it no longer lists: their funding outpoints are what the chain
+// must be asked about before anything is said of them (channelFate's `node.fundings`).
+export function forgottenChannels(channels, node) {
+  if (!node || !node.node_up || !Array.isArray(node.channel_states)) return [];
+  const listed = new Set(node.channel_states.map((x) => String(x.funding_txid || '').toLowerCase() + ':' + Number(x.funding_outnum)));
+  return (channels || []).filter((c) => !listed.has(outpointOf(c)));
+}
+
 const FATE_COPY = {
   closed: ['is closed.', 'are closed.'],
   closing: ['is closing: its closing transaction waits for a block.', 'are closing: their closing transactions wait for a block.'],
-  stuck: ['has a close that was agreed before the upgrade and never reached the chain; its balance stays in it.',
-          'have a close that was agreed before the upgrade and never reached the chain; their balance stays in them.'],
+  stuck: ['has a close that never reached the chain; its balance stays in it.',
+          'have a close that never reached the chain; their balance stays in them.'],
   open: ['is still open and moves no payments: your device signs none of its steps.',
          'are still open and move no payments: your device signs none of their steps.'],
 };

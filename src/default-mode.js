@@ -28,6 +28,8 @@ import * as ln from './ln.js';
 import { leafPerAsset } from './balance-view.js';
 import { plainRefusal } from './leaf-profiles.js';
 import { fromWire } from './wire.js';
+import { codeNamesChannels } from './leaf-schedule.js';
+import { boardCap, moveDown, direct, lnFits } from './ark-band.js';
 import {
   pinnedOperator, defaultWatchtowers, checkPinned, treeRoute, parseReceiveCode, arrivingAtoms, addressRoute, arrivalMinutes,
   DEFAULT_WORDS, JOIN_RETRY_MS, BOARD_QUIET_MS, vestingShort,
@@ -38,7 +40,7 @@ import { decodeBolt11 } from '../vendor/bolt11.js';
 import { forbiddenIn } from '../vendor/user-trade.js';
 import { faucetWalletId, faucetClaimed, faucetAlreadyPaid } from '../vendor/faucet-wallet.js';
 
-const CODE_KEY = 'ext.default.code';     // { [walletTag]: { text, owner, until } }
+const CODE_KEY = 'ext.default.code';     // { [walletTag]: { text, owner, until, channels } }
 const ARK_SUM_KEY = 'ext.ark.sum';       // { [walletTag]: { total, spendable, arriving } }
 const CODE_MARGIN_S = 86_400;
 const BTC_BOARD_QUIET_MS = 120_000;
@@ -109,14 +111,22 @@ export function noteOwnPayment(chain) {
   if (chain === 'bitcoin' || chain === 'btc') btcSentAt = Date.now();
   else { seqSentAt = Date.now(); leaves.hostOp('defaults', { on: true, quietUntil: seqSentAt + BOARD_QUIET_MS }).catch(() => {}); }
 }
-// Confirmed BTC at the wallet's address goes onto the ark by itself (default mode only).
+// The figures of the Bitcoin ark's band (src/ark-band.js): the defaults, or those a test set.
+async function bandOverride() { try { return (await stGet('local', 'ext.arkLimits')) || null; } catch { return null; } }
+// What the ark holds now, arriving included, in sats.
+async function arkHeld() { const st = await arkHost('status'); return big(st && st.figures && st.figures.total); }
+
+// Confirmed BTC at the wallet's address goes onto the ark by itself (default mode only), only
+// while the ark holds less than a quarter of its resting level, and then back up to it.
 let boardAskedAt = 0;
 export async function boardBtcSoon() {
   if (!(await isDefault())) return null;
   if (engine.availableFor('BTC') <= 0n) return null;
   if (Date.now() - btcSentAt < BTC_BOARD_QUIET_MS || Date.now() - boardAskedAt < 30_000) return null;
+  const cap = boardCap({ held: await arkHeld(), override: await bandOverride(), price: A.priceFor('BTC') });
+  if (cap === 0n) return null;
   boardAskedAt = Date.now();
-  const r = await arkHost('board', engine.btcWindow());
+  const r = await arkHost('board', { ...engine.btcWindow(), cap: cap == null ? null : String(cap) });
   if (r) { console.info('[btc ark] boarded', r.amount, 'sat in', r.txid); engine.sync().catch(() => {}); }
   return r;
 }
@@ -127,10 +137,36 @@ export async function boardBtcFor(sats) {
   if (!(await isDefault())) return null;
   if (engine.availableFor('BTC') <= 0n) return null;
   boardAskedAt = Date.now();
-  const r = await arkHost('board', engine.btcWindow());
+  const cap = boardCap({ held: await arkHeld(), override: await bandOverride(), price: A.priceFor('BTC'), wanted: big(sats) });
+  const r = await arkHost('board', { ...engine.btcWindow(), cap: cap == null ? null : String(cap) });
   if (r) { console.info('[btc ark] boarded', r.amount, 'sat in', r.txid, 'for a trade asking', String(sats)); engine.sync().catch(() => {}); }
   return r;
 }
+// Once the ark holds the band's ceiling, everything above its resting level moves to the wallet's
+// own address in one move: default mode only, one move at a time, at most every two minutes.
+let movingDown = false, movedDownAt = 0;
+const MOVE_DOWN_EVERY_MS = 120_000;
+export async function moveDownSoon() {
+  if (movingDown || Date.now() - movedDownAt < MOVE_DOWN_EVERY_MS || !(await isDefault()) || !(await arkOpen())) return null;
+  movingDown = true; movedDownAt = Date.now();
+  try {
+    const over = moveDown({ held: await arkHeld(), override: await bandOverride(), price: A.priceFor('BTC') });
+    if (!(over > 0n)) return null;
+    await engine.ensureOpen();
+    const to = engine.currentAddress(false).address;
+    const max = big(await arkHost('max', { to }));
+    const sats = over < max ? over : max;
+    if (!(sats > 0n)) return null;
+    const r = fromWire(await arkHost('send', { to, sats: String(sats) }));
+    console.info('[ark limit] moved', String(sats), 'sat of BTC to the wallet\'s address', r && r.txid);
+    engine.sync().catch(() => {});
+    return { sats: String(sats), txid: (r && r.txid) || null };
+  } catch (e) {
+    console.warn('[ark limit] moving out:', (e && e.message) || e);
+    return null;
+  } finally { movingDown = false; }
+}
+
 // Developer mode's exit of BTC from the Bitcoin ark by hand (offscreen-ark.js).
 export async function exitEstimate() { await ensureArk(); return arkHost('exitEstimate'); }
 export async function exitStart(vtxos) { await ensureArk(); return arkHost('exitStart', { vtxos }); }
@@ -189,12 +225,16 @@ async function leafOpen() {
   if (!(await leaves.config())) return false;
   try { return !!(await leaves.status()).open; } catch { return false; }
 }
-// The single-use Sequentia receive request: the one shown before while it waits and has a day
-// before it lapses, or a new one.
+// The single-use Sequentia receive request: the one shown before while it waits, has a day before
+// it lapses and names the channels the wallet can be paid over now, or a new one.
 async function leafCode(fresh) {
   const tag = await walletTag();
   const all = (await stGet('local', CODE_KEY)) || {};
-  const kept = all[tag];
+  let kept = all[tag];
+  if (kept && !fresh) {
+    const st = await leaves.status().catch(() => null);
+    if (st && st.payable && !codeNamesChannels(kept, st.payable)) kept = null;
+  }
   if (!fresh && kept && kept.text && kept.owner) {
     try {
       const s = await leaves.runAny('schedule');
@@ -203,7 +243,8 @@ async function leafCode(fresh) {
     } catch { /* a new one */ }
   }
   const v = await leaves.runUser('receive', {});
-  all[tag] = { text: v.request, owner: (v.details && v.details.owner) || null, until: (v.details && v.details.until) || null };
+  all[tag] = { text: v.request, owner: (v.details && v.details.owner) || null, until: (v.details && v.details.until) || null,
+    channels: (v.details && v.details.channels) || {} };
   await stSet('local', CODE_KEY, all);
   return all[tag];
 }
@@ -220,13 +261,22 @@ export async function receiveCode({ sats = null, fresh = false } = {}) {
   await engine.ensureOpen();
   const address = engine.currentAddress(false).address;
   let sequentia = null, ark = null, lightning = null, amount = null, invoiceHash = null;
-  if (await leafOpen()) { try { sequentia = (await leafCode(fresh)).text; } catch (e) { console.warn('[default] receive request:', e.message); } }
+  const open = await leafOpen();
+  if (open) { try { sequentia = (await leafCode(fresh)).text; } catch (e) { console.warn('[default] receive request:', e.message); } }
+  const n = big(sats);
+  if (n > 0n) amount = fmtAtoms(n, 8);
+  // An amount of the band's `direct` or more goes to the address: the code then carries neither the
+  // ark's address nor an invoice. Nor does it carry an invoice for more than the operator takes in
+  // one payment over Lightning (src/ark-band.js).
+  const price = A.priceFor('BTC');
+  const large = n > 0n && direct({ sats: n, override: await bandOverride(), price }) != null;
   if (await arkOpen()) {
-    try { if (!arkAddress || fresh) arkAddress = (await arkHost('run', { command: 'address' })).address; ark = arkAddress; } catch (e) { console.warn('[btc ark] address:', e.message); }
-    const n = big(sats);
-    if (n > 0n) {
+    if (!large) { try { if (!arkAddress || fresh) arkAddress = (await arkHost('run', { command: 'address' })).address; ark = arkAddress; } catch (e) { console.warn('[btc ark] address:', e.message); } }
+    let info = null;
+    if (n > 0n && !large && open) { try { info = await leafInfo(); } catch { /* the fallback */ } }
+    if (n > 0n && !large && lnFits({ info, kind: 'BTC', dir: 'in', atoms: n, price })) {
       const inv = await arkHost('invoice', { sats: String(n), description: 'Receive' });
-      lightning = inv.invoice; invoiceHash = inv.payment_hash; amount = fmtAtoms(n, 8);
+      lightning = inv.invoice; invoiceHash = inv.payment_hash;
     }
   }
   const qr = (text) => { try { return engine.qrFor(text); } catch (e) { console.warn('[default] no picture for the code:', e.message); return null; } };
@@ -396,13 +446,36 @@ export async function prepareSend({ to, amtS, asset }) {
 }
 
 async function prepareBtc(text, amtS) {
-  const d = destination(text, (s) => decodeBolt11(s));
+  let d = destination(text, (s) => decodeBolt11(s));
   if (!d) {
     if (/^bitcoin:/i.test(text) || parseReceiveCode(text)) throw new Error(DEFAULT_WORDS.codeBtc);
     throw new Error('Enter a receive code, an address or an invoice.');
   }
   const sats = d.route === 'invoice' ? 0n : parseAtoms(amtS, 8);
   if (d.route !== 'invoice' && sats <= 0n) throw new Error('Enter how much to send.');
+  // One payment of the band's `direct` or more goes to a receive code's address, never into an ark
+  // (src/ark-band.js), and the review says so.
+  let why = null;
+  if (/^bitcoin:/i.test(text) && d.route !== 'chain') {
+    const usd = direct({ sats, override: await bandOverride(), price: A.priceFor('BTC') });
+    const c = usd != null ? (() => { try { return readPayCode(text); } catch { return null; } })() : null;
+    if (c && c.address) { text = c.address; d = destination(text, (s) => decodeBolt11(s)); why = DEFAULT_WORDS.byAddressLarge(usd.toLocaleString('en-US')); }
+  }
+  // An address is paid from the wallet's own BTC there first: the ark pays it out only when that
+  // does not cover it, since paying an address out of the ark has a fee of its own.
+  if (d.route === 'chain' && sats > 0n && engine.availableFor('BTC') >= sats) {
+    let prep = null;
+    try { prep = await engine.prepareBtcSend(d.dest, amtS); } catch (e) { console.warn('[default] BTC from the address:', e.message); }
+    if (prep) {
+      const amt = fmtAtoms(sats, 8);
+      return {
+        id: stash({ kind: 'engine', prepId: prep.id, chain: 'bitcoin', amt, ticker: 'BTC' }),
+        title: BTC_WORDS.review(amt),
+        lines: [...(why ? [why] : []), `${BTC_WORDS.to}: ${d.dest.slice(0, 14)}…`, `${BTC_WORDS.fee}: ${fmtAtoms(big(prep.review.feeEst), 8)} BTC`, BTC_WORDS.arrivesBlock],
+        button: BTC_WORDS.send,
+      };
+    }
+  }
   let q = null;
   if (await arkOpen()) { try { q = fromWire(await arkHost('quote', { to: text, sats: String(sats) })); } catch (e) { console.warn('[btc ark] quote:', e.message); } }
   if (q && !q.short) {
@@ -411,7 +484,7 @@ async function prepareBtc(text, amtS) {
     return {
       id: stash({ kind: 'ark', to: text, sats: q.sats, route: d.route, amt }),
       title: BTC_WORDS.review(amt),
-      lines: [`${BTC_WORDS.to}: ${toLine}`, `${BTC_WORDS.fee}: ${q.fee > 0n ? fmtAtoms(q.fee, 8) + ' BTC' : BTC_WORDS.noFee}`, d.route === 'chain' ? BTC_WORDS.arrivesBlock : BTC_WORDS.arrivesNow],
+      lines: [...(why ? [why] : []), `${BTC_WORDS.to}: ${toLine}`, `${BTC_WORDS.fee}: ${q.fee > 0n ? fmtAtoms(q.fee, 8) + ' BTC' : BTC_WORDS.noFee}`, d.route === 'chain' ? BTC_WORDS.arrivesBlock : BTC_WORDS.arrivesNow],
       button: BTC_WORDS.send,
     };
   }

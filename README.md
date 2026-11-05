@@ -42,9 +42,17 @@ confidential `tsqb1…` addresses are an explicit opt-in).
   users (`ARCA.watchtowers`), so any one of them takes a coin on the chain under its
   owner's key should its batch be released, or a sender take back an earlier coin,
   while the wallet is away. BTC is held on the Bitcoin ark
-  (`BTC_ARK`, Bark's wallet in `btc-ark/`, opened in both modes). Every limit of that ark
-  is its server's own, read from its `info`: a board carries at most the server's largest
-  coin and none is made below its least board or before the server has answered; a move
+  (`BTC_ARK`, Bark's wallet in `btc-ark/`, opened in both modes), within the web wallet's
+  band in USD (`vendor/ark-limits.js`, applied by `src/ark-band.js`): it rests at 1,500 USD,
+  refilled from the wallet's address only while it holds less than a quarter of that, in one
+  move back up to it; once it holds 3,000 USD everything above 1,500 moves to the wallet's own
+  address in one move; and one payment of 1,500 USD or more goes to the address, never into
+  the ark (a receive code for such an amount carries neither the ark's address nor an
+  invoice, and a payment of it here pays the code's address). An address is paid from the
+  wallet's own BTC there first, out of the ark only when that does not cover it. Within the
+  band, every limit of that ark is its server's own, read from its `info`: a board carries at
+  most the server's largest coin and none is made below its least board or before the server
+  has answered; a move
   from the wallet's own Lightning channel is held to the largest coin too; renewals are
   made in groups that fit in it, and a coin larger than the server takes now is
   offboarded to the wallet's own address and boarded again from there. Before it schedules
@@ -65,13 +73,18 @@ confidential `tsqb1…` addresses are an explicit opt-in).
   receive code, `BITCOIN:<TB1>?ark=<ARK ADDRESS>&sequentia=<SQR1…>` (the web wallet's
   `pay-code.js`, kept in `vendor/`), with
   an optional "Amount in BTC" that adds `amount=` and an ark invoice as
-  `lightning=`; the testnet faucet pays the code. Coins that arrive at the address
+  `lightning=`, the invoice only up to the most the operator takes in one Lightning payment
+  (the `max_payment` its `info` publishes; 1,500 USD when it publishes none); the testnet
+  faucet pays the code. Where the operator makes channel leaves of an asset, the wallet holds
+  one by itself (`care` with `channels`), the code names it, and a payment from another
+  wallet's channel is in the figure within a second while the popup is open (the host reads
+  the channels every 300 ms then, every 5 s otherwise), with no round between. Coins that arrive at the address
   are moved into the tree (assets) or onto the ark (BTC) by themselves, and so is
   what the wallet's own Lightning channels hold (a wallet made before default mode
   held its coins this way, `src/ln-to-ark.js` over the web wallet's
   `lightning-to-ark.js`): the BTC channel pays an invoice of the wallet's ark, each
   asset channel a Lightning receive of its leaf wallet, within the Lightning signer's
-  daily limit, while the figure stays whole and reads "Moving <amount> <TICKER> so it
+  daily limit and the operator's published limit on one payment, while the figure stays whole and reads "Moving <amount> <TICKER> so it
   can be sent in seconds."; an emptied channel is then closed to the wallet's
   address when that is cheap and safe. Send takes a
   receive code, an address or an invoice: a code is paid in the tree in seconds,

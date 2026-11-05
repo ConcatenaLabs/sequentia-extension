@@ -7,8 +7,8 @@ import { careArgs, releaseDone, plannedCoins, payThrough, RELEASE_POLL_MS, RELEA
 const X = 'aa'.repeat(32);
 
 test('care plans with the library\'s own reach: its arguments', () => {
-  assert.deepEqual(careArgs(), {});
-  assert.deepEqual(careArgs(21), { scan: 21 });
+  assert.deepEqual(careArgs(), { channels: true });
+  assert.deepEqual(careArgs(21), { channels: true, scan: 21 });
   assert.equal(RELEASE_POLL_MS, 15_000);
   assert.equal(RELEASE_WAIT_MS, 3 * 3600_000);
   assert.equal(RELEASE_TRIES, 3);

@@ -441,6 +441,11 @@ chrome.runtime.onMessage.addListener((msg) => {
     // The leaf wallet's balance changed: the figures and the headline count it.
     if (msg.event === 'leaves-changed' && OV) rpc('overview', { withLn: false }).then((v) => { OV = v; renderOverview(); if (isDefault() && !$('tSend').classList.contains('hide')) updateDefaultAvail(); }).catch(() => {});
   }
+  // A payment into a channel, or the channels a payer can pay changed: the receive code shown is
+  // made again (it names them, and a paid one is done with).
+  if (msg && msg.scope === 'leaf-event' && ((msg.event === 'leafArrived' && msg.data && msg.data.kind === 'channel') || msg.event === 'channelsChanged') && receiveOpen()) {
+    renderDefaultReceive(true).catch(() => {});
+  }
   // A leaf sync finished (on the schedule, or asked): show what it changed.
   if (msg && msg.scope === 'leaf-event' && (msg.event === 'leafSynced' || msg.event === 'leafCared' || msg.event === 'leafReleasing') && !$('leafCard').classList.contains('hide')) {
     renderLeaves().catch(() => {});
@@ -1473,12 +1478,15 @@ function defaultReview(plan) {
   const st = el('div', 'status'); const row = el('div', 'row');
   const ok = el('button', 'primary', plan.button || DEFAULT_WORDS.send); const no = el('button', 'ghost', 'Cancel');
   row.appendChild(ok); row.appendChild(no); c.appendChild(row); c.appendChild(st);
-  no.onclick = () => m.remove();
+  // While the person reviews, the wallet reads no channel, so the payment never waits for one.
+  rpc('default.holdReads', { ms: 120_000 }).catch(() => {});
+  const release = () => rpc('default.holdReads', { ms: 0 }).catch(() => {});
+  no.onclick = () => { release(); m.remove(); };
   ok.onclick = async () => {
     ok.disabled = no.disabled = true;
     st.className = 'status'; st.textContent = DEFAULT_WORDS.sending;
     try {
-      const r = await rpc('default.confirmSend', { id: plan.id });
+      const r = await rpc('default.confirmSend', { id: plan.id }).finally(release);
       st.className = 'status ok'; st.textContent = r.text;
       ok.classList.add('hide'); no.textContent = 'Close'; no.disabled = false;
       $('sendDAmt').value = ''; $('sendDTo').value = '';

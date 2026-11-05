@@ -16,8 +16,10 @@
 // counted in the asset's one figure; while it is on its way it stays in the figure and the line
 // under it reads "Moving <amount> <TICKER> so it can be sent in seconds." (DEFAULT_WORDS.moving);
 // a payment that fails comes back to the channel. A move is paid only from a channel that is
-// locked in, held within the daily limit the page's Lightning signer sets (none by default) and,
-// for BTC, within the largest coin the ark's server publishes, and never made while a person is
+// locked in, held within the daily limit the page's Lightning signer sets (none by default), for an
+// asset within the most the operator takes in one payment over Lightning (the limit it publishes,
+// asset-lightning.js lnMaxPayment: it refuses a larger one), and for BTC within the largest coin the
+// ark's server publishes, the rest moving on a later pass; never made while a person is
 // using the wallet, nor in developer mode, where channels are the person's to use. A payment
 // refused before it left gives its receive up, and the move is tried again later. Once a channel
 // is emptied and closing it is cheap and safe, it is closed to an address of the wallet, whose
@@ -28,6 +30,7 @@
 // extension's. Every amount, fee and refusal is the ark's, the leaf library's or the Lightning
 // node's: this module picks the channel, sizes the move and follows it. It has no DOM, so it runs
 // under Node (lightning-to-ark.test.mjs).
+import { lnMaxPayment } from './asset-lightning.js'
 
 const big = (v) => { if (typeof v === 'bigint') return v; try { return BigInt(v ?? 0) } catch { return BigInt(Math.trunc(Number(v) || 0)) } }
 
@@ -428,8 +431,15 @@ export function mountLightningToArk (deps) {
         const refused = S.refused.get(asset)
         if (refused != null && now() - refused < RETRY_MS) { why(`${a8}: refused, tried again later`); continue }
         const min = mins.get(asset) ?? 1n
-        const amount = withinAllowance(amountToMove(n.spendable, min), await deps.allowance(asset), min)
+        let amount = withinAllowance(amountToMove(n.spendable, min), await deps.allowance(asset), min)
         if (amount == null) { why(`${a8}: ${n.spendable} in the channel, too little to move (smallest leaf ${min})`); await closeEmptied(asset); continue }
+        // The operator refuses one payment over Lightning above the limit it publishes: the move is
+        // held to it, the rest moving on a later pass.
+        const most = lnMaxPayment(info, asset, 'in')
+        if (most != null && amount > most) {
+          if (most < min) { why(`${a8}: the operator takes at most ${most} in one payment over Lightning now, under the smallest leaf ${min}`); continue }
+          amount = most
+        }
         try {
           S.movingFrom.set(asset, kindBalance(chans, asset, kindOf))
           await moveAsset(asset, amount, n)

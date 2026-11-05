@@ -60,11 +60,62 @@ export function freshRequestWaits(schedule, windowSecs = FRESH_REQUEST_SECS) {
 // The web wallet's leaves.js holds the same rules.
 export const CARE_EVERY_MS = 10 * 60_000;
 
-// The arguments `care` runs with: the claim scan. Its planning reach is the library's own.
+// The arguments `care` runs with: the claim scan, and the wallet's channels cared for (each read
+// and its credit folded, and one opened in each asset the operator makes channels of, from half of
+// the wallet's leaves of it). Its planning reach is the library's own.
 export function careArgs(scan) {
-  const a = {};
+  const a = { channels: true };
   if (scan) a.scan = scan;
   return a;
+}
+
+// How often the host reads the wallet's channels from the operator in default mode: every
+// CHANNEL_POLL_MS while the popup is open and the wallet was used, opened or paid within
+// CHANNEL_FAST_FOR_MS, so a payment into a channel is in the figure within a second; otherwise
+// every CHANNEL_POLL_IDLE_MS. Each read runs the library's witness, which the operator hands out
+// at a bounded rate, so only a wallet in use reads fast. The web wallet's leaves.js holds the
+// same rules.
+export const CHANNEL_POLL_MS = 300;
+export const CHANNEL_POLL_IDLE_MS = 5000;
+export const CHANNEL_FAST_FOR_MS = 3 * 60_000;
+
+// The pace of the next read: `visible` whether the popup is open, `usedAt` the last time the wallet
+// was used, opened or paid.
+export function channelPollMs({ visible, usedAt, now }) {
+  if (!visible || now - (usedAt || 0) > CHANNEL_FAST_FOR_MS) return CHANNEL_POLL_IDLE_MS;
+  return CHANNEL_POLL_MS;
+}
+
+const bigOf = (v) => { try { return BigInt(v ?? 0); } catch { return 0n; } };
+
+// The credit a channel read brought in: each channel whose credit grew, and by how much.
+export function channelArrivals(before, after) {
+  const was = new Map((before || []).filter((c) => c && !c.error).map((c) => [c.leaf_id, bigOf(c.credit)]));
+  const out = [];
+  for (const c of after || []) {
+    if (!c || c.error || !was.has(c.leaf_id)) continue;
+    const d = bigOf(c.credit) - was.get(c.leaf_id);
+    if (d > 0n) out.push({ leaf_id: c.leaf_id, asset: c.asset, atoms: d });
+  }
+  return out;
+}
+
+// The wallet's channels a payer can pay now, by asset (live, their round final): what a receive
+// code names (the library's `receive` puts them under `channels`).
+export function payableChannels(channels) {
+  const m = {};
+  for (const c of channels || []) if (c && c.coin_state === 'live' && c.final === true && !(c.asset in m)) m[c.asset] = c.leaf_id;
+  return m;
+}
+
+// Whether a kept receive code names the channels the wallet can be paid over now (`payable`, as
+// payableChannels gives them): a code made before a channel opened, or after it closed, is made
+// again.
+export function codeNamesChannels(kept, payable) {
+  const now = payable || {};
+  const had = (kept && kept.channels) || {};
+  const ka = Object.keys(had).sort(); const na = Object.keys(now).sort();
+  return ka.length === na.length && ka.every((a, i) => a === na[i] && had[a] === now[a]);
 }
 
 // A planned coin carries refund halves the wallet signed, so no wallet pays it out of

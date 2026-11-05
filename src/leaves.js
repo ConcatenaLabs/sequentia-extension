@@ -162,6 +162,10 @@ export async function join(cfg) {
 // not: `care` looks for claims under it and 20 more keys (`claimScan`).
 let receiveIndex = () => null;
 export function setReceiveIndexSource(fn) { receiveIndex = fn; }
+// Whether the popup is open, which the service worker knows: the host is told when it starts, as
+// well as whenever the popup opens or closes (`tellInUse`).
+let popupOpen = () => false;
+export function setInUseSource(fn) { popupOpen = fn; }
 const scanNow = () => { try { return claimScan(receiveIndex()); } catch { return claimScan(null); } };
 
 // Opens the leaf wallet in the offscreen host when this wallet joined an operator and is
@@ -179,7 +183,8 @@ export async function ensureRunning() {
     return true;
   }
   const ms = await modeStamp();
-  await host('start', { mnemonic, nodePassword: cfg.node_password, tickMs: cfg.tick_ms, careMs: cfg.care_ms, scan: scanNow(), defaultMode: ms.mode === 'user', defaultModeAt: ms.at });
+  await host('start', { mnemonic, nodePassword: cfg.node_password, tickMs: cfg.tick_ms, careMs: cfg.care_ms, scan: scanNow(), defaultMode: ms.mode === 'user', defaultModeAt: ms.at,
+    inUse: (() => { try { return !!popupOpen(); } catch { return false; } })() });
   return true;
 }
 
@@ -247,6 +252,18 @@ export async function tellDefaults(on, at) {
 export async function hostOp(op, args = {}) {
   if (!(await ensureRunning())) return null;
   return await host(op, args);
+}
+
+// Whether the popup is open (its 'seq-ui' port): while it is, the host reads the wallet's channels
+// fast. Never brings the offscreen document up for it.
+export async function tellInUse(on) {
+  if (!(await offscreenUp())) return null;
+  try { return await host('inUse', { on: !!on }); } catch { return null; }
+}
+// No channel read for `ms` (0 lets them go on): while a person reviews a payment.
+export async function holdReads(ms) {
+  if (!(await offscreenUp())) return null;
+  try { return await host('holdReads', { ms: Number(ms) || 0 }); } catch { return null; }
 }
 
 export async function status() {
