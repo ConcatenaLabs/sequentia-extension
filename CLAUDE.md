@@ -204,7 +204,8 @@ token (already public in sequentia-web-wallet) — not a secret.
 
 ## Commands
 
-- Tests: `node --test 'test/*.test.mjs'`
+- Tests: `node --test 'test/*.test.mjs'` (CI runs them on every pull request and on
+  `master`: `.github/workflows/tests.yml`)
 - The tests include `test/modules-parse.test.mjs`, which parses every module
   and links the import graph from each entry point, so a missing export (for
   instance a kit function the committed `pkg/` predates) fails there instead

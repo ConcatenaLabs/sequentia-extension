@@ -1,0 +1,28 @@
+# The unit tests (every test/*.test.mjs, `node --test`) on every pull request and on master, on
+# Node 22, the Node the web wallet's tests run on (this repository vendors its modules).
+# test/vendor-drift.test.mjs compares vendor/ with the web wallet's main over the network, so a
+# web wallet change to a copied file turns this red until it is copied here
+# (`node scripts/vendor-check.mjs --sync`).
+#
+# Not run here, by design (README, "Development"):
+# - SKIPPED (needs a browser): scripts/sw-console-check.mjs and the drives under test/*/.
+# - SKIPPED (needs a sequentiad): test/regtest/*.
+# - SKIPPED (needs the live testnet): the live drives.
+name: unit tests
+on:
+  pull_request:
+  push:
+    branches: [master]
+permissions:
+  contents: read
+jobs:
+  node-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node --version
+      - run: node --test 'test/*.test.mjs'
