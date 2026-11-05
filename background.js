@@ -690,6 +690,20 @@ const uiMethods = {
     } catch (e) { out.error = String((e && e.message) ?? e); }
     return out;
   },
+  // Every coin home while the operator does not answer, in either mode (the web wallet's "Take my
+  // coins home"): what the host says of it, each coin's way home quoted by the library, and those
+  // quotes sent home on the fees shown. The host carries every step.
+  'leaves.home': async () => {
+    if (!(await leaves.config()) || !(await sessionMnemonic())) return { home: null };
+    const st = await leaves.hostOp('status');
+    return { home: (st && st.home) || null };
+  },
+  'leaves.homeQuote': async () => ({ quote: await leaves.hostOp('homeQuote') }),
+  // Developer mode's exit drill, one leaf at a time: what its run broadcasts, quoted, then the run
+  // on the fees shown (the library refuses any other).
+  'leaves.exitQuote': async ({ leaf }) => ({ quote: await leaves.run('exit_quote', { leaf_id: String(leaf) }) }),
+  'leaves.exit': async ({ leaf, shown, feeAsset }) => ({ result: await leaves.run('exit', { leaf_id: String(leaf), shown: shown || {}, ...(feeAsset ? { fee_asset: String(feeAsset) } : {}) }) }),
+  'leaves.takeHome': async ({ quote }) => ({ result: await leaves.hostOp('takeHome', { quote: quote || {} }) }),
   'leaves.join': async (cfg) => ({ info: await leaves.join(cfg || {}) }),
   'leaves.sync': async () => ({ result: await leaves.syncNow() }),
   // What the wallet does by itself, shown and steered in developer mode: `care` now, a
@@ -733,7 +747,7 @@ const uiMethods = {
 // ---- message dispatch ----
 // The popup's reads, which a person opening it does not count as asking for anything.
 const PASSIVE_UI = new Set(['state', 'overview', 'stakingOverview', 'rewardsOverview', 'stakes', 'history', 'feeAssets', 'getMode',
-  'default.joined', 'default.leafInfo', 'default.assetMeta', 'default.btcAtAddress', 'leaves.state', 'getSettings', 'sites', 'sync']);
+  'default.joined', 'default.leafInfo', 'default.assetMeta', 'default.btcAtAddress', 'leaves.state', 'leaves.home', 'getSettings', 'sites', 'sync']);
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // The leaf wallet's events, from its host in the offscreen document: relayed to
   // connected sites (an open wallet page hears the same message itself).

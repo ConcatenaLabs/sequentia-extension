@@ -56,7 +56,12 @@ confidential `tsqb1…` addresses are an explicit opt-in).
   `btc-ark.js` rule, `exit_auto`): the fees come from the wallet's own Bitcoin
   address, the coin is claimed to it, and BTC's row says what happened and what it
   cost. Developer mode adds **Exit…** under BTC, which prices each coin and refuses
-  one not worth its exit. Receive shows one
+  one not worth its exit. When the operator of the Sequentia tree stops answering,
+  the coins there are still the wallet's: Balance says so in plain words, in either
+  mode, and offers **Take my coins home**, which sends every coin to the wallet's own
+  address from what the wallet holds and the chain alone, each coin's fees quoted by
+  the library and shown first (the web wallet's `default-arca.js` `homeQuote` and
+  `homeTake`, and its docs/DEFAULT_MODE.md words). Receive shows one
   receive code, `BITCOIN:<TB1>?ark=<ARK ADDRESS>&sequentia=<SQR1…>` (the web wallet's
   `pay-code.js`, kept in `vendor/`), with
   an optional "Amount in BTC" that adds `amount=` and an ark invoice as
@@ -220,7 +225,9 @@ confidential `tsqb1…` addresses are an explicit opt-in).
   Developer mode shows the last run, the plans with Cancel and Release (the
   plan's leaf given up in the next round), each planned leaf marked under
   Leaves and their dates, and "Paying through the next round" while a payment
-  waits.
+  waits. Each leaf there has an **Exit drill**: what its run broadcasts and each
+  fee, quoted first, then broadcast on those fees only, with or without the
+  operator.
 - **Stakes** — the Stake tab lists every stake of the wallet's staking key,
   whichever wallet bonded it (the web wallet bonds with a lock of 43,200 blocks,
   Ambra with a time lock of 2,532 units of 512 seconds, about 15 days), found on

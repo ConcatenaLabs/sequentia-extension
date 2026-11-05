@@ -81,6 +81,13 @@ wasm. Read this before changing anything.
   counts it in the figure while it moves (`moving`). BigInt crosses as
   `{ $big }` (`src/wire.js`). Remove wallet closes the leaf and ark wallets before
   the vault goes.
+- **Every coin goes home without the operator.** The host notes whether the operator
+  answers from each sync's `unreachable`; while it does not, `status` carries `home`
+  (`{ unreachable, offer, onWay }`) and the popup's Balance shows the web wallet's card
+  and review in both modes (`leaves.home`, `leaves.homeQuote`, `leaves.takeHome`).
+  Quoting and sending are `homeQuote`/`homeTake` of `vendor/default-arca.js`, run by the
+  host on the library: each exit is broadcast only on the fees its quote showed. Developer
+  mode's Exit drill is per leaf (`leaves.exitQuote`, `leaves.exit`).
 - **Care is the library's, run by the host.** The offscreen host runs `care` once
   after the leaf wallet opens and after a sync at most every ten minutes
   (`careDue`, `src/leaf-schedule.js`, the web wallet's rules), in either mode,
