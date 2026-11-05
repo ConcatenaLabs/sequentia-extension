@@ -285,6 +285,17 @@ export function arrivalMinutes (seconds) {
   return Number.isFinite(n) && n > 0 ? Math.max(1, Math.ceil(n / 60)) : null
 }
 
+// When Receive asks again for a receive code the operator did not give (#521), after `failures`
+// in a row: at once twice, then 5, 10, 20 and 40 s, then every minute for as long as the page is
+// open. It keeps saying it is getting the code through the first two, and only then shows the
+// address meanwhile (`address`), so a payer is never left without a way to pay; the code comes
+// back the moment the operator answers. -> { waitMs, address }
+export function receiveCodeRetry (failures) {
+  const n = failures > 0 ? failures : 0
+  if (n <= 2) return { waitMs: n === 0 ? 0 : 2000, address: false }
+  return { waitMs: Math.min(5000 * 2 ** (n - 3), 60_000), address: true }
+}
+
 // How a payment of `amount` atoms of an asset to an address is made: on the chain when the
 // wallet's coins there cover it (as it always was), else out of the tree when the tree's
 // spendable coins cover it, else not at all.

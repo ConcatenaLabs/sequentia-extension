@@ -305,7 +305,8 @@ git archive --format=zip -o ambra-extension.zip HEAD -- manifest.json background
   popup and approval pages are thin RPC clients; long Lightning and DEX jobs
   run in a persistent offscreen document so a service-worker death cannot
   lose their outcome.
-- Tests: `node --test 'test/*.test.mjs'`
+- Tests: `node --test 'test/*.test.mjs'` (CI runs them on every pull request and on
+  `master`: `.github/workflows/tests.yml`)
 - Staking against a private chain: `SEQUENTIAD=/path/to/sequentiad node
   test/regtest/stake-records.mjs block-one` (and `fork`) starts a regtest
   node, serves it through a small esplora stand-in (`test/regtest/esplora-shim.mjs`),
