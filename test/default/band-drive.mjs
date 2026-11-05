@@ -10,18 +10,19 @@
 //                         most the resting level; writes what the ark and the address hold
 //   down [minutes]        sets { board 30, hold 60 }: the ark, holding more than 60 USD, moves
 //                         everything above 30 USD to the wallet's own address in one move
-//   codes                 the receive code and the review: an amount of `direct` or more carries
-//                         neither the ark's address nor an invoice, and a payment of it reviews to
-//                         the address with the sentence that says why; an amount over the operator's
-//                         published limit on one Lightning payment in carries no invoice, one under
-//                         it does (figures set to no `direct` for that part)
+//   codes                 the receive code and the review: an amount of `direct` (30 USD here) or
+//                         more carries neither the ark's address nor an invoice, and a payment of it
+//                         reviews to the address with the sentence that says why; a small amount
+//                         carries both; an amount over the operator's published limit on one
+//                         Lightning payment in carries no invoice, nor does one over the ark
+//                         server's own, and the code is still made (no `direct` for that part)
 //   state                 what the ark, the address and the overview hold now
 //
 //   CHROME=… node test/default/band-drive.mjs <work> <step> [args…]
 //
 // The figures are set in the extension's local storage (`ext.arkLimits`), as a test may. Every
 // default-mode screen read here is checked against the words default mode never says.
-import { writeFileSync, appendFileSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
+import { writeFileSync, appendFileSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Browser } from '../leaves/cdp.mjs';
@@ -42,6 +43,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let n = 0;
 const shot = async (p, name) => { const f = join(out, `${String(Date.now()).slice(-6)}-${String(++n).padStart(2, '0')}-${step}-${name}.png`); await p.shot(f); };
 
+// The profile is kept between steps, and Chromium keeps the extension's service worker script
+// in it: dropped before each step, so every step runs this checkout's code.
+rmSync(join(work, 'chrome-profile', 'Default', 'Service Worker'), { recursive: true, force: true });
 const b = new Browser({ chrome: CHROME, profile: join(work, 'chrome-profile'), ext: EXT, consoleLog: join(out, `console-${step}.log`), headless: true });
 
 async function unlock() {
@@ -133,23 +137,28 @@ try {
     const maxIn = BigInt(si.lightning.bitcoin.node.max_payment.receive);
     note(`price ${price}; the operator's Bitcoin node takes at most ${maxIn} sat in one payment`);
     const code = async (sats) => { const r = await ui(pop, 'default.receiveCode', { sats: String(sats), fresh: false }); return { r, c: readPayCode(r.code) }; };
-    await setFigures(pop, { btc: { board: 30, hold: 60, direct: 70 } });
-    const big = BigInt(Math.ceil((70 * 1e8) / price)) + 1000n;
+    // `direct` at 30 USD here: the wallet's BTC at its address covers such a payment.
+    await setFigures(pop, { btc: { board: 30, hold: 60, direct: 30 } });
+    // The ark opens a moment after the wallet does: its address is in the code once it has.
+    for (let i = 0; i < 60 && !(await code(10000)).c.ark; i++) await sleep(2000);
+    const big = BigInt(Math.ceil((30 * 1e8) / price)) + 1000n;
     const a = await code(big);
-    check(`a code for ${big} sat (70 USD or more) carries no ark and no invoice`, !a.c.ark && !a.c.lightning && !!a.c.address, { ark: !!a.c.ark, lightning: !!a.c.lightning, amount: a.c.amount });
+    check(`a code for ${big} sat (30 USD or more) carries no ark and no invoice`, !a.c.ark && !a.c.lightning && !!a.c.address, { ark: !!a.c.ark, lightning: !!a.c.lightning, amount: a.c.amount });
     const s = await code(10000);
     check('a code for 10000 sat carries the ark and an invoice', !!s.c.ark && !!s.c.lightning, { ark: !!s.c.ark, lightning: !!s.c.lightning });
     // The payer's review of the large code: to the address, and why.
     const plan = await ui(pop, 'default.prepareSend', { to: a.r.code, amtS: (Number(big) / 1e8).toFixed(8), asset: 'BTC' });
     const said = [plan.title, ...(plan.lines || [])].join(' | ');
-    check('paying it reviews to the address, saying why', /A payment of 70 USD or more goes to the address\./.test(said) && /To: tb1/.test(said), said);
+    check('paying it reviews to the address, saying why', /A payment of 30 USD or more goes to the address\./.test(said) && /To: tb1/.test(said), said);
     check('the review says none of the words default mode never says', forbiddenIn(said).length === 0, forbiddenIn(said));
     // The Lightning limit: no `direct`, so only the operator's limit decides the invoice.
     await setFigures(pop, { btc: { board: 30, hold: 60, direct: null } });
     const over = await code(maxIn + 1n);
     check(`a code for ${maxIn + 1n} sat, one over the operator's limit, carries no invoice`, !over.c.lightning && !!over.c.ark, { ark: !!over.c.ark, lightning: !!over.c.lightning });
-    const at = await code(maxIn);
-    check(`a code for ${maxIn} sat, at the limit, carries an invoice`, !!at.c.lightning, { lightning: !!at.c.lightning });
+    // The ark's own server takes at most its own figure over Lightning (0.01 BTC on the testnet),
+    // under the operator's: an amount between the two gives a code with no invoice, never no code.
+    const mid = await code(2_000_000n);
+    check('a code for 2000000 sat, over the ark server\'s own limit, is made, with no invoice', !mid.c.lightning && !!mid.c.address, { ark: !!mid.c.ark, lightning: !!mid.c.lightning })
     await setFigures(pop, { btc: { board: 30, hold: 60, direct: 70 } });
     // The popup's own receive screen, in default mode.
     await pop.click('[data-tab=receive]'); await sleep(3000);
