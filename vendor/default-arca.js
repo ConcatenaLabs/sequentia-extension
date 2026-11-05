@@ -110,7 +110,168 @@ export const DEFAULT_WORDS = Object.freeze({
   // The same, refused by the network, which names only the date.
   vestingRefused: (date) => `Part of this vests on ${date}, and can be used from then. Nothing has moved.`,
   vestingRefusedUndated: 'Part of this has not vested yet, and can be used once it has. Nothing has moved.',
+  // The service that holds the wallet's coins for instant payments does not answer: the coins are
+  // still the wallet's, and go home to its own address from what the wallet holds and the chain
+  // alone (leaves.js homeOffer, homeQuote, takeHome).
+  homeLine: 'The service that holds your coins for instant payments is not answering. Your coins are still yours: wait for it to come back, or take them home to your own address now.',
+  homeButton: 'Take my coins home',
+  homeQuoting: 'Working out what it costs\u2026',
+  homeTitle: 'Take your coins home?',
+  homeAsset: (amount, ticker, fees) => `${amount} ${ticker}` + (fees ? `, network fees about ${fees}` : ''),
+  homeWhen: (hours) => hours > 0
+    ? `They reach your own address in about ${hours} hours, and cannot be sent until then. Open this wallet again after that to finish.`
+    : 'They reach your own address shortly, and cannot be sent until then.',
+  homeConfirm: 'Take them home',
+  homeWorking: 'Taking your coins home\u2026',
+  homeNotNow: (amount, ticker) => `${amount} ${ticker} cannot be taken home right now. Nothing of it was sent: try again later.`,
+  homeNothing: 'None of your coins can be taken home right now. Nothing was sent: try again later.',
+  homeOnWay: (amount, ticker, hours) => hours > 0
+    ? `${amount} ${ticker} on its way to your own address: it arrives in about ${hours} hours, once this wallet is open.`
+    : `${amount} ${ticker} on its way to your own address.`,
 })
+
+// The hours a wait of `seconds` reads as, rounded up; 0 for none.
+export function homeHours (seconds) {
+  const n = Number(seconds)
+  return Number.isFinite(n) && n > 0 ? Math.ceil(n / 3600) : 0
+}
+
+// What taking every coin home would move and cost, by asset, from the library's quotes (leaves.js
+// homeQuote): each coin's value, and the fees the wallet pays (the claim's, and those of the steps
+// a coin of the wallet's pays; steps paid from their own reserve cost the holder nothing), each in
+// its own asset; the longest exit delay; a channel's value with no fee known before it goes; and
+// what the library refused. Atoms throughout. Nothing here prices anything: the fees are the
+// quotes'.
+// -> { assets: [{ asset, atoms, fees: [{ asset, atoms }] }], refused: [{ asset, atoms }], delaySeconds, count }
+export function homeSummary (q) {
+  const by = new Map()
+  const row = (a) => { if (!by.has(a)) by.set(a, { asset: a, atoms: 0n, fees: new Map() }); return by.get(a) }
+  let delay = 0
+  let count = 0
+  for (const { coin, quote } of (q && q.quotes) || []) {
+    const r = row(coin.asset); r.atoms += big(coin.value); count++
+    const fee = (f) => { for (const x of f || []) r.fees.set(x.asset, (r.fees.get(x.asset) || 0n) + big(x.amount)) }
+    for (const st of (quote && quote.steps) || []) if (st.paid_by !== 'its own reserve') fee(st.fee)
+    if (quote && quote.claim && !quote.claim.error) fee(quote.claim.fee)
+    delay = Math.max(delay, Number((quote && quote.exit_delay_seconds) || 0))
+  }
+  for (const coin of (q && q.channels) || []) { row(coin.asset).atoms += big(coin.value); count++ }
+  const refused = new Map()
+  for (const { coin } of (q && q.refused) || []) refused.set(coin.asset, (refused.get(coin.asset) || 0n) + big(coin.value))
+  return {
+    assets: [...by.values()].map((r) => ({ asset: r.asset, atoms: r.atoms, fees: [...r.fees].map(([asset, atoms]) => ({ asset, atoms })) })),
+    refused: [...refused].map(([asset, atoms]) => ({ asset, atoms })),
+    delaySeconds: delay,
+    count,
+  }
+}
+
+// The coins on their way home (leaves.js homeUnderWay), by asset, with the hours left before the
+// last of each arrives, at `nowMs`. -> [{ asset, atoms, hours }]
+export function homeOnWay (list, nowMs) {
+  const by = new Map()
+  for (const h of list || []) {
+    const r = by.get(h.asset) || { asset: h.asset, atoms: 0n, hours: 0 }
+    r.atoms += big(h.value)
+    if (h.delay && h.at) r.hours = Math.max(r.hours, homeHours((h.at + h.delay * 1000 - nowMs) / 1000))
+    by.set(h.asset, r)
+  }
+  return [...by.values()]
+}
+
+// ---- every coin home, with the operator gone ----
+// The coin states the library still holds for the wallet (leaves.js HELD), and of them those a
+// holder can send home: all but one already on its way out (`exiting`). Whether each can go is the
+// library's (`exit_quote` says it, or refuses); a channel leaf goes by its own steps (`channel_exit`).
+const HOME_FROM = Object.freeze(['pending', 'live', 'offered', 'sending', 'given', 'forfeited'])
+export function homeCoins (coins) { return (Array.isArray(coins) ? coins : []).filter((c) => c && HOME_FROM.includes(c.state)) }
+
+// Whether the operator cannot be reached, as the library last said: a sync's `unreachable`
+// (present only then), else an `info` (`server_info.unreachable`). -> { why, note } when it cannot
+// be, null when it answered, undefined when this answer says nothing either way.
+export function unreachableOf (answer, kind) {
+  if (!answer || typeof answer !== 'object') return undefined
+  if (kind === 'sync') return answer.unreachable ? { why: String(answer.unreachable.why || ''), note: answer.unreachable.note || null } : null
+  const si = answer.server_info
+  if (!si || typeof si !== 'object') return undefined
+  return si.unreachable ? { why: String(si.unreachable), note: null } : null
+}
+
+// Whether the fees `now` ({ asset: atoms }) are, in every asset, no more than `shown`.
+export function noMoreThan (now, shown) {
+  return Object.entries(now || {}).every(([a, v]) => big(v) <= big((shown || {})[a] ?? 0))
+}
+
+// Each coin's way home, quoted by the library (`run(command, args)` answers its result): every coin
+// homeCoins names, a channel leaf (`channelIds`) set apart. Asks nothing of the operator.
+// -> { quotes: [{ coin, quote }], channels: [coin], refused: [{ coin, error }] }
+export async function homeQuote (run, coins, channelIds = []) {
+  const out = { quotes: [], channels: [], refused: [] }
+  const ch = new Set(channelIds || [])
+  for (const c of homeCoins(coins)) {
+    const coin = { leaf_id: c.leaf_id, asset: c.asset, value: String(c.value ?? '') }
+    if (ch.has(c.leaf_id)) { out.channels.push(coin); continue }
+    try { out.quotes.push({ coin, quote: await run('exit_quote', { leaf_id: c.leaf_id }) }) } catch (e) { out.refused.push({ coin, error: e }) }
+  }
+  return out
+}
+
+// What homeQuote quoted, sent home: each coin's exit broadcast only on the fees its quote showed
+// (`shown`), a channel's by `channel_exit`. Coins of one tree share the first steps of their way
+// out: once one coin's exit has put them on the chain, the next coin's are fewer and its fees
+// lower than quoted, and the library refuses the fees shown; that coin is quoted again and goes
+// only for no more than the person was shown for it, in every asset.
+// -> { started: [{ coin, value }], refused: [{ coin, error }], kept: { leaf_id: { asset, value, at, delay } } }
+export async function homeTake (run, q, { now = () => Date.now(), log = () => {} } = {}) {
+  const out = { started: [], refused: [], kept: {} }
+  const exitOn = (coin, quote) => {
+    const args = { leaf_id: coin.leaf_id, shown: quote.unroll || {} }
+    if (quote.fee_asset) args.fee_asset = quote.fee_asset
+    return run('exit', args)
+  }
+  const go = async (coin, f, delay) => {
+    try {
+      const v = await f()
+      out.started.push({ coin, value: v })
+      out.kept[coin.leaf_id] = { asset: coin.asset, value: coin.value, at: now(), delay: delay || null }
+      const txids = ((v && v.broadcast) || []).map((x) => x.txid)
+      log(`[leaves] home: ${coin.leaf_id} ${(v && v.state) || ''} ${txids.join(' ')}`)
+    } catch (e) { out.refused.push({ coin, error: e }); log(`[leaves] home: ${coin.leaf_id} refused: ${e && e.message}`) }
+  }
+  for (const { coin, quote } of (q && q.quotes) || []) {
+    await go(coin, async () => {
+      try { return await exitOn(coin, quote) } catch (e) {
+        if (!/fees changed since they were shown/.test(String((e && e.message) || ''))) throw e
+        const again = await run('exit_quote', { leaf_id: coin.leaf_id })
+        if (!noMoreThan(again && again.unroll, quote.unroll)) throw e
+        return await exitOn(coin, again)
+      }
+    }, quote.exit_delay_seconds)
+  }
+  for (const coin of (q && q.channels) || []) await go(coin, () => run('channel_exit', { leaf_id: coin.leaf_id }), null)
+  return out
+}
+
+// The coins on their way home, as the library holds them (exiting, and not a coin a watchtower
+// took out while the wallet was away, which default mode does not speak of), each with when it
+// was sent and its delay where the wallet sent it (`kept`, homeTake's). Those a person sent, and
+// while the operator cannot be reached (`unreachable`) every one; a coin the wallet takes home by
+// itself on its date while the operator answers is not said (docs/DEFAULT_MODE.md).
+// -> { list: [{ leaf_id, asset, value, at, delay }], kept: what of `kept` is still on its way }
+export function homeUnderWay (coins, kept, unreachable) {
+  const k = kept || {}
+  const list = []
+  const all = Array.isArray(coins) ? coins : []
+  for (const c of all) {
+    if (!c || c.state !== 'exiting' || c.kept_safe) continue
+    if (!k[c.leaf_id] && !unreachable) continue
+    const h = k[c.leaf_id] || {}
+    list.push({ leaf_id: c.leaf_id, asset: c.asset, value: String(c.value ?? ''), at: h.at || null, delay: h.delay || null })
+  }
+  const on = new Set(list.map((h) => h.leaf_id))
+  const left = all.length ? Object.fromEntries(Object.entries(k).filter(([l]) => on.has(l) || !all.some((c) => c && c.leaf_id === l))) : k
+  return { list, kept: left }
+}
 
 // The minutes a payment to an address from the tree takes at most, from the operator's interval
 // between settlements (the library's `round_within_seconds`), or null when it publishes none.

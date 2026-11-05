@@ -81,6 +81,13 @@ wasm. Read this before changing anything.
   counts it in the figure while it moves (`moving`). BigInt crosses as
   `{ $big }` (`src/wire.js`). Remove wallet closes the leaf and ark wallets before
   the vault goes.
+- **Every coin goes home without the operator.** The host notes whether the operator
+  answers from each sync's `unreachable`; while it does not, `status` carries `home`
+  (`{ unreachable, offer, onWay }`) and the popup's Balance shows the web wallet's card
+  and review in both modes (`leaves.home`, `leaves.homeQuote`, `leaves.takeHome`).
+  Quoting and sending are `homeQuote`/`homeTake` of `vendor/default-arca.js`, run by the
+  host on the library: each exit is broadcast only on the fees its quote showed. Developer
+  mode's Exit drill is per leaf (`leaves.exitQuote`, `leaves.exit`).
 - **Care is the library's, run by the host.** The offscreen host runs `care` once
   after the leaf wallet opens and after a sync at most every ten minutes
   (`careDue`, `src/leaf-schedule.js`, the web wallet's rules), in either mode,
@@ -212,6 +219,10 @@ token (already public in sequentia-web-wallet) — not a secret.
   `CHROME=… ARCA_OPERATOR_CONTROL=… ARCA_CLI=… node test/leaves/drive.mjs
   <evidence-dir> <work-dir>` (README, Development). Start the operator harness
   fresh for each run: the drive moves the chain's median time.
+- Every coin home with the operator gone, on the live testnet, through the web wallet's
+  `tooling/live-proxy.mjs --cors` (`--refuse /arca` for the outage): `CHROME=… PROXY=…
+  node test/leaves/outage-drive.mjs <work> setup|receive|settle|drill|home` (its header
+  gives the order).
 - What the wallet does by itself with leaves: `CHROME=… ARCA_OPERATOR_CONTROL=…
   ARCA_CLI=… node test/leaves/care-drive.mjs <evidence-dir> <work-dir>` (a
   distribution's claim taken up with no click and shown in the popup's figure in

@@ -7,7 +7,7 @@ import { displayPair } from '../src/pair.js';
 import { plannedCoins } from '../src/leaf-schedule.js';
 import { frozenSentence, plainRefusal, batchLine, servedPairs, supervisedAssets } from '../src/leaf-profiles.js';
 import { chainGenesis } from '../src/chain-genesis.js';
-import { DEFAULT_WORDS, heldAssetList, anchorDepth } from '../vendor/default-arca.js';
+import { DEFAULT_WORDS, heldAssetList, anchorDepth, homeSummary, homeOnWay, homeHours } from '../vendor/default-arca.js';
 import { BTC_WORDS } from '../vendor/btc-ark.js';
 import { SPEED_WORDS } from '../vendor/speed-up.js';
 import { FAUCET_WORDS, faucetLabel } from '../vendor/faucet-wallet.js';
@@ -148,9 +148,71 @@ async function refreshOverview() {
   }).catch((e) => { $('syncNote').className = 'status err'; $('syncNote').textContent = 'Sync failed: ' + e.message; });
 }
 
+// When the service that holds the wallet's coins for instant payments does not answer, the coins
+// still go home, from what the wallet holds and the chain alone (the host's `home`): one card above
+// the list, in both modes, with one button, and a line for each asset on its way home. The words
+// are the web wallet's default mode (its docs/DEFAULT_MODE.md, "When the service does not answer").
+const homeMeta = (h) => { const r = OV && OV.rows.find((x) => x.key === h); return r ? { ticker: r.ticker, precision: r.precision } : { ticker: String(h).slice(0, 8), precision: 0 }; };
+const homeAmt = (h, atoms) => fmtAmount(atoms, homeMeta(h).precision);
+let homeAsking = 0;
+async function renderHome() {
+  const asked = ++homeAsking;
+  let home = null;
+  try { home = (await rpc('leaves.home')).home; } catch { home = null; }
+  if (asked !== homeAsking) return;
+  const box = $('homeCard'); box.innerHTML = '';
+  const offer = home && home.unreachable && (home.offer || []).length ? home.offer : null;
+  const way = home ? homeOnWay(home.onWay || [], Date.now()) : [];
+  box.classList.toggle('hide', !offer && !way.length);
+  for (const w of way) box.appendChild(el('div', 'sub home-onway', DEFAULT_WORDS.homeOnWay(homeAmt(w.asset, w.atoms), homeMeta(w.asset).ticker, w.hours)));
+  if (offer) {
+    box.appendChild(el('p', 'home-line', DEFAULT_WORDS.homeLine));
+    const b = el('button', 'primary', DEFAULT_WORDS.homeButton); b.id = 'btnTakeHome'; b.onclick = () => takeHomeDialog();
+    const r = el('div', 'row'); r.appendChild(b); box.appendChild(r);
+  }
+}
+setInterval(() => { if (OV && !$('tBalance').classList.contains('hide')) renderHome().catch(() => {}); }, 15000);
+async function takeHomeDialog() {
+  const { m, c } = modal(DEFAULT_WORDS.homeTitle);
+  const body = el('div', 'home-review'); c.appendChild(body);
+  const st = el('div', 'status', DEFAULT_WORDS.homeQuoting); c.appendChild(st);
+  const row = el('div', 'row');
+  const ok = el('button', 'primary', DEFAULT_WORDS.homeConfirm); ok.id = 'btnTakeHomeConfirm'; ok.disabled = true;
+  const no = el('button', 'ghost', 'Cancel'); no.onclick = () => m.remove();
+  row.appendChild(ok); row.appendChild(no); c.appendChild(row);
+  let q = null;
+  try { q = (await rpc('leaves.homeQuote')).quote; } catch (e) { console.warn('[home] quote:', e.message); }
+  const sum = q ? homeSummary(q) : { assets: [], refused: [], count: 0, delaySeconds: 0 };
+  st.textContent = '';
+  for (const a of sum.assets) {
+    const fees = a.fees.filter((f) => f.atoms > 0n).map((f) => homeAmt(f.asset, f.atoms) + ' ' + homeMeta(f.asset).ticker).join(' + ');
+    body.appendChild(el('div', 'home-asset', DEFAULT_WORDS.homeAsset(homeAmt(a.asset, a.atoms), homeMeta(a.asset).ticker, fees)));
+  }
+  if (sum.count) body.appendChild(el('p', 'sub', DEFAULT_WORDS.homeWhen(homeHours(sum.delaySeconds))));
+  for (const r of sum.refused) body.appendChild(el('p', 'sub', DEFAULT_WORDS.homeNotNow(homeAmt(r.asset, r.atoms), homeMeta(r.asset).ticker)));
+  if (!sum.count) { st.className = 'status err'; st.textContent = DEFAULT_WORDS.homeNothing; return; }
+  ok.disabled = false;
+  ok.onclick = async () => {
+    ok.disabled = true; no.disabled = true; st.className = 'status'; st.textContent = DEFAULT_WORDS.homeWorking;
+    let r = null;
+    try { r = (await rpc('leaves.takeHome', { quote: q })).result; } catch (e) { console.warn('[home] take:', e.message); }
+    no.disabled = false; no.textContent = 'Done'; ok.classList.add('hide');
+    const gone = new Map(), back = new Map();
+    for (const x of (r && r.started) || []) gone.set(x.coin.asset, (gone.get(x.coin.asset) || 0n) + BigInt(x.coin.value));
+    for (const x of (r && r.refused) || []) { back.set(x.coin.asset, (back.get(x.coin.asset) || 0n) + BigInt(x.coin.value)); console.warn('[home] refused:', x.coin.leaf_id, x.error && x.error.message); }
+    body.innerHTML = '';
+    const hours = homeHours(sum.delaySeconds);
+    for (const [h, a] of gone) body.appendChild(el('div', 'sub home-onway', DEFAULT_WORDS.homeOnWay(homeAmt(h, a), homeMeta(h).ticker, hours)));
+    for (const [h, a] of back) body.appendChild(el('div', 'sub', DEFAULT_WORDS.homeNotNow(homeAmt(h, a), homeMeta(h).ticker)));
+    st.className = gone.size ? 'status ok' : 'status err'; st.textContent = gone.size ? '' : DEFAULT_WORDS.homeNothing;
+    renderHome().catch(() => {});
+  };
+}
+
 function renderOverview() {
   if (!OV) return;
   applyMode();
+  renderHome().catch(() => {});
   $('headline').textContent = OV.totalRefStr || '—';
   $('headlineSub').textContent = 'Portfolio total' + (OV.pricesStale ? ' · prices may be stale' : '');
   $('syncNote').className = 'status';
@@ -880,9 +942,48 @@ function renderCoins(st) {
       if (fz) mid.appendChild(el('div', 'sub frozen-line', frozenSentence(c.value, short(c.asset))));
       if (c.frozen.note) mid.appendChild(el('div', 'sub', c.frozen.note));
     }
-    d.appendChild(mid);
+    // The exit drill: the leaf taken home from its record and the chain alone, its run quoted
+    // first (what it broadcasts, each fee, and the claim's), then broadcast on those fees only.
+    if (c.state !== 'exiting') {
+      const b = el('button', 'ghost tiny', 'Exit drill'); b.dataset.action = 'exit';
+      b.onclick = () => exitQuote(c.leaf_id);
+      d.appendChild(b);
+    }
+    const q = QUOTES.get(c.leaf_id);
+    if (q) d.appendChild(exitQuoteBox(c.leaf_id, q));
+    const run = DRILLS.get(c.leaf_id);
+    if (run) d.appendChild(el('div', 'sub leaf-drill', run));
     box.appendChild(d);
   }
+}
+const DRILLS = new Map();
+const QUOTES = new Map();
+async function exitQuote(leaf) {
+  const v = await leafAct('Quoting the exit…', async () => { const r = await rpc('leaves.exitQuote', { leaf }); QUOTES.set(leaf, r.quote || {}); return r; });
+  if (!v) QUOTES.delete(leaf);
+}
+function exitQuoteBox(leaf, q) {
+  const fee = (fs) => (fs || []).map((f) => f.amount + ' of ' + short(f.asset)).join(' + ') || 'none';
+  const box = el('div', 'status leaf-exit-quote'); box.id = 'leafExitQuote';
+  box.appendChild(el('div', null, (q.steps || []).length ? 'This run broadcasts, before anything is signed for the chain:' : 'This run broadcasts nothing before the claim.'));
+  (q.steps || []).forEach((st, i) => box.appendChild(el('div', 'sub', `transaction ${i + 1}: ${st.vsize} vB, fee ${fee(st.fee)}, paid from ${st.paid_by}`)));
+  const cl = q.claim || {};
+  box.appendChild(el('div', 'sub', cl.error ? 'the claim: ' + cl.error : `the claim, once the leaf is in a block and its exit delay of ${q.exit_delay_seconds} s has run: fee about ${fee(cl.fee)}`));
+  const ok = el('button', 'primary tiny', 'Broadcast on these fees'); ok.id = 'btnLeafExitConfirm';
+  const no = el('button', 'ghost tiny', 'Cancel'); no.onclick = () => { QUOTES.delete(leaf); renderLeaves(); };
+  ok.onclick = async () => {
+    ok.disabled = no.disabled = true;
+    QUOTES.delete(leaf);
+    const r = await leafAct('Broadcasting…', async () => {
+      const v = await rpc('leaves.exit', { leaf, shown: q.unroll || {}, feeAsset: q.fee_asset || null });
+      const x = v.result || {};
+      DRILLS.set(leaf, `Exit drill: ${x.state || ''}${(x.broadcast || []).map((b) => ' · broadcast ' + b.txid).join('')}${x.next ? ' · next: ' + x.next : ''}${x.error ? ' · ' + x.error : ''}`);
+      return v;
+    });
+    if (!r) DRILLS.set(leaf, 'Exit drill: refused: ' + $('leafStatus').textContent);
+  };
+  const r = el('div', 'row'); r.appendChild(ok); r.appendChild(no); box.appendChild(r);
+  return box;
 }
 $('btnLeafCare').onclick = () => leafAct('Running…', () => rpc('leaves.care'));
 

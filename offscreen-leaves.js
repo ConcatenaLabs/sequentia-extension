@@ -61,6 +61,10 @@
 //   'scan'  { scan }                        -> the receive keys `care` looks for claims under
 //   'care'                                  -> runs `care` now, whenever it last ran
 //   'watchBond'                             -> reads the bond and runs `watch_bond` now
+//   'homeQuote'                             -> every coin's way home quoted, while or whenever:
+//        { quotes: [{ coin, quote }], channels: [coin], refused: [{ coin, error }] }
+//   'takeHome' { quote }                    -> what homeQuote quoted, sent home on the fees shown:
+//        { started, refused, kept }. `status` carries `home`: { unreachable, offer, onWay }
 //   'stop'                                  -> closes the wallet and stops the schedule
 //   'defaults' { on, quietUntil? }          -> default mode on the pinned operator, or not:
 //        while on, coins that land at the wallet's address on the chain are boarded by
@@ -73,6 +77,7 @@ import { inFlight, nextAskMs, freshRequestWaits, syncDecision, careDue, careSumm
 import { frozenAtoms } from './src/leaf-profiles.js';
 import { redoingAtoms } from './vendor/default-arca.js';
 import { boardCandidates, boardAll, boardSpent, CLAIMS_EVERY_MS, vestingLots, vestedOpen } from './vendor/default-arca.js';
+import { homeCoins, unreachableOf, homeQuote, homeTake, homeUnderWay } from './vendor/default-arca.js';
 
 const TICK_MS = 60_000;
 let worker = null;
@@ -184,8 +189,45 @@ function reportTakes() {
   }
 }
 
+// Whether the operator answers, as the library last said (a sync's `unreachable`): while it does
+// not, the popup offers to take every coin home (`home`, in either mode).
+function noteUnreachable(u) {
+  if (u === undefined) return;
+  if (!!u !== !!S.unreachable) console.info(u ? '[leaves] the operator cannot be reached: ' + u.why : '[leaves] the operator answers again');
+  S.unreachable = u ? { ...u, since: (S.unreachable && S.unreachable.since) || Date.now() } : null;
+}
+
+// Every coin home, from the wallet's record and the chain alone (vendor/default-arca.js homeQuote
+// and homeTake, the web wallet's): each coin quoted by the library, each exit broadcast only on the
+// fees shown. What was sent, and when, is kept for each wallet in this document's storage.
+const homeKey = () => 'ext.leaves.home.' + S.fp;
+function homeKept() { try { return JSON.parse(localStorage.getItem(homeKey()) || '{}') || {}; } catch { return {}; } }
+function keepHome(m) { try { localStorage.setItem(homeKey(), JSON.stringify(m)); } catch {} }
+const result = async (command, args) => (await runCommand(command, args)).result;
+function homeState() {
+  const kept = homeKept();
+  const way = homeUnderWay(S.coins, kept, !!S.unreachable);
+  if (S.coins.length && Object.keys(way.kept).length !== Object.keys(kept).length) keepHome(way.kept);
+  const offer = S.unreachable ? homeCoins(S.coins).map((c) => ({ leaf_id: c.leaf_id, asset: c.asset, value: String(c.value ?? '') })) : [];
+  return { unreachable: S.unreachable, offer, onWay: way.list };
+}
+async function quoteHome() {
+  let channels = [];
+  try { channels = ((await result('channels', {})) || []).map((c) => c && c.leaf_id); } catch { /* none read: every coin is quoted */ }
+  try { S.coins = (await call('run', { command: 'coins' })).result || []; } catch { /* the last read */ }
+  return await homeQuote(result, S.coins, channels);
+}
+async function takeHome(q) {
+  const r = await homeTake(result, q, { log: (l) => console.info(l) });
+  keepHome({ ...homeKept(), ...r.kept });
+  try { S.coins = (await call('run', { command: 'coins' })).result || []; } catch {}
+  await reportBalance();
+  plan(1000);
+  return r;
+}
+
 function arrivals(mailbox) {
-  for (const c of ((mailbox && mailbox.accepted) || [])) {
+  for (const c of (Array.isArray(mailbox && mailbox.accepted) ? mailbox.accepted : [])) {
     emit('leafArrived', { leaf_id: c.leaf_id, asset: c.asset, value: String(c.value ?? ''), kind: c.kind });
   }
 }
@@ -204,6 +246,7 @@ async function sync(by) {
     console.info(`[leaves] caught up: ${(cu.restored || []).length} coin(s) taken in, ${(cu.given_elsewhere || []).length} given up by another wallet of the phrase`);
   }
   arrivals(r.mailbox);
+  noteUnreachable(unreachableOf(r, 'sync'));
   emit('leafSynced', { by, mailbox: r.mailbox || null });
   try {
     S.coins = (await call('run', { command: 'coins' })).result || [];
@@ -521,7 +564,15 @@ async function handle(op, args) {
   switch (op) {
     case 'status':
       return { open: S.open, lastSync: S.lastSync, lastError: S.lastError, schedule: S.schedule, lastCare: S.lastCare, scan: S.scan, releasing: S.releasing,
-        bond: S.bond, lastWatch: S.lastWatch, defaultMode: S.defaultMode, lastBoard: S.lastBoard };
+        bond: S.bond, lastWatch: S.lastWatch, defaultMode: S.defaultMode, lastBoard: S.lastBoard, home: S.open ? homeState() : null };
+    case 'homeQuote':
+      if (!S.open) throw { kind: 'refused', message: 'the leaf wallet is not open' };
+      S.lastAsked = Date.now();
+      return await quoteHome();
+    case 'takeHome':
+      if (!S.open) throw { kind: 'refused', message: 'the leaf wallet is not open' };
+      S.lastAsked = Date.now();
+      return await takeHome(args.quote || {});
     case 'scan':
       if (args.scan) S.scan = Number(args.scan);
       return { scan: S.scan };
