@@ -249,6 +249,18 @@ export async function hostOp(op, args = {}) {
   return await host(op, args);
 }
 
+// Whether the popup is open (its 'seq-ui' port): while it is, the host reads the wallet's channels
+// fast. Never brings the offscreen document up for it.
+export async function tellInUse(on) {
+  if (!(await offscreenUp())) return null;
+  try { return await host('inUse', { on: !!on }); } catch { return null; }
+}
+// No channel read for `ms` (0 lets them go on): while a person reviews a payment.
+export async function holdReads(ms) {
+  if (!(await offscreenUp())) return null;
+  try { return await host('holdReads', { ms: Number(ms) || 0 }); } catch { return null; }
+}
+
 export async function status() {
   if (!(await offscreenUp())) return { open: false };
   return await host('status');

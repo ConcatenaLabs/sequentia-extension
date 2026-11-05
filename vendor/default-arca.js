@@ -70,6 +70,11 @@ export const DEFAULT_WORDS = Object.freeze({
   byAddressAbove: (limit) => `A payment of more than ${limit} USD to this wallet goes to the address.`,
   byAddressLarge: (usd) => `A payment of ${usd} USD or more goes to the address.`,
   byAddressNoWay: 'This can’t arrive in seconds right now, so it goes to the address.',
+  // Receive's invoice card, for an amount that goes to the address (ark-limits.js) or that the
+  // operator does not take in one payment (its published limit, asset-lightning.js lnMaxPayment):
+  // no invoice, and the receive code, which carries the address, instead.
+  giveCode: 'Give the receive code instead: it is paid there.',
+  invoiceNoWay: 'This can’t arrive in seconds right now. Give the receive code instead: it is paid at the address.',
   // A payment to a wallet elsewhere, in seconds: held until that wallet takes it; refused or come
   // back, it is offered to the address.
   lnOnItsWay: 'On its way: it arrives once the other wallet takes it.',

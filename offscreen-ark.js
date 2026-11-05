@@ -22,11 +22,12 @@
 //                                        min_board_sat, required_board_confirmations…), or null
 //   'run'   { command, args }         -> the wallet's answer (e.g. 'address')
 //   'quote' { to, sats } / 'send' { to, sats } -> vendor/btc-ark.js quote/send, amounts as strings
+//   'max'   { to }                    -> the most the ark can pay `to` now, its fee taken off (sats), or null
 //   'payOutcome' { hash, untilMs? }        -> a held payment followed to 'complete', 'came-back' or 'pending'
 //   'invoice' { sats, description }   -> { invoice, payment_hash, expires_at }
 //   'received' { hash }               -> the receive's state, claimed when paid
 //   'ln'    { method, args }          -> the trade composer's BTC (`lightning()`), BigInt as { $big }
-//   'board' { lim, changeNext }       -> boards the confirmed BTC at the first `lim` keys
+//   'board' { lim, changeNext, cap }  -> boards the confirmed BTC at the first `lim` keys
 // The balance is sent to the service worker as `arkBalance` after every change.
 
 import { mountBtcArk, arkConfig } from './vendor/btc-ark.js';
@@ -123,12 +124,13 @@ async function broadcast(hex) {
   if (!r.ok || !/^[0-9a-fA-F]{64}$/.test(t)) throw new Error(t || ('HTTP ' + r.status));
   return t;
 }
-async function board({ lim = 20, changeNext = 0 } = {}) {
+// `cap`: the most the board carries, in sats (the band's room, src/ark-band.js), or none.
+async function board({ lim = 20, changeNext = 0, cap = null } = {}) {
   if (!A.ark || !A.ark.isOpen()) return null;
   // While BTC leaves the ark alone, or needs the address's BTC to pay its way out, nothing goes in.
   if (A.ark.exitHolds && A.ark.exitHolds()) return null;
   const sel = await utxos(Math.max(1, Math.min(200, Number(lim) || 20)));
-  const r = await A.ark.board({ utxos: async () => sel, buildUnsigned: drain(sel, Number(changeNext) || 0), broadcast });
+  const r = await A.ark.board({ utxos: async () => sel, buildUnsigned: drain(sel, Number(changeNext) || 0), broadcast, cap: cap == null ? null : BigInt(cap) });
   A.lastBoard = { at: Date.now(), value: r ? { txid: r.txid, amount: r.amount } : null };
   return A.lastBoard.value;
 }
@@ -144,6 +146,7 @@ async function handle(op, args) {
     case 'info': return A.ark && A.ark.isOpen() ? A.ark.info() : null;
     case 'run': return await need().run(String(args.command), args.args || {});
     case 'quote': return toWire(await need().quote(String(args.to), BigInt(args.sats || 0)));
+    case 'max': { const m = await need().max(String(args.to)); return m == null ? null : String(m); }
     case 'send': return toWire(await need().send(String(args.to), BigInt(args.sats || 0)));
     // A payment the payee holds, followed to its end (vendor/btc-ark.js payOutcome).
     case 'payOutcome': return toWire(await need().payOutcome(String(args.hash), { untilMs: Math.min(120000, Number(args.untilMs) || 60000) }));

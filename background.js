@@ -95,9 +95,15 @@ chrome.runtime.onConnect.addListener((port) => {
       if (s) { s.delete(port); if (!s.size) dappPorts.delete(origin); }
     });
   }
-  // 'seq-ui' ports exist purely to keep the service worker alive while the
-  // popup is open; no messages flow over them.
+  // 'seq-ui' ports keep the service worker alive while the popup is open; no messages flow
+  // over them. While one is open the leaf host reads the wallet's channels fast.
+  if (port.name === 'seq-ui') {
+    uiPorts++;
+    leaves.tellInUse(true).catch(() => {});
+    port.onDisconnect.addListener(() => { uiPorts = Math.max(0, uiPorts - 1); if (!uiPorts) leaves.tellInUse(false).catch(() => {}); });
+  }
 });
+let uiPorts = 0;
 
 function emitToOrigin(origin, event, data) {
   const s = dappPorts.get(origin);
@@ -239,7 +245,7 @@ try {
   chrome.alarms.onAlarm.addListener((a) => {
     if (a && a.name === 'leafHost') {
       dm.autoJoin().then(() => leaves.ensureRunning()).then((up) => (up ? dm.syncDefaults().then(() => resumeLeafTrades()) : null)).catch(() => {});
-      sessionMnemonic().then((m) => (m ? dm.ensureArk().then(() => dm.boardBtcSoon()) : null)).catch(() => {});
+      sessionMnemonic().then((m) => (m ? dm.ensureArk().then(() => dm.boardBtcSoon()).then(() => dm.moveDownSoon()) : null)).catch(() => {});
       // A wallet made before default mode held its coins in the Ark: what its own channels hold
       // moves there by itself (src/ln-to-ark.js).
       lnToArk.tick().catch((e) => console.warn('[ln to ark]', e && e.message));
@@ -620,6 +626,7 @@ const uiMethods = {
   'reportCheck': async ({ report }) => ({ refusal: reportRefusal(report || {}, await sessionMnemonic()) }),
   // --- default mode (src/default-mode.js) ---
   'default.receiveCode': async ({ sats, fresh }) => await dm.receiveCode({ sats, fresh }),
+  'default.holdReads': async ({ ms }) => { await leaves.holdReads(ms); return { ok: true }; },
   'default.invoiceReceived': async ({ hash }) => await dm.invoiceReceived(hash),
   'default.faucet': async ({ asset }) => await dm.faucet(asset || ''),
   'default.faucetReceived': async () => ({ claimed: await dm.faucetReceived() }),
@@ -768,7 +775,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         .then(() => chrome.runtime.sendMessage({ scope: 'ui-event', event: 'leaves-changed' }).catch(() => {}))
         .catch(() => {});
     } else if (msg.event === 'leafArrived' || msg.event === 'leafSyncDue') {
+      // A payment into a channel was paid to the code shown: a new one is made, as after any
+      // payment to it.
+      if (msg.event === 'leafArrived' && msg.data && msg.data.kind === 'channel') dm.forgetCode().catch(() => {});
       leaves.mode().then((m) => { if (m === 'developer') return emitToConnected(msg.event, msg.data); }).catch(() => {});
+    } else if (msg.event === 'channelsChanged') {
+      // The channels a payer can pay changed: the receive code is made again, to name them.
+      dm.forgetCode().catch(() => {});
     } else if (msg.event === 'leafTake') {
       // A take changed: told to the site that made it, in developer mode; a take done
       // is marked so, and the host stops syncing for it.

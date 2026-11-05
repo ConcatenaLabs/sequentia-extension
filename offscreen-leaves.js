@@ -71,9 +71,22 @@
 //        themselves (vendor/default-arca.js, never before `quietUntil`, when the kit wallet's
 //        own payment may still be spending them), and the mailbox is read every few seconds
 //        while nothing is asked, so a payment to the receive code shows at once
+//   'inUse' { on }                          -> whether the popup is open: while it is, and the
+//        wallet was used, opened or paid within three minutes, channels are read fast
+//   'holdReads' { ms }                      -> no channel read for `ms` (0 lets them go on): while
+//        a person reviews a payment, so it never waits behind one
+//
+// Channels (default mode): `care` runs with `channels`, so the library opens a channel leaf in
+// each asset the operator makes them of, reads it and folds its credit by itself. A payment from
+// another wallet's channel into this one is final for this wallet at once, with no round: the
+// host reads the channels (`channel_sync`) every 300 ms while the popup is open and the wallet in
+// use, else every 5 s, never while another command runs, and reports the balance as soon as a
+// channel's credit grows (`leafArrived`, kind 'channel'). Whenever the channels a payer can pay
+// change, `channelsChanged` is sent, and the receive code is made again to name them.
 // The mnemonic is handed to the worker and not kept here.
 
-import { inFlight, nextAskMs, freshRequestWaits, syncDecision, careDue, careSummary, careArgs, payThrough, CARE_EVERY_MS, laterMode } from './src/leaf-schedule.js';
+import { inFlight, nextAskMs, freshRequestWaits, syncDecision, careDue, careSummary, careArgs, payThrough, CARE_EVERY_MS, laterMode,
+  channelPollMs, channelArrivals, payableChannels } from './src/leaf-schedule.js';
 import { frozenAtoms } from './src/leaf-profiles.js';
 import { redoingAtoms } from './vendor/default-arca.js';
 import { boardCandidates, boardAll, boardSpent, CLAIMS_EVERY_MS, vestingLots, vestedOpen } from './vendor/default-arca.js';
@@ -86,7 +99,8 @@ const pending = new Map();
 let failed = null;
 const S = { open: false, fp: null, timer: null, heldFor: null, schedule: null, coins: [], participations: [], lastSync: null, lastError: null, tickMs: TICK_MS,
   watch: new Set(), watchMs: 3000, seen: new Map(), scan: null, careAt: null, careMs: CARE_EVERY_MS, lastCare: null, releasing: null, bond: null, lastWatch: null,
-  claimsAt: null, vesting: null, defaultMode: false, defaultModeAt: -1, quietUntil: 0, lastAsked: 0, info: null, boardRefused: new Map(), lastBoard: null, mailTimer: null };
+  claimsAt: null, vesting: null, defaultMode: false, defaultModeAt: -1, quietUntil: 0, lastAsked: 0, info: null, boardRefused: new Map(), lastBoard: null, mailTimer: null,
+  channels: [], chanTimer: null, visible: false, inUseAt: 0, channelIn: 0, holdUntil: 0, running: 0 };
 
 function errorOf(e) {
   if (e && typeof e === 'object' && e.message) {
@@ -253,8 +267,51 @@ async function sync(by) {
     S.participations = (await call('run', { command: 'participations' })).result || [];
   } catch { /* the next tick reads them again */ }
   reportTakes();
+  await readChannels();
   await reportBalance();
   return v;
+}
+
+// The wallet's channels as the library holds them (asking nothing of the operator). When those a
+// payer can pay change, `channelsChanged` is sent: the receive code is made again, to name them.
+async function readChannels() {
+  const was = JSON.stringify(payableChannels(S.channels));
+  try { S.channels = (await call('run', { command: 'channels' })).result || []; } catch { return; }
+  const now = payableChannels(S.channels);
+  if (JSON.stringify(now) !== was) {
+    console.info(`[leaves] channels a payer can pay: ${Object.keys(now).length ? Object.entries(now).map(([a, l]) => a.slice(0, 8) + ' ' + String(l).slice(0, 12)).join(', ') : 'none'}`);
+    emit('channelsChanged', { channels: now });
+  }
+}
+
+// ---- default mode: a payment into a channel shows at once ----
+// While the wallet holds a live channel, its channels are read from the operator (`channel_sync`,
+// one short command) at channelPollMs's pace, never while another command of the wallet runs nor
+// while the reads are held; a channel that was paid reports the balance at once.
+function watchChannels() {
+  clearTimeout(S.chanTimer);
+  if (!S.open || !S.defaultMode) return;
+  const usedAt = Math.max(S.lastAsked || 0, S.inUseAt || 0, S.channelIn || 0);
+  S.chanTimer = setTimeout(async () => {
+    const live = (S.channels || []).some((c) => c && c.coin_state === 'live');
+    if (live && S.open && S.defaultMode && !ticking && !S.running && !(Date.now() < (S.holdUntil || 0))) {
+      try {
+        const before = S.channels || [];
+        const after = (await call('run', { command: 'channel_sync', args: {} })).result;
+        if (Array.isArray(after)) S.channels = after.map((c) => ({ ...(before.find((x) => x.leaf_id === c.leaf_id) || {}), ...c }));
+        const came = channelArrivals(before, S.channels);
+        if (came.length) {
+          S.channelIn = Date.now();
+          await reportBalance();
+          for (const a of came) {
+            console.info(`[leaves] channel ${String(a.leaf_id).slice(0, 12)} paid ${a.atoms} of ${String(a.asset).slice(0, 8)}`);
+            emit('leafArrived', { leaf_id: a.leaf_id, asset: a.asset, value: String(a.atoms), kind: 'channel' });
+          }
+        }
+      } catch { /* the next read tries again */ }
+    }
+    watchChannels();
+  }, channelPollMs({ visible: S.visible, usedAt, now: Date.now() }));
 }
 
 // `care`, when it is due (or `force`d): the wallet's own upkeep, with no prompt.
@@ -266,11 +323,16 @@ async function careIfDue(force = false) {
     const sum = careSummary(v);
     S.lastCare = { at: Date.now(), value: v, summary: sum };
     console.info(`[leaves] care: ${sum.taken} claim(s) taken up, ${sum.planned} plan(s) signed, ${sum.cancelled} cancelled, ${sum.refreshing} sent to a round, ${sum.later} not yet near`);
-    if (sum.taken || sum.planned || sum.cancelled || sum.refreshing) {
+    // What care did with the channels: opened one (into the next round), folded credit.
+    const ch = (v && v.channels) || {};
+    const chMoved = ((ch.folded || []).length + (ch.opened || []).filter((o) => o && o.participation).length) > 0;
+    if ((ch.opened || []).length || (ch.folded || []).length) console.info(`[leaves] care: channels ${(ch.opened || []).length} opened, ${(ch.folded || []).length} folded`);
+    if (sum.taken || sum.planned || sum.cancelled || sum.refreshing || chMoved) {
       try {
         S.coins = (await call('run', { command: 'coins' })).result || [];
         S.participations = (await call('run', { command: 'participations' })).result || [];
       } catch { /* the next sync reads them */ }
+      await readChannels();
       await reportBalance();
     }
     // A claim taken up arrives as any coin does: the asset is its coin's.
@@ -484,6 +546,7 @@ async function tick() {
 // sharing it scans: a read refused for that alone is asked again, a little later. A
 // command that signs or moves anything is never repeated here; the caller sees the refusal.
 async function runCommand(command, cargs) {
+  S.running++;
   try {
     for (let i = 0; ; i++) {
       try { return await call('run', { command, args: cargs }); }
@@ -493,6 +556,7 @@ async function runCommand(command, cargs) {
       }
     }
   } finally {
+    S.running--;
     if (!READS.has(command)) {
       // A command that moves coins (a take, an order, a board, a send) changes what
       // the schedule follows: read the coins and participations again now, so the
@@ -549,9 +613,13 @@ async function start(args) {
   console.info(`[leaves] the leaf wallet is open (${has ? 'from its store' : 'created'}); it syncs on its schedule`);
   S.info = null;
   S.boardRefused = new Map();
+  S.channels = [];
+  S.inUseAt = Date.now();
+  await readChannels();
   await reportBalance();
   plan(0);
   watchMailbox();
+  watchChannels();
   return { created: !has, info };
 }
 
@@ -564,7 +632,8 @@ async function handle(op, args) {
   switch (op) {
     case 'status':
       return { open: S.open, lastSync: S.lastSync, lastError: S.lastError, schedule: S.schedule, lastCare: S.lastCare, scan: S.scan, releasing: S.releasing,
-        bond: S.bond, lastWatch: S.lastWatch, defaultMode: S.defaultMode, lastBoard: S.lastBoard, home: S.open ? homeState() : null };
+        bond: S.bond, lastWatch: S.lastWatch, defaultMode: S.defaultMode, lastBoard: S.lastBoard, home: S.open ? homeState() : null,
+        channels: S.channels, payable: payableChannels(S.channels) };
     case 'homeQuote':
       if (!S.open) throw { kind: 'refused', message: 'the leaf wallet is not open' };
       S.lastAsked = Date.now();
@@ -613,9 +682,18 @@ async function handle(op, args) {
       setDefaultMode(args.on, args.at);
       if (args.quietUntil) S.quietUntil = Math.max(S.quietUntil, Number(args.quietUntil));
       watchMailbox();
+      watchChannels();
       return { defaultMode: S.defaultMode, quietUntil: S.quietUntil };
+    case 'inUse':
+      S.visible = !!args.on;
+      if (S.visible) { S.inUseAt = Date.now(); watchChannels(); }
+      return { visible: S.visible };
+    case 'holdReads':
+      S.holdUntil = Number(args.ms) > 0 ? Date.now() + Number(args.ms) : 0;
+      return { holdUntil: S.holdUntil };
     case 'stop':
       clearTimeout(S.mailTimer);
+      clearTimeout(S.chanTimer);
       if (S.open) console.info('[leaves] the leaf wallet is closed');
       S.open = false;
       S.fp = null;
