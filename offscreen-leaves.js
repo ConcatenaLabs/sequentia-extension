@@ -589,6 +589,7 @@ async function start(args) {
   if (args.careMs) S.careMs = Math.max(1000, Number(args.careMs));
   if (args.scan) S.scan = Number(args.scan);
   if (args.defaultMode !== undefined) setDefaultMode(args.defaultMode, args.defaultModeAt);
+  if (args.inUse !== undefined) S.visible = !!args.inUse;
   // Two callers may ask at once (an unlock, and a site's request): the wallet of
   // this mnemonic, already open, is left as it is. Only a digest of the mnemonic
   // is kept to tell.

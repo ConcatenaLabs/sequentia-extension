@@ -240,6 +240,10 @@ token (already public in sequentia-web-wallet) — not a secret.
   `tooling/live-proxy.mjs --cors` (`--refuse /arca` for the outage): `CHROME=… PROXY=…
   node test/leaves/outage-drive.mjs <work> setup|receive|settle|drill|home` (its header
   gives the order).
+- Payments that arrive at once over channel leaves, two wallets in default mode against a local
+  operator started with `ARCA_OPERATOR_CHANNELS=1000000`: `CHROME=… ARCA_OPERATOR_CONTROL=…
+  ARCA_CLI=… node test/leaves/channel-drive.mjs <evidence-dir> <work-dir>` (twelve payments, each
+  in the receiver's figure under a second with no block made, then one the channel cannot take).
 - The Bitcoin ark's band and the Lightning limit on a receive, on the live testnet: `CHROME=…
   node test/default/band-drive.mjs <work> setup|refill|down|codes|state` (its header gives the
   order; the faucet's BTC is the only coin it uses).

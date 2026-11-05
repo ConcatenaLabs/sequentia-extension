@@ -59,12 +59,13 @@ const ui = async (pop, method, params = {}) => {
   if (!r || !r.ok) throw new Error(method + ': ' + ((r && r.error) || 'no answer'));
   return r.result;
 };
-const ark = (pop, op, args = {}) => pop.eval(`new Promise((ok) => chrome.runtime.sendMessage({ scope: 'ark', op: ${JSON.stringify(op)}, args: ${JSON.stringify(args)} }, (r) => ok(r)))`);
 const setFigures = (pop, f) => pop.eval(`chrome.storage.local.set({ 'ext.arkLimits': ${JSON.stringify(f)} }).then(() => true)`);
+// What the ark holds as the service worker last kept it (`ext.ark.sum`, the host's figures), and
+// the BTC at the wallet's address.
 async function held(pop) {
-  const st = await ark(pop, 'status');
+  const sum = await pop.eval("chrome.storage.local.get('ext.ark.sum').then((o) => Object.values(o['ext.ark.sum'] || {})[0] || null)");
   const at = await ui(pop, 'default.btcAtAddress').catch(() => ({ sats: null }));
-  return { ark: st && st.ok && st.value && st.value.figures, address: at.sats };
+  return { ark: sum, address: at.sats };
 }
 // The console lines of every context of the extension this run, as cdp.mjs writes them.
 const consoleHas = (re) => { try { return re.test(readFileSync(join(out, `console-${step}.log`), 'utf8')); } catch { return false; } };
@@ -100,8 +101,9 @@ try {
       h = await held(pop);
       note('ark ' + JSON.stringify(h.ark) + ' address ' + h.address);
     }
-    const st = (await ark(pop, 'status')).value || {};
-    note('last board: ' + JSON.stringify(st.lastBoard));
+    const boards = (readFileSync(join(out, `console-${step}.log`), 'utf8').match(/\[btc ark\] boarded \d+ sat in \w+/g) || []);
+    const st = { lastBoard: boards.length ? { value: { amount: boards[boards.length - 1].match(/boarded (\d+)/)[1] } } : null };
+    note('boards: ' + JSON.stringify(boards));
     const price = await pop.eval("fetch('https://sequentiatestnet.com/prices').then((r) => r.json()).then((d) => d.tBTC.price)");
     const cap = BigInt(Math.floor((70 * 1e8) / price));
     check('the ark was refilled', h.ark && BigInt(h.ark.total || 0) > 0n, h.ark);

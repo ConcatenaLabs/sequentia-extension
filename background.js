@@ -104,6 +104,7 @@ chrome.runtime.onConnect.addListener((port) => {
   }
 });
 let uiPorts = 0;
+leaves.setInUseSource(() => uiPorts > 0);
 
 function emitToOrigin(origin, event, data) {
   const s = dappPorts.get(origin);
@@ -700,6 +701,12 @@ const uiMethods = {
   // Every coin home while the operator does not answer, in either mode (the web wallet's "Take my
   // coins home"): what the host says of it, each coin's way home quoted by the library, and those
   // quotes sent home on the fees shown. The host carries every step.
+  // The wallet's channel leaves as the host last read them, and those a payer can pay now, in
+  // either mode (nothing is asked of the operator).
+  'leaves.channels': async () => {
+    const st = await leaves.status().catch(() => null);
+    return { channels: (st && st.channels) || [], payable: (st && st.payable) || {} };
+  },
   'leaves.home': async () => {
     if (!(await leaves.config()) || !(await sessionMnemonic())) return { home: null };
     const st = await leaves.hostOp('status');
@@ -754,7 +761,7 @@ const uiMethods = {
 // ---- message dispatch ----
 // The popup's reads, which a person opening it does not count as asking for anything.
 const PASSIVE_UI = new Set(['state', 'overview', 'stakingOverview', 'rewardsOverview', 'stakes', 'history', 'feeAssets', 'getMode',
-  'default.joined', 'default.leafInfo', 'default.assetMeta', 'default.btcAtAddress', 'leaves.state', 'leaves.home', 'getSettings', 'sites', 'sync']);
+  'default.joined', 'default.leafInfo', 'default.assetMeta', 'default.btcAtAddress', 'leaves.state', 'leaves.channels', 'leaves.home', 'getSettings', 'sites', 'sync']);
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // The leaf wallet's events, from its host in the offscreen document: relayed to
   // connected sites (an open wallet page hears the same message itself).
