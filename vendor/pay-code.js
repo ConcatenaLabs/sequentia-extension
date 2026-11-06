@@ -15,6 +15,11 @@
 // in that asset as `lightning` (its network and asset are in the invoice) and no `amount`, which
 // BIP321 counts in BTC.
 //
+// A code without an amount, of a wallet that holds a payment name (lnaddr.js), carries that name's
+// LNURL-pay as `lightning` instead (LUD-01: the bech32 of its https URL, human part `lnurl`), which
+// a Lightning wallet pays in an amount it chooses. Readers hand it on as `lnurl` (the URL) and never
+// as `lightning`, which is always an invoice.
+//
 // The code is made to be scanned at a glance. The scheme and every bech32 part (the address, the
 // ark address, an invoice, the receive request) are written in upper case, which a QR code holds
 // in its alphanumeric mode at 5.5 bits a character instead of 8; only `?ark=`, `&sequentia=` and
@@ -126,6 +131,37 @@ export function bech32mDecode (s) {
   if (!p || p.sum !== BECH32M) return null
   const bytes = convert(p.data.slice(0, -6), 5, 8, false)
   return bytes ? { hrp: p.hrp, bytes: Uint8Array.from(bytes) } : null
+}
+
+export function bech32Encode (hrp, bytes) {
+  const data = convert(bytes, 8, 5, true)
+  const mod = polymod([...hrpExpand(hrp), ...data, 0, 0, 0, 0, 0, 0]) ^ BECH32
+  const chk = []
+  for (let i = 0; i < 6; i++) chk.push((mod >> (5 * (5 - i))) & 31)
+  return hrp + '1' + [...data, ...chk].map((d) => CHARSET[d]).join('')
+}
+
+// ---- LNURL (LUD-01) -------------------------------------------------------------------------
+
+export const LNURL_HRP = 'lnurl'
+
+// An https URL -> its LNURL, `lnurl1…` in lower case.
+export function lnurlEncode (url) {
+  return bech32Encode(LNURL_HRP, new TextEncoder().encode(String(url)))
+}
+
+// `lnurl1…` (either case, `lightning:` before it or not) -> the URL it holds, or null.
+export function lnurlDecode (text) {
+  const p = bechParts(String(text || '').trim().replace(/^lightning:/i, ''))
+  if (!p || p.sum !== BECH32 || p.hrp !== LNURL_HRP) return null
+  const bytes = convert(p.data.slice(0, -6), 5, 8, false)
+  if (!bytes) return null
+  try { return new TextDecoder('utf-8', { fatal: true }).decode(Uint8Array.from(bytes)) } catch { return null }
+}
+
+// The LNURL-pay URL of the payment name `name@domain` (LUD-16).
+export function nameLnurlUrl (name, domain) {
+  return `https://${String(domain).toLowerCase()}/.well-known/lnurlp/${encodeURIComponent(String(name).toLowerCase())}`
 }
 
 // ---- the short receive request -------------------------------------------------------------
@@ -241,15 +277,17 @@ const up = (v) => bechParts(v) ? String(v).toUpperCase() : String(v)
 // A part handed on: bech32 in lower case, as every library takes it.
 const down = (v) => v != null && bechParts(v) ? v.toLowerCase() : v
 
-// -> 'BITCOIN:…' from { address, ark?, sequentia?, amount?, label?, message?, lightning? }. A
-// `sequentia` request in the library's spelling goes in short when it can.
-export function buildPayCode ({ address, ark, sequentia, amount, label, message, lightning } = {}) {
+// -> 'BITCOIN:…' from { address, ark?, sequentia?, amount?, label?, message?, lightning?, lnurl? }.
+// A `sequentia` request in the library's spelling goes in short when it can. `lnurl` is an https
+// URL (a payment name's LNURL-pay, `nameLnurlUrl`), carried as `lightning` when no invoice is.
+export function buildPayCode ({ address, ark, sequentia, amount, label, message, lightning, lnurl } = {}) {
   if (!address || !/^[A-Za-z0-9]+$/.test(String(address))) throw new Error('a receive code needs the wallet\'s address')
   const q = []
   if (amount != null) q.push(['amount', enc(amount)])
   if (label) q.push(['label', enc(label)])
   if (message) q.push(['message', enc(message)])
   if (lightning) q.push(['lightning', enc(up(lightning))])
+  else if (lnurl) q.push(['lightning', lnurlEncode(lnurl).toUpperCase()])
   if (ark) q.push(['ark', enc(up(ark))])
   if (sequentia) {
     const short = compactRequest(sequentia)
@@ -258,16 +296,17 @@ export function buildPayCode ({ address, ark, sequentia, amount, label, message,
   return 'BITCOIN:' + up(address) + (q.length ? '?' + q.map(([k, v]) => k + '=' + v).join('&') : '')
 }
 
-// -> { address, ark, sequentia, amount, label, message, lightning, other } or null when `text` is
-// not a bitcoin: request. Bech32 parts come back in lower case; `sequentia` as the code carries it
-// (short, or the library's spelling: `expandRequest` makes it payable). Throws on a request it
+// -> { address, ark, sequentia, amount, label, message, lightning, lnurl, other } or null when `text`
+// is not a bitcoin: request. Bech32 parts come back in lower case; `sequentia` as the code carries
+// it (short, or the library's spelling: `expandRequest` makes it payable). A `lightning` that is an
+// LNURL comes back as `lnurl`, the URL it holds, and `lightning` is then null. Throws on a request it
 // cannot honour: a required parameter it does not know (BIP321's `req-`), or a parameter given
 // twice where only one is meant.
 export function readPayCode (text) {
   const s = String(text || '').trim()
   const m = /^bitcoin:([^?]*)(?:\?(.*))?$/i.exec(s)
   if (!m) return null
-  const out = { address: m[1] ? down(dec(m[1])) : null, ark: null, sequentia: null, amount: null, label: null, message: null, lightning: null, other: {} }
+  const out = { address: m[1] ? down(dec(m[1])) : null, ark: null, sequentia: null, amount: null, label: null, message: null, lightning: null, lnurl: null, other: {} }
   const known = new Set(['ark', 'sequentia', 'amount', 'label', 'message', 'lightning'])
   for (const part of (m[2] || '').split('&')) {
     if (!part) continue
@@ -285,6 +324,8 @@ export function readPayCode (text) {
       out.other[key] = value
     }
   }
-  if (!out.address && !out.ark && !out.sequentia && !out.lightning) throw new Error('the code names no way to pay')
+  const url = out.lightning != null ? lnurlDecode(out.lightning) : null
+  if (url) { out.lnurl = url; out.lightning = null }
+  if (!out.address && !out.ark && !out.sequentia && !out.lightning && !out.lnurl) throw new Error('the code names no way to pay')
   return out
 }

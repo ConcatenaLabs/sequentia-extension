@@ -11,6 +11,7 @@
 // same load-bearing discipline as the web wallet.
 
 import './shim.js';
+import { nextReceiveIndex, shownReceiveIndex } from '../vendor/receive-index.js';
 import { rememberWallet, tagOf } from './mode.js';
 import init, {
   Mnemonic, Network, Signer, Wollet, Update, EsploraClient, Address, AssetId,
@@ -178,7 +179,7 @@ export async function openFromPhrase(phrase) {
   // and can hand out an already-used address before the first sync.
   try {
     const s = await stGet('local', 'ext.addrIndex');
-    if (s && s.desc === wollet.descriptor().toString() && Number.isInteger(s.index)) addrIndex = s.index;
+    if (s && s.desc === wollet.descriptor().toString() && Number.isInteger(s.index)) addrIndex = shownReceiveIndex(s.index, unifiedNextUnused());
   } catch {}
 }
 
@@ -221,7 +222,9 @@ export async function sync() {
       try { btcScanState = await btcScanRaw(); } catch {}
       refreshScanCacheBase();   // off-path; no-op once a base exists
       scannedOnce = true;
-      addrIndex = Math.max(addrIndex ?? 0, unifiedNextUnused());
+      // Past anything used on either chain; an address New code moved to stays while it is unused,
+      // within what a restore from the phrase finds (vendor/receive-index.js).
+      addrIndex = shownReceiveIndex(addrIndex, unifiedNextUnused());
       persistAddrIndex();
       await stSet('local', 'ext.balCache', serializeBalances());
       await stSet('local', 'ext.lastSyncAt', Date.now());
@@ -325,9 +328,11 @@ export function currentAddress(confidential = false) {
   const addr = confidential ? a : a.toUnconfidential();
   return { address: addr.toString(), index: addrIndex, confidential };
 }
+// New code, and developer mode's New address: an address not shown before, within the twenty past
+// the last one paid that a restore from the phrase reads (vendor/receive-index.js).
 export function newAddress(confidential = false) {
   if (!wollet) throw new Error('wallet is locked');
-  addrIndex = (addrIndex == null ? unifiedNextUnused() : addrIndex + 1);
+  addrIndex = nextReceiveIndex(addrIndex, unifiedNextUnused());
   return currentAddress(confidential);
 }
 // QR data URI with the BARE address as payload (universally scannable on both

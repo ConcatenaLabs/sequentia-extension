@@ -55,6 +55,15 @@ export const DEFAULT_WORDS = Object.freeze({
   showCode: 'Show receive code',
   newCode: 'New code',
   addressTip: 'Your address, the same tb1 address on both chains. For BTC, and for senders that ask for an address.',
+  // Receive's Confidential switch: the code is then the wallet's confidential address alone. A
+  // payment that arrives in seconds is never confidential (the operator publishes every leaf of
+  // a round, its asset and value), so the code carries none of those ways; BTC never is either.
+  confidential: 'Confidential',
+  receiveTipConf: 'Any Sequentia asset, any amount, paid to your confidential address.',
+  // What a payment to a confidential address is moved out of the Ark for (movingOut).
+  confidentialPurpose: 'sent confidentially',
+  confidentialTip: 'Hides the asset and amount of a payment from everyone but you and the payer.',
+  confidentialNote: 'Everyone can still see that a payment was made. A payment that arrives in seconds is never confidential, so this one arrives after the next block, in about a minute. BTC is never confidential: to receive BTC, turn this off.',
   sendTitle: (amount, ticker) => `Send ${amount} ${ticker}?`,
   sendLine: 'It arrives in seconds.',
   // The fee line of a payment in the Ark: none, said so rather than left out.

@@ -16,7 +16,8 @@
 //
 // The leaf library and Bark decide every fee, coin and refusal; this module names the route.
 
-import { ARCA, FAUCET_URL } from './config.js';
+import { ARCA, FAUCET_URL, LNADDR_DOMAIN, LSP } from './config.js';
+import { parseLnAddress, resolveLnAddress } from '../vendor/lnaddr.js';
 import { stGet, stSet, parseAtoms, fmtAtoms } from './util.js';
 import { ensureOffscreen, offscreenUp } from './offscreen-doc.js';
 import { sessionMnemonic } from './vault.js';
@@ -34,7 +35,8 @@ import {
   pinnedOperator, defaultWatchtowers, checkPinned, treeRoute, parseReceiveCode, arrivingAtoms, addressRoute, arrivalMinutes,
   DEFAULT_WORDS, JOIN_RETRY_MS, BOARD_QUIET_MS, vestingShort,
 } from '../vendor/default-arca.js';
-import { buildPayCode, readPayCode, expandRequest } from '../vendor/pay-code.js';
+import { buildPayCode, readPayCode, expandRequest, nameLnurlUrl } from '../vendor/pay-code.js';
+import { receivableAssets, receiveState } from '../vendor/asset-lightning.js';
 import { BTC_WORDS, destination } from '../vendor/btc-ark.js';
 import { decodeBolt11 } from '../vendor/bolt11.js';
 import { forbiddenIn } from '../vendor/user-trade.js';
@@ -255,38 +257,98 @@ export async function forgetCode() {
 }
 
 let arkAddress = null;
-// -> { code, qr, isCode, invoiceHash? }: the receive code, or the address alone when the wallet
-// holds no coins with the operator yet (nothing is said about why).
-export async function receiveCode({ sats = null, fresh = false } = {}) {
+// The assets a receive code can ask an amount of: BTC, and each asset the operator receives in
+// over Lightning (vendor/asset-lightning.js receivableAssets).
+export async function receiveChoices() {
+  if (!(await leafOpen())) return ['BTC'];
+  try { return ['BTC', ...receivableAssets(await leafInfo())]; } catch { return ['BTC']; }
+}
+// -> { code, qr, isCode, confidential?, invoiceHash?, invoiceKind? }: the receive code, or the
+// address alone when the wallet holds no coins with the operator yet (nothing is said about why).
+//   asset, amount   an amount asked for (optional): in BTC, the code names it and carries the
+//                   Bitcoin ark's invoice for it; in an asset the operator receives over
+//                   Lightning, that asset's invoice from the operator's node (`lightning_receive`)
+//                   and no `amount`, which counts BTC. Without one, a payment name the wallet
+//                   holds goes in as its LNURL-pay, which a Lightning wallet pays in any amount.
+//   fresh           New code: a new address (vendor/receive-index.js), receive request, ark
+//                   address and invoice.
+//   confidential    the wallet's confidential address alone (docs/DEFAULT_MODE.md, Receive).
+// `sats` is the BTC amount in sats, as older popups ask it.
+export async function receiveCode({ sats = null, asset = 'BTC', amount = null, fresh = false, confidential = false } = {}) {
   await engine.ensureOpen();
-  const address = engine.currentAddress(false).address;
-  let sequentia = null, ark = null, lightning = null, amount = null, invoiceHash = null;
+  const address = (fresh ? engine.newAddress(false) : engine.currentAddress(false)).address;
+  const qr = (text) => { try { return engine.qrFor(text); } catch (e) { console.warn('[default] no picture for the code:', e.message); return null; } };
+  if (confidential) {
+    const c = engine.currentAddress(true).address;
+    return { code: c, qr: qr(c), isCode: true, confidential: true };
+  }
+  const kind = asset && asset !== 'BTC' ? String(asset) : 'BTC';
+  let n = 0n;
+  try { n = amount != null && String(amount).trim() ? parseAtoms(String(amount).trim(), meta(kind).precision ?? 8) : big(sats); } catch { n = 0n; }
+  if (n < 0n) n = 0n;
+  let sequentia = null, ark = null, lightning = null, lnurl = null, btcAmount = null, invoiceHash = null, invoiceKind = null;
   const open = await leafOpen();
   if (open) { try { sequentia = (await leafCode(fresh)).text; } catch (e) { console.warn('[default] receive request:', e.message); } }
-  const n = big(sats);
-  if (n > 0n) amount = fmtAtoms(n, 8);
+  if (kind === 'BTC' && n > 0n) btcAmount = fmtAtoms(n, 8);
   // An amount of the band's `direct` or more goes to the address: the code then carries neither the
   // ark's address nor an invoice. Nor does it carry an invoice for more than the operator takes in
   // one payment over Lightning (src/ark-band.js).
-  const price = A.priceFor('BTC');
-  const large = n > 0n && direct({ sats: n, override: await bandOverride(), price }) != null;
+  const price = A.priceFor(kind === 'BTC' ? 'BTC' : meta(kind).ticker);
+  const large = kind === 'BTC' && n > 0n && direct({ sats: n, override: await bandOverride(), price }) != null;
+  let info = null;
+  if (n > 0n && open) { try { info = await leafInfo(); } catch { /* the fallback */ } }
   if (await arkOpen()) {
     if (!large) { try { if (!arkAddress || fresh) arkAddress = (await arkHost('run', { command: 'address' })).address; ark = arkAddress; } catch (e) { console.warn('[btc ark] address:', e.message); } }
-    let info = null;
-    if (n > 0n && !large && open) { try { info = await leafInfo(); } catch { /* the fallback */ } }
-    if (n > 0n && !large && lnFits({ info, kind: 'BTC', dir: 'in', atoms: n, price })) {
+    if (kind === 'BTC' && n > 0n && !large && lnFits({ info, kind: 'BTC', dir: 'in', atoms: n, price })) {
       // The ark's server has a limit of its own on what it takes over Lightning: an invoice it
       // refuses leaves the code without one, paid at the ark or the address.
       try {
         const inv = await arkHost('invoice', { sats: String(n), description: 'Receive' });
-        lightning = inv.invoice; invoiceHash = inv.payment_hash;
+        lightning = inv.invoice; invoiceHash = inv.payment_hash; invoiceKind = 'BTC';
       } catch (e) { console.warn('[btc ark] no invoice for the code:', e.message); }
     }
+    // Without an amount, the wallet's payment name, while it holds one (its invoices are the ark's).
+    if (n === 0n) { try { const nm = await nameState(); if (nm && nm.name) lnurl = nameLnurlUrl(nm.name, LNADDR_DOMAIN); } catch { /* none */ } }
   }
-  const qr = (text) => { try { return engine.qrFor(text); } catch (e) { console.warn('[default] no picture for the code:', e.message); return null; } };
+  // An amount in an asset: the operator's node's invoice in the asset, paid into the wallet's leaf.
+  if (kind !== 'BTC' && n > 0n && open && info && receivableAssets(info).includes(kind) &&
+      lnFits({ info, kind, dir: 'in', atoms: n, price, precision: meta(kind).precision ?? 8 })) {
+    try {
+      const inv = await leaves.runUser('lightning_receive', { asset: kind, amount: String(n), description: 'Receive' });
+      lightning = inv.invoice; invoiceHash = inv.payment_hash; invoiceKind = kind;
+    } catch (e) { console.warn('[default] no invoice in the asset for the code:', e.message); }
+  }
   if (!sequentia) return { code: address, qr: qr(address), isCode: false };
-  const code = buildPayCode({ address, ark, sequentia, amount, lightning });
-  return { code, qr: qr(code), isCode: true, invoiceHash };
+  const code = buildPayCode({ address, ark, sequentia, amount: btcAmount, lightning, lnurl });
+  return { code, qr: qr(code), isCode: true, invoiceHash, invoiceKind };
+}
+// A receive's state: the ark's for BTC; for an asset, the leaf library's (`lightning_receives`),
+// 'paid' once a payment is held for it (the wallet then syncs, which claims it), 'open' or 'gone'.
+export async function assetInvoiceState(hash) {
+  let all = null;
+  try { all = await leaves.runAny('lightning_receives', {}); } catch { return { state: 'open' }; }
+  const st = receiveState(all && all[hash], Date.now() / 1000);
+  if (st === 'paid') await leaves.hostOp('sync').catch(() => {});
+  return { state: st };
+}
+
+// ---- the payment name (vendor/lnaddr.js), held by the offscreen document's link ----
+// -> { name, address } as the link holds it, or null when the ark is not open.
+export async function nameState() {
+  if (!(await arkOpen())) return null;
+  try { return await arkHost('name', { op: 'state' }); } catch { return null; }
+}
+export async function nameRegister(name) { await ensureArk(); return await arkHost('name', { op: 'register', name }); }
+export async function nameRelease() { await ensureArk(); return await arkHost('name', { op: 'release' }); }
+// The code a Sequentia wallet paying the name is given: the address, a new ark address and a new
+// receive request, without touching the code Receive shows.
+export async function nameCode() {
+  await engine.ensureOpen();
+  const address = engine.currentAddress(false).address;
+  let ark = null, sequentia = null;
+  try { if (await arkOpen()) ark = (await arkHost('run', { command: 'address' })).address; } catch { /* none */ }
+  try { if (await leafOpen()) sequentia = (await leaves.runAny('receive', {})).request; } catch { /* none */ }
+  return buildPayCode({ address, ark: ark || undefined, sequentia: sequentia || undefined });
 }
 export async function invoiceReceived(hash) { return await arkHost('received', { hash }); }
 
@@ -378,7 +440,16 @@ export async function refuseIfVesting(asset, atoms) {
 // -> { id, title, lines: [text], button }
 export async function prepareSend({ to, amtS, asset }) {
   const text = String(to || '').trim();
-  if (!text) throw new Error('Enter a receive code, an address or an invoice.');
+  if (!text) throw new Error('Enter a receive code, a payment name, an address or an invoice.');
+  // A payment name is paid as what it stands for (vendor/lnaddr.js): one of this site's domain at
+  // the receive code its wallet gives now, any asset; another service's in BTC, at the invoice it
+  // makes for exactly the amount.
+  if (parseLnAddress(text)) {
+    let msat = null;
+    if (asset === 'BTC') { try { msat = parseAtoms(String(amtS || ''), 8) * 1000n; } catch { msat = null; } }
+    const r = await resolveLnAddress({ text, asset, msat, domain: LNADDR_DOMAIN, base: LSP.url, decode: (x) => decodeBolt11(x) });
+    return await prepareSend({ to: r.code || r.invoice, amtS, asset });
+  }
   const m = meta(asset);
   if (asset === 'BTC') return await prepareBtc(text, amtS);
   // An invoice names what it is paid in: over Lightning, as it always was.
@@ -453,7 +524,7 @@ async function prepareBtc(text, amtS) {
   let d = destination(text, (s) => decodeBolt11(s));
   if (!d) {
     if (/^bitcoin:/i.test(text) || parseReceiveCode(text)) throw new Error(DEFAULT_WORDS.codeBtc);
-    throw new Error('Enter a receive code, an address or an invoice.');
+    throw new Error('Enter a receive code, a payment name, an address or an invoice.');
   }
   const sats = d.route === 'invoice' ? 0n : parseAtoms(amtS, 8);
   if (d.route !== 'invoice' && sats <= 0n) throw new Error('Enter how much to send.');

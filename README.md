@@ -72,10 +72,20 @@ confidential `tsqb1…` addresses are an explicit opt-in).
   `homeTake`, and its docs/DEFAULT_MODE.md words). Receive shows one
   receive code, `BITCOIN:<TB1>?ark=<ARK ADDRESS>&sequentia=<SQR1…>` (the web wallet's
   `pay-code.js`, kept in `vendor/`), with
-  an optional "Amount in BTC" that adds `amount=` and an ark invoice as
-  `lightning=`, the invoice only up to the most the operator takes in one Lightning payment
-  (the `max_payment` its `info` publishes; 1,500 USD when it publishes none); the testnet
-  faucet pays the code. Where the operator makes channel leaves of an asset, the wallet holds
+  an optional amount and a menu of what it is in: in BTC it adds `amount=` and an ark
+  invoice as `lightning=`, in an asset the operator receives over Lightning that asset's
+  invoice from the operator's node (`lightning_receive`), each only up to the most the
+  operator takes in one Lightning payment (the `max_payment` its `info` publishes; 1,500
+  USD when it publishes none). Without an amount, a wallet with a payment name carries the
+  name's LNURL-pay as `lightning=`. **New code** moves to an address not shown before, within
+  the twenty past the last one paid that a restore reads (`vendor/receive-index.js`). The
+  **Confidential** switch under the code makes it the wallet's confidential address alone,
+  saying what stays public, and is off whenever Receive opens. Under it, **Your payment
+  name**: `name@sequentiatestnet.com`, held by a key of the phrase (`vendor/lnaddr.js`, the
+  web wallet's), whose link with the name service the offscreen document keeps while the
+  wallet is unlocked: a Lightning wallet paying it gets an invoice of the wallet's ark for
+  the amount it chose, a Sequentia wallet a new receive code. The testnet faucet pays the
+  code. Where the operator makes channel leaves of an asset, the wallet holds
   one by itself (`care` with `channels`), the code names it, and a payment from another
   wallet's channel is in the figure within a second while the popup is open (the host reads
   the channels every 300 ms then, every 5 s otherwise), with no round between. Coins that arrive at the address
@@ -87,7 +97,9 @@ confidential `tsqb1…` addresses are an explicit opt-in).
   daily limit and the operator's published limit on one payment, while the figure stays whole and reads "Moving <amount> <TICKER> so it
   can be sent in seconds."; an emptied channel is then closed to the wallet's
   address when that is cheap and safe. Send takes a
-  receive code, an address or an invoice: a code is paid in the tree in seconds,
+  receive code, a payment name, an address or an invoice: a name is paid as what it stands
+  for (one of this domain at its wallet's receive code, another service's in BTC at the
+  invoice it makes for the amount), a code is paid in the tree in seconds,
   an address from the chain or else out of the tree, an invoice over Lightning, BTC
   from the ark first. Trade is the web wallet's composer: the pair's market (last
   price, a 1D/1W/1M chart, the best bid and ask, recent trades) above You pay and
@@ -483,6 +495,14 @@ git archive --format=zip -o ambra-extension.zip HEAD -- manifest.json background
   forbidden words, and any error in the extension's contexts fails it. `FAUCET` names
   the asset asked for (the faucet pays each asset once per wallet, and once a day to
   one network);
+- Receive in default mode against the live testnet, one fresh profile:
+  `CHROME=/path/to/chrome node test/default/receive-drive.mjs <evidence-dir> <work-dir>`.
+  New code moves the address; a payment name chosen puts its LNURL-pay in the code, which
+  the name service answers, and its callback gives this wallet's invoice; amounts in BTC
+  and in an asset carry their invoices; Confidential gives the confidential address alone
+  and is off again once Receive is left; a name nobody holds is refused in Send.
+  `NAME_FILE=<file>` writes the name there and waits for another wallet to pay it USDX
+  (`NAME_WAIT_MS`, ten minutes by default). `BEFORE=1` only takes the receive screen.
   `ONLY_A=1` runs the first wallet alone (faucet and trade).
 - The testnet faucet, once per wallet, from the service worker's own code against a
   real faucet with a stand-in node (no chain, no coins):
