@@ -42,7 +42,7 @@ import { decodeBolt11 } from '../vendor/bolt11.js';
 import { forbiddenIn } from '../vendor/user-trade.js';
 import { faucetWalletId, faucetClaimed, faucetAlreadyPaid } from '../vendor/faucet-wallet.js';
 import { movesComing, moveWaits, MOVE_WAIT_MS, KEEP_ON_CHAIN_MS } from './confidential-send.js';
-import { confidentialPlan, ownShare, feeMarginAtoms } from '../vendor/confidential-pay.js';
+import { confidentialPlan, ownShare, feeMarginAtoms, liveFromRefusal } from '../vendor/confidential-pay.js';
 
 const CODE_KEY = 'ext.default.code';     // { [walletTag]: { text, owner, until, channels } }
 const MOVES_KEY = 'ext.default.moves';   // { [walletTag]: [{ id, asset, atoms, at }] }: moves out for a confidential payment
@@ -651,7 +651,7 @@ async function confidentialSend({ address, asset, atoms, amt }) {
   const info = await leafInfo().catch(() => null);
   const served = (info && info.server_info && Array.isArray(info.server_info.assets)) ? info.server_info.assets : [];
   const minLeaf = big((served.find((x) => x && x.asset === asset) || {}).min_leaf);
-  const plan = confidentialPlan({ amount: atoms, margin, onchain, instant: held - arriving, minLeaf, precision: prec });
+  let plan = confidentialPlan({ amount: atoms, margin, onchain, instant: held - arriving, minLeaf, precision: prec });
   if (plan.short) {
     // What is still arriving would cover it: said so, rather than that the wallet holds too little.
     if (plan.short <= arriving) throw new Error(DEFAULT_WORDS.stillArriving(m.ticker));
@@ -659,13 +659,25 @@ async function confidentialSend({ address, asset, atoms, amt }) {
   }
   if (plan.move > 0n) {
     const own = engine.freshAddress();
-    let q;
+    let q, live = null;
     try { q = await leaves.runUser('offboard_quote', { asset, amount: String(plan.move), address: own }); }
     catch (e) {
       console.warn('[default] moving out, quote:', e.message);
+      // Part of what is held may not be movable now (a channel's balance, a coin not final yet): the
+      // library's refusal says how much is, and the move is planned on that, once.
+      live = liveFromRefusal(e.message);
+      if (live != null && live > 0n) {
+        plan = confidentialPlan({ amount: atoms, margin, onchain, instant: live, minLeaf, precision: prec });
+        if (plan.move > 0n) {
+          try { q = await leaves.runUser('offboard_quote', { asset, amount: String(plan.move), address: own }); }
+          catch (e2) { console.warn('[default] moving out, quote of what can move:', e2.message); }
+        }
+      }
+    }
+    if (!q) {
       // The library pays out only coins it holds final: a coin just received counts in the figure
       // before it is, and is then still arriving for this.
-      if (/live coins of asset/.test(String(e.message))) throw new Error(DEFAULT_WORDS.stillArriving(m.ticker));
+      if (live === 0n || arriving > 0n) throw new Error(DEFAULT_WORDS.stillArriving(m.ticker));
       throw new Error(DEFAULT_WORDS.notMoved);
     }
     // A round pays the whole coin a move gives (what is moved and its change) out of the operator's

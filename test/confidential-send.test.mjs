@@ -15,20 +15,23 @@ test('a move asked before counts until its coins are read on the chain, and neve
     { id: 'm3', asset: A, atoms: '40', at: 3 },
     { id: 'm4', asset: B, atoms: '80', at: 4 },
     { id: 'm5', asset: A, atoms: '160', at: 5 },
+    { id: 'm6', asset: A, atoms: '640', at: 6 },
   ];
   const offboards = [
     { offboard: 'm1', asset: A, amount: '10', state: 'waiting' },
-    { offboard: 'm2', asset: A, amount: '20', state: 'paid', txid: 't2' },
+    { offboard: 'm2', asset: A, amount: '20', state: 'paid', txid: 't2', final: true },
     { offboard: 'm3', asset: A, amount: '40', state: 'not_made' },
     { offboard: 'm4', asset: B, amount: '80', state: 'unlocking' },
-    { offboard: 'm5', asset: A, amount: '160', state: 'paid', txid: 't5' },
+    { offboard: 'm5', asset: A, amount: '160', state: 'paid', txid: 't5', final: true },
+    // Paid and read by the wallet, not final yet: still counted.
+    { offboard: 'm6', asset: A, amount: '640', state: 'paid', txid: 't5', final: false },
     // Another move of the wallet's, which this wallet did not ask for a payment: not counted.
     { offboard: 'x', asset: A, amount: '320', state: 'in_round' },
   ];
   const seen = (t) => t === 't5';
   const r = movesComing(A, records, offboards, seen);
-  assert.equal(r.atoms, 30n);
-  assert.deepEqual(r.open.map((o) => o.id), ['m1', 'm2']);
+  assert.equal(r.atoms, 670n);
+  assert.deepEqual(r.open.map((o) => o.id), ['m1', 'm2', 'm6']);
   assert.equal(movesComing(B, records, offboards, seen).atoms, 80n);
   assert.equal(movesComing(A, records, [], seen).atoms, 0n);
 });
@@ -64,10 +67,13 @@ test('Send pays a confidential address with its amount hidden, never out of the 
   assert.ok(conf < body.indexOf("if (route === 'chain')") && conf < body.indexOf("'offboard_quote'"));
   const cs = js.slice(js.indexOf('async function confidentialSend'));
   // The web wallet's arithmetic: a round amount moves, and the wallet's own output hides the amount.
-  assert.match(js, /import \{ confidentialPlan, ownShare, feeMarginAtoms \} from '\.\.\/vendor\/confidential-pay\.js';/);
-  assert.match(cs, /const plan = confidentialPlan\(\{ amount: atoms, margin, onchain, instant: held - arriving, minLeaf, precision: prec \}\);/);
+  assert.match(js, /import \{ confidentialPlan, ownShare, feeMarginAtoms, liveFromRefusal \} from '\.\.\/vendor\/confidential-pay\.js';/);
+  assert.match(cs, /let plan = confidentialPlan\(\{ amount: atoms, margin, onchain, instant: held - arriving, minLeaf, precision: prec \}\);/);
   assert.match(cs, /'offboard', \{ asset, amount: String\(plan\.move\), address: own, shown: q \}/);
   assert.ok(cs.indexOf("hostOp('defaults'") < cs.indexOf("'offboard', {"), 'the upkeep is told before the move');
+  // What the library cannot move now (a channel's balance) is left out of the move, by its refusal.
+  assert.match(cs, /live = liveFromRefusal\(e\.message\);/);
+  assert.match(cs, /plan = confidentialPlan\(\{ amount: atoms, margin, onchain, instant: live, minLeaf, precision: prec \}\);/);
   assert.match(js, /const own = ownShare\(\{ amount: atoms, margin, onchain \}\);/);
   assert.match(cs, /engine\.prepareConfidentialSend\(\{ addr: address, asset, amount: String\(atoms\), own: String\(own\), others \}\)/);
   // The review says exactly what is hidden.

@@ -16,7 +16,7 @@
 // the extension's contexts fails the drive. Each wallet's phrase is written to <phrase-dir> (mode
 // 600) before it is funded, so whatever is left in it is never stranded.
 //
-//   CHROME=… [ASSET=USDX] [FUNDER=<phrase file>] [FUND_AMOUNT=2] node test/default/confidential-drive.mjs <evidence-dir> <work-dir> <phrase-dir> [<name>]
+//   CHROME=… [ASSET=USDX] [FUNDER=<phrase file>] [FUND_AMOUNT=5] [AMOUNT=1] [REUSE=1] [CHAIN=1] node test/default/confidential-drive.mjs <evidence-dir> <work-dir> <phrase-dir> [<name>]
 import { mkdirSync, writeFileSync, appendFileSync, chmodSync, existsSync, readFileSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -30,6 +30,9 @@ const ASSET = process.env.ASSET || 'USDX';
 const FUNDER = process.env.FUNDER || null;
 const FUND_AMOUNT = process.env.FUND_AMOUNT || '5';
 const FUND_TO = process.env.FUND_TO || 'address';
+// AMOUNT: what P pays R, in whole units (1 unless named).
+const AMOUNT = process.env.AMOUNT || '1';
+const AMOUNT_ATOMS = BigInt(AMOUNT) * 100000000n;
 // REUSE=1: the wallets of an earlier run in the same work directory, unlocked, P already funded.
 // Delete each profile's `Default/Service Worker` and `Default/Code Cache` first: a profile keeps the
 // service worker it installed, so it would run the code of the run that made it.
@@ -219,11 +222,11 @@ async function main() {
       await P.pop.click('[data-tab=balance]'); await sleep(1500);
       await P.pop.shot(join(out, 'screens', 'C-1-payer-holds.png'));
 
-      // Send 1 to R's confidential address.
+      // Send AMOUNT to R's confidential address.
       await P.pop.click('[data-tab=send]'); await sleep(1000);
       await P.pop.set('sendDTo', conf);
       const hex = await P.pop.eval(`[...document.querySelectorAll('#sendDAsset option')].find(o=>o.textContent===${JSON.stringify(ASSET)})?.value`);
-      await P.pop.set('sendDAsset', hex); await P.pop.set('sendDAmt', '1');
+      await P.pop.set('sendDAsset', hex); await P.pop.set('sendDAmt', AMOUNT);
       // A coin just received is paid out only once it is final: "still arriving" until then, and
       // Review is pressed again, as a person would, every minute for up to half an hour.
       let ts = Date.now(), first = '';
@@ -244,7 +247,7 @@ async function main() {
       await P.pop.waitFor("!!document.querySelector('.modal') || document.querySelector('#sendDErr').classList.contains('err')", 45 * 60000);
       const review = await P.pop.eval("(document.querySelector('.modal')||{}).innerText||document.querySelector('#sendDErr').innerText");
       const tReview = Date.now();
-      check('once they are there, the payment is reviewed', /Send 1 \w+\?/.test(review) && /Fee [\d.,]+ \w+/.test(review) && /Anyone reading the chain can see that (this payment is \w+, but not how much|a payment was made, but not its asset or amount)\./.test(review), `${review.replace(/\n/g, ' | ')} (${secs(ts)} after Review)`);
+      check('once they are there, the payment is reviewed', new RegExp(`Send ${AMOUNT} \\w+\\?`).test(review) && /Fee [\d.,]+ \w+/.test(review) && /Anyone reading the chain can see that (this payment is \w+, but not how much|a payment was made, but not its asset or amount)\./.test(review), `${review.replace(/\n/g, ' | ')} (${secs(ts)} after Review)`);
       await P.pop.shot(join(out, 'screens', 'C-3-review.png'));
       await noWords(P, 'the review');
       if (!(await P.pop.eval("!!document.querySelector('.modal')"))) return null;
@@ -252,7 +255,7 @@ async function main() {
       await P.pop.eval("[...document.querySelectorAll('.modal button')].find(b=>b.textContent==='Send').click(), true");
       await P.pop.waitFor("/Sent |declined|can't|up to|could not|nothing/i.test(document.querySelector('.modal .status').innerText)", 300000);
       const sent = await P.pop.text('.modal .status');
-      check('the payment was made', /^Sent 1 \w+\. It arrives/.test(sent), `${sent} (${secs(tReview)} after Send; ${secs(ts)} after Review)`);
+      check('the payment was made', new RegExp(`^Sent ${AMOUNT} \\w+\\. It arrives`).test(sent), `${sent} (${secs(tReview)} after Send; ${secs(ts)} after Review)`);
       await P.pop.shot(join(out, 'screens', 'C-4-sent.png'));
       let txid = null;
       for (let i = 0; i < 40 && !txid; i++) {
@@ -286,8 +289,8 @@ async function main() {
       await session('R', async (R) => {
         const t = await unlock(R);
         await R.pop.ui('sync').catch(() => {});
-        const r = await waitRow(R, ASSET, (x) => BigInt(x.total) >= rBefore + 100000000n, 600000);
-        check(`R's figure shows the 1 ${ASSET} more than before`, !!r && BigInt(r.total) >= rBefore + 100000000n, r && `${rBefore} -> ${r.total} atoms, ${secs(t)} after unlock`);
+        const r = await waitRow(R, ASSET, (x) => BigInt(x.total) >= rBefore + AMOUNT_ATOMS, 600000);
+        check(`R's figure shows the ${AMOUNT} ${ASSET} more than before`, !!r && BigInt(r.total) >= rBefore + AMOUNT_ATOMS, r && `${rBefore} -> ${r.total} atoms, ${secs(t)} after unlock`);
         await R.pop.click('[data-tab=balance]'); await sleep(1500);
         await R.pop.shot(join(out, 'screens', 'C-5-receiver-paid.png'));
         await noWords(R, 'Balance, paid');
