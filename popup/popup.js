@@ -10,6 +10,7 @@ import { chainGenesis } from '../src/chain-genesis.js';
 import { DEFAULT_WORDS, heldAssetList, anchorDepth, homeSummary, homeOnWay, homeHours } from '../vendor/default-arca.js';
 import { BTC_WORDS } from '../vendor/btc-ark.js';
 import { NAME_WORDS, nameProblem } from '../vendor/lnaddr.js';
+import { receiveView } from '../src/receive-view.js';
 import { LNADDR_DOMAIN } from '../src/config.js';
 import { SPEED_WORDS } from '../vendor/speed-up.js';
 import { FAUCET_WORDS, faucetLabel } from '../vendor/faucet-wallet.js';
@@ -35,7 +36,7 @@ new MutationObserver((ms) => {
 
 const $ = (id) => document.getElementById(id);
 // Default mode's Confidential switch on Receive (renderDefaultReceive): off whenever Receive opens.
-let recvConf0 = false;
+let recvConf0 = false, recvFull = false;
 const el = (t, c, txt) => { const e = document.createElement(t); if (c) e.className = c; if (txt != null) e.textContent = txt; return e; };
 
 const rpc = (method, params = {}) => new Promise((resolve, reject) => {
@@ -72,7 +73,7 @@ function view(id) { for (const v of VIEWS) $(v).classList.toggle('hide', v !== i
 const TABS = ['balance', 'send', 'receive', 'trade', 'stake', 'history', 'settings'];
 function tab(name) {
   // Receive's Confidential switch is a choice for one payment: off again once Receive is left.
-  if (name !== 'receive') recvConf0 = false;
+  if (name !== 'receive') { recvConf0 = false; recvFull = false; }
   for (const t of TABS) $('t' + t[0].toUpperCase() + t.slice(1)).classList.toggle('hide', t !== name);
   for (const b of document.querySelectorAll('.tabs [data-tab]')) b.classList.toggle('on', b.dataset.tab === name);
   if (name === 'receive') { if (isDefault()) renderDefaultReceive(); else renderReceive(); }
@@ -1411,14 +1412,20 @@ async function renderDefaultReceive(fresh = false) {
   renderName().catch(() => {});
   if (!recvCode || fresh) { $('recvDCode').textContent = DEFAULT_WORDS.receiveWait; $('recvDQr').removeAttribute('src'); }
   const atoms = recvAtoms(), asset = recvAsset();
-  const ask = (recvAsk = rpc('default.receiveCode', { asset, amount: atoms ? $('recvDAmt').value.trim() : null, fresh, confidential: recvConf0 }));
+  const ask = (recvAsk = rpc('default.receiveCode', { asset, amount: atoms ? $('recvDAmt').value.trim() : null, fresh, confidential: recvConf0, full: recvFull }));
   try {
     const r = await ask;
     if (ask !== recvAsk) return;
     recvCode = r;
-    $('recvDLbl').textContent = r.isCode ? DEFAULT_WORDS.codeLabel : 'Receive';
-    $('btnDCopy').textContent = r.isCode ? DEFAULT_WORDS.copyCode : 'Copy';
+    const v = receiveView(r, { full: recvFull });
+    $('recvDLbl').textContent = v.label;
+    if (v.tip) $('recvDTip').textContent = v.tip;
+    $('btnDCopy').textContent = v.copy;
+    $('btnDNew').classList.toggle('hide', !v.newCode);
+    $('btnDFull').classList.toggle('hide', !v.toggle); $('btnDFull').textContent = v.toggle || '';
+    $('recvDPublic').textContent = v.publicLine || ''; $('recvDPublic').classList.toggle('hide', !v.publicLine);
     $('recvDCode').textContent = r.code;
+    paintNameBox();
     if (r.qr) $('recvDQr').src = r.qr; else $('recvDQr').removeAttribute('src');
     if (r.invoiceHash) watchInvoice(r.invoiceHash, r.invoiceKind || 'BTC', atoms);
     // The address stands in while the wallet cannot hold coins with the operator yet: the open
@@ -1454,7 +1461,8 @@ function watchInvoice(hash, kind, atoms) {
   };
   setTimeout(tick, 3000);
 }
-$('btnDCopy').onclick = () => { if (recvCode) navigator.clipboard.writeText(recvCode.code).then(() => toast(recvCode.isCode ? 'Receive code copied' : 'Copied')); };
+$('btnDCopy').onclick = () => { if (recvCode) navigator.clipboard.writeText(recvCode.code).then(() => toast(recvCode.isName ? NAME_WORDS.copiedName : recvCode.isCode ? 'Receive code copied' : 'Copied')); };
+$('btnDFull').onclick = () => { recvFull = !recvFull; $('recvDStatus').textContent = ''; recvWatch++; renderDefaultReceive(); };
 $('btnDNew').onclick = () => { $('recvDStatus').textContent = ''; recvWatch++; renderDefaultReceive(true); };
 $('recvDConf').onchange = () => { recvConf0 = $('recvDConf').checked; recvWatch++; renderDefaultReceive(); };
 { let t = null; $('recvDAmt').addEventListener('input', () => { clearTimeout(t); t = setTimeout(() => { recvWatch++; renderDefaultReceive(); }, 600); }); }
@@ -1462,6 +1470,19 @@ $('recvDAsset').onchange = () => { $('recvDAmt').placeholder = recvAsset() === '
 
 // ---- the payment name (vendor/lnaddr.js): name@LNADDR_DOMAIN, under the code ----
 let nameEditing = false, nameBusy = false, nameNow = null;
+// While Receive shows the name (`isName`), the card says it once: the name block keeps only Remove
+// name, a quiet link at the card's foot. With the full code it is shown whole, as before.
+function paintNameBox() {
+  const above = !!nameNow && !!(recvCode && recvCode.isName) && isDefault();
+  const vis = (id, on) => $(id).classList.toggle('hide', !on);
+  vis('nameLbl', !above); vis('nameTip', !above);
+  vis('nameAddr', !!nameNow && !nameEditing && !above);
+  vis('btnNameCopy', !!nameNow && !nameEditing && !above);
+  $('btnNameRemove').classList.toggle('quiet', above);
+  $('btnNameRemove').classList.toggle('ghost', !above);
+  $('btnNameRemove').classList.toggle('tiny', !above);
+  $('nameBox').style.marginTop = above ? '6px' : '12px';
+}
 async function renderName() {
   let st = null; try { st = await rpc('default.name'); } catch {}
   const box = $('nameBox');
@@ -1478,7 +1499,8 @@ async function renderName() {
   $('nameInput').placeholder = NAME_WORDS.hint;
   const vis = (id, on) => $(id).classList.toggle('hide', !on);
   vis('btnNameChoose', !nameNow && !nameEditing); vis('btnNameSave', nameEditing); vis('btnNameCancel', nameEditing);
-  vis('btnNameCopy', !!nameNow && !nameEditing); vis('btnNameRemove', !!nameNow && !nameEditing);
+  vis('btnNameRemove', !!nameNow && !nameEditing);
+  paintNameBox();
   $('btnNameChoose').textContent = NAME_WORDS.choose; $('btnNameCancel').textContent = NAME_WORDS.cancel; $('btnNameCopy').textContent = NAME_WORDS.copy;
   if (!nameBusy) { $('btnNameSave').textContent = NAME_WORDS.save; $('btnNameRemove').textContent = NAME_WORDS.remove; }
   // The code carries the name while it is held: drawn again when it changes.

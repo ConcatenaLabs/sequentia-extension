@@ -73,3 +73,15 @@ export function ownShare ({ amount, margin, onchain }) {
   const x = big(onchain) - big(amount) - big(margin)
   return x >= big(margin) ? x : 0n
 }
+
+// What the wallet can move out now, by the leaf library's own refusal of a larger move: "the
+// wallet's live coins of asset … hold <n> and an offboard of <a> and its fee need <need> …". Coins
+// the library holds but cannot pay out (a channel's balance, a coin not final yet) count in the
+// balance and not here. -> atoms (the coins less the fee such a move pays), or null when the
+// refusal says something else.
+export function liveFromRefusal (message) {
+  const m = /live coins of asset \S+ hold (\d+) and an offboard of (\d+) and its fee need (\d+)/.exec(String(message || ''))
+  if (!m) return null
+  const hold = BigInt(m[1]); const fee = BigInt(m[3]) - BigInt(m[2])
+  return hold > fee ? hold - fee : 0n
+}

@@ -17,7 +17,7 @@
 // The leaf library and Bark decide every fee, coin and refusal; this module names the route.
 
 import { ARCA, FAUCET_URL, LNADDR_DOMAIN, LSP } from './config.js';
-import { parseLnAddress, resolveLnAddress } from '../vendor/lnaddr.js';
+import { parseLnAddress, resolveLnAddress, nameQrText } from '../vendor/lnaddr.js';
 import { stGet, stSet, parseAtoms, fmtAtoms } from './util.js';
 import { ensureOffscreen, offscreenUp } from './offscreen-doc.js';
 import { sessionMnemonic } from './vault.js';
@@ -284,7 +284,11 @@ export async function receiveChoices() {
 //                   address and invoice.
 //   confidential    the wallet's confidential address alone (docs/DEFAULT_MODE.md, Receive).
 // `sats` is the BTC amount in sats, as older popups ask it.
-export async function receiveCode({ sats = null, asset = 'BTC', amount = null, fresh = false, confidential = false } = {}) {
+//   full            with a payment name and no amount, the full code all the same ("Show full
+//                   code"); without it the picture is the name (`isName`, vendor/lnaddr.js
+//                   nameQrText), which a payer's wallet looks up for a new code of this wallet's.
+// `named` says the wallet holds a payment name.
+export async function receiveCode({ sats = null, asset = 'BTC', amount = null, fresh = false, confidential = false, full = false } = {}) {
   await engine.ensureOpen();
   const address = (fresh ? engine.newAddress(false) : engine.currentAddress(false)).address;
   const qr = (text) => { try { return engine.qrFor(text); } catch (e) { console.warn('[default] no picture for the code:', e.message); return null; } };
@@ -296,6 +300,13 @@ export async function receiveCode({ sats = null, asset = 'BTC', amount = null, f
   let n = 0n;
   try { n = amount != null && String(amount).trim() ? parseAtoms(String(amount).trim(), meta(kind).precision ?? 8) : big(sats); } catch { n = 0n; }
   if (n < 0n) n = 0n;
+  let nm = null;
+  if (n === 0n) { try { nm = await nameState(); } catch { nm = null; } }
+  const named = !!(nm && nm.name);
+  if (named && !full) {
+    const text = nameQrText(nm.address);
+    return { code: text, qr: qr(text), isCode: true, isName: true, named: true };
+  }
   let sequentia = null, ark = null, lightning = null, lnurl = null, btcAmount = null, invoiceHash = null, invoiceKind = null;
   const open = await leafOpen();
   if (open) { try { sequentia = (await leafCode(fresh)).text; } catch (e) { console.warn('[default] receive request:', e.message); } }
@@ -318,7 +329,7 @@ export async function receiveCode({ sats = null, asset = 'BTC', amount = null, f
       } catch (e) { console.warn('[btc ark] no invoice for the code:', e.message); }
     }
     // Without an amount, the wallet's payment name, while it holds one (its invoices are the ark's).
-    if (n === 0n) { try { const nm = await nameState(); if (nm && nm.name) lnurl = nameLnurlUrl(nm.name, LNADDR_DOMAIN); } catch { /* none */ } }
+    if (n === 0n && named) lnurl = nameLnurlUrl(nm.name, LNADDR_DOMAIN);
   }
   // An amount in an asset: the operator's node's invoice in the asset, paid into the wallet's leaf.
   if (kind !== 'BTC' && n > 0n && open && info && receivableAssets(info).includes(kind) &&
@@ -328,9 +339,9 @@ export async function receiveCode({ sats = null, asset = 'BTC', amount = null, f
       lightning = inv.invoice; invoiceHash = inv.payment_hash; invoiceKind = kind;
     } catch (e) { console.warn('[default] no invoice in the asset for the code:', e.message); }
   }
-  if (!sequentia) return { code: address, qr: qr(address), isCode: false };
+  if (!sequentia) return { code: address, qr: qr(address), isCode: false, named };
   const code = buildPayCode({ address, ark, sequentia, amount: btcAmount, lightning, lnurl });
-  return { code, qr: qr(code), isCode: true, invoiceHash, invoiceKind };
+  return { code, qr: qr(code), isCode: true, invoiceHash, invoiceKind, named };
 }
 // A receive's state: the ark's for BTC; for an asset, the leaf library's (`lightning_receives`),
 // 'paid' once a payment is held for it (the wallet then syncs, which claims it), 'open' or 'gone'.
@@ -350,15 +361,32 @@ export async function nameState() {
 }
 export async function nameRegister(name) { await ensureArk(); return await arkHost('name', { op: 'register', name }); }
 export async function nameRelease() { await ensureArk(); return await arkHost('name', { op: 'release' }); }
-// The code a Sequentia wallet paying the name is given: the address, a new ark address and a new
-// receive request, without touching the code Receive shows.
-export async function nameCode() {
+// A code of the stock the payment name leaves with the name service (vendor/name-stock.js): the
+// address at `index`, a new ark address and a new receive request, without touching the code
+// Receive shows. None (null) while the wallet can't hold coins with the operator yet: such a code
+// could not be paid in seconds, and the stock is filled once it can.
+export async function nameCode({ index } = {}) {
   await engine.ensureOpen();
-  const address = engine.currentAddress(false).address;
-  let ark = null, sequentia = null;
+  if (!Number.isInteger(index)) throw new Error('no address index');
+  if (!(await leafOpen())) return null;
+  const address = engine.addressAt(index);
+  let ark = null;
   try { if (await arkOpen()) ark = (await arkHost('run', { command: 'address' })).address; } catch { /* none */ }
-  try { if (await leafOpen()) sequentia = (await leaves.runAny('receive', {})).request; } catch { /* none */ }
-  return buildPayCode({ address, ark: ark || undefined, sequentia: sequentia || undefined });
+  const sequentia = (await leaves.runAny('receive', {})).request;
+  return buildPayCode({ address, ark: ark || undefined, sequentia });
+}
+// The key each payment name was first paid at, for this wallet (vendor/lnaddr.js `pins`): a code
+// under another key is refused. Kept in the service worker's storage shim, per wallet.
+export async function namePins() {
+  await engine.ensureOpen();
+  const k = 'ext.namePins.' + Array.from(engine.firstScriptPubKey(), (b) => b.toString(16).padStart(2, '0')).join('');
+  const all = () => { try { return JSON.parse(localStorage.getItem(k) || '{}') || {}; } catch { return {}; } };
+  return { get: (a) => all()[a] || null, set: (a, p) => { const m = all(); m[a] = p; localStorage.setItem(k, JSON.stringify(m)); } };
+}
+// The indices the stock picks from: { nextUnused, shown } (vendor/name-stock.js).
+export async function nameIndices() {
+  await engine.ensureOpen();
+  return { nextUnused: engine.nextUnusedIndex(), shown: engine.shownIndex() };
 }
 export async function invoiceReceived(hash) { return await arkHost('received', { hash }); }
 
@@ -472,7 +500,7 @@ export async function prepareSend({ to, amtS, asset }) {
   if (parseLnAddress(text)) {
     let msat = null;
     if (asset === 'BTC') { try { msat = parseAtoms(String(amtS || ''), 8) * 1000n; } catch { msat = null; } }
-    const r = await resolveLnAddress({ text, asset, msat, domain: LNADDR_DOMAIN, base: LSP.url, decode: (x) => decodeBolt11(x) });
+    const r = await resolveLnAddress({ text, asset, msat, domain: LNADDR_DOMAIN, base: LSP.url, decode: (x) => decodeBolt11(x), pins: await namePins() });
     return await prepareSend({ to: r.code || r.invoice, amtS, asset });
   }
   const m = meta(asset);

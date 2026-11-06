@@ -76,15 +76,21 @@ confidential `tsqb1…` addresses are an explicit opt-in).
   invoice as `lightning=`, in an asset the operator receives over Lightning that asset's
   invoice from the operator's node (`lightning_receive`), each only up to the most the
   operator takes in one Lightning payment (the `max_payment` its `info` publishes; 1,500
-  USD when it publishes none). Without an amount, a wallet with a payment name carries the
-  name's LNURL-pay as `lightning=`. **New code** moves to an address not shown before, within
+  USD when it publishes none). A wallet with a payment name shows the name instead while no
+  amount is typed and Confidential is off: the QR code holds `name@sequentiatestnet.com`, with
+  **Copy name** and **Show full code**, whose full code carries the name's LNURL-pay as
+  `lightning=`. The name is then said once, in one card: the QR, the name, one line on who
+  can pay it and when, the line saying names are public, Copy name and Show full code, the
+  Confidential switch, and **Remove name** as a quiet link at its foot. **New code** moves to an address not shown before, within
   the twenty past the last one paid that a restore reads (`vendor/receive-index.js`). The
   **Confidential** switch under the code makes it the wallet's confidential address alone,
   saying what stays public, and is off whenever Receive opens. Under it, **Your payment
   name**: `name@sequentiatestnet.com`, held by a key of the phrase (`vendor/lnaddr.js`, the
   web wallet's), whose link with the name service the offscreen document keeps while the
   wallet is unlocked: a Lightning wallet paying it gets an invoice of the wallet's ark for
-  the amount it chose, a Sequentia wallet a new receive code. The testnet faucet pays the
+  the amount it chose, and a Sequentia wallet, open or closed, one of the signed receive
+  codes the link leaves with the service and tops up while the wallet is unlocked
+  (`vendor/name-stock.js`: each at an address of its own within what a restore reads). The testnet faucet pays the
   code, and the wallet reads its mailbox for the coin at once (the offscreen host's
   `takeIn`, every 2 s for up to 45 s), so the popup says Received within seconds. Where the operator makes channel leaves of an asset, the wallet holds
   one by itself (`care` with `channels`), the code names it, and a payment from another
@@ -99,8 +105,9 @@ confidential `tsqb1…` addresses are an explicit opt-in).
   can be sent in seconds."; an emptied channel is then closed to the wallet's
   address when that is cheap and safe. Send takes a
   receive code, a payment name, an address or an invoice: a name is paid as what it stands
-  for (one of this domain at its wallet's receive code, another service's in BTC at the
-  invoice it makes for the amount), a code is paid in the tree in seconds,
+  for (one of this domain at a receive code its wallet signed, checked against the name's key
+  and the key this wallet paid the name at before; another service's in BTC at the invoice it
+  makes for the amount), a code is paid in the tree in seconds,
   an address from the chain or else out of the tree, an invoice over Lightning, BTC
   from the ark first. A confidential address (`tsqb1…`) is paid on the chain so that its amount
   is hidden: beside the payment, a blinded output to the wallet's own confidential address takes
@@ -505,7 +512,8 @@ git archive --format=zip -o ambra-extension.zip HEAD -- manifest.json background
   one network);
 - Receive in default mode against the live testnet, one fresh profile:
   `CHROME=/path/to/chrome node test/default/receive-drive.mjs <evidence-dir> <work-dir>`.
-  New code moves the address; a payment name chosen puts its LNURL-pay in the code, which
+  New code moves the address; a payment name chosen becomes the QR code (read back, it is the
+  name), its full code carries its LNURL-pay, which
   the name service answers, and its callback gives this wallet's invoice; amounts in BTC
   and in an asset carry their invoices; Confidential gives the confidential address alone
   and is off again once Receive is left; a name nobody holds is refused in Send.

@@ -626,15 +626,17 @@ const uiMethods = {
   },
   'reportCheck': async ({ report }) => ({ refusal: reportRefusal(report || {}, await sessionMnemonic()) }),
   // --- default mode (src/default-mode.js) ---
-  'default.receiveCode': async ({ sats, asset, amount, fresh, confidential }) => await dm.receiveCode({ sats, asset, amount, fresh, confidential }),
+  'default.receiveCode': async ({ sats, asset, amount, fresh, confidential, full }) => await dm.receiveCode({ sats, asset, amount, fresh, confidential, full }),
   'default.receiveChoices': async () => await dm.receiveChoices(),
   'default.assetInvoiceState': async ({ hash }) => await dm.assetInvoiceState(String(hash)),
   // The payment name (vendor/lnaddr.js), whose link the offscreen document keeps.
   'default.name': async () => await dm.nameState(),
   'default.nameRegister': async ({ name }) => await dm.nameRegister(String(name || '')),
   'default.nameRelease': async () => await dm.nameRelease(),
-  // Asked by that link when a Sequentia wallet pays the name: a new receive code for it.
-  'default.nameCode': async () => await dm.nameCode(),
+  // Asked by that link for the stock it leaves with the name service (vendor/name-stock.js): a new
+  // receive code at the address `index`, and the indices the stock picks from.
+  'default.nameCode': async ({ index }) => await dm.nameCode({ index: Number(index) }),
+  'default.nameIndices': async () => await dm.nameIndices(),
   'default.holdReads': async ({ ms }) => { await leaves.holdReads(ms); return { ok: true }; },
   'default.holdUpkeep': async ({ ms }) => { await leaves.holdUpkeep(ms); return { ok: true }; },
   'default.invoiceReceived': async ({ hash }) => await dm.invoiceReceived(hash),
@@ -769,7 +771,7 @@ const uiMethods = {
 
 // ---- message dispatch ----
 // The popup's reads, which a person opening it does not count as asking for anything.
-const PASSIVE_UI = new Set(['default.nameCode', 'default.name', 'default.receiveChoices', 'default.assetInvoiceState', 'state', 'overview', 'stakingOverview', 'rewardsOverview', 'stakes', 'history', 'feeAssets', 'getMode',
+const PASSIVE_UI = new Set(['default.nameCode', 'default.nameIndices', 'default.name', 'default.receiveChoices', 'default.assetInvoiceState', 'state', 'overview', 'stakingOverview', 'rewardsOverview', 'stakes', 'history', 'feeAssets', 'getMode',
   'default.joined', 'default.leafInfo', 'default.assetMeta', 'default.btcAtAddress', 'leaves.state', 'leaves.channels', 'leaves.home', 'getSettings', 'sites', 'sync']);
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // The leaf wallet's events, from its host in the offscreen document: relayed to

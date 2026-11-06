@@ -32,6 +32,8 @@ button.primary:hover { background: var(--gold2); }
 button.primary:disabled { opacity: .5; cursor: default; }
 button.ghost { background: transparent; color: var(--fg); border: 1px solid var(--line); }
 button.ghost:hover { border-color: var(--sub); }
+/* A quiet link: Remove name at the foot of Receive's one card for the payment name. */
+button.quiet { background: none; border: none; padding: 4px 0; color: var(--sub); font-weight: 500; text-decoration: underline; text-underline-offset: 3px; }
 button.tiny { padding: 4px 10px; font-size: 11px; margin-top: 0; }
 .row { display: flex; gap: 8px; align-items: center; }
 .grow { flex: 1; }
