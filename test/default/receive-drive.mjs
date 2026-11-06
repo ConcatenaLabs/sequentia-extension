@@ -20,7 +20,9 @@
 //
 // Every screen is read against the words default mode never says, and every error or exception of
 // the extension's contexts fails the drive. A screenshot of each step goes to <evidence-dir>/screens.
-// `BEFORE=1` takes the receive screen alone, for a build that predates these.
+// `BEFORE=1` takes the receive screen alone, for a build that predates these. `WORD_NAME=1` takes the
+// name with Get a name (the wallet's word name, shown with a capital for each word, the QR code in
+// lower case) instead of Choose your own.
 //
 //   CHROME=… node test/default/receive-drive.mjs <evidence-dir> <work-dir>
 //
@@ -38,6 +40,7 @@ const CHROME = process.env.CHROME;
 const out = resolve(process.argv[2] || 'receive-evidence');
 const work = resolve(process.argv[3] || '/tmp/receive-drive');
 const BEFORE = !!process.env.BEFORE;
+const WORD_NAME = !!process.env.WORD_NAME;
 if (!CHROME) { console.error('set CHROME'); process.exit(2); }
 mkdirSync(join(out, 'screens'), { recursive: true }); mkdirSync(work, { recursive: true });
 const logFile = join(out, 'receive-drive.log');
@@ -112,12 +115,15 @@ async function main() {
     await shot('R-2-new-code.png');
     // A payment name.
     await waitFor("!document.querySelector('#nameBox').classList.contains('hide')", 120000);
-    const want = 'am5x' + Math.random().toString(36).slice(2, 8);
-    await pop.click('#btnNameChoose');
-    await pop.set('nameInput', want);
-    await pop.click('#btnNameSave');
+    // WORD_NAME=1: Get a name, the wallet's word name in one tap; else Choose your own.
+    let want = 'am5x' + Math.random().toString(36).slice(2, 8);
+    if (WORD_NAME) await pop.click('#btnNameGet');
+    else { await pop.click('#btnNameChoose'); await pop.set('nameInput', want); await pop.click('#btnNameSave'); }
     const named = await waitFor("(()=>{ const t=document.querySelector('#nameAddr').innerText; const s=document.querySelector('#nameStatus').innerText; return t || (s ? 'ERR '+s : false) })()", 120000);
-    check('the wallet holds a payment name', named === `${want}@sequentiatestnet.com`, named);
+    if (WORD_NAME) {
+      check('Get a name gives a word name, shown with a capital for each word', /^([A-Z][a-z]{2,4}){2,3}@sequentiatestnet\.com$/.test(named), named);
+      want = named.split('@')[0].toLowerCase();
+    } else check('the wallet holds a payment name', named === `${want}@sequentiatestnet.com`, named);
     // The picture is the name.
     const nameShown = await waitFor(`document.querySelector('#recvDCode').innerText===${JSON.stringify(named)} ? true : false`, 120000).catch(() => false);
     check('Receive shows the name in place of the code', nameShown);
@@ -132,7 +138,7 @@ async function main() {
       ui1.pubShown && /Anyone who has your name/.test(ui1.pub) && ui1.copy === 'Copy name' && ui1.fullShown && ui1.full === 'Show full code' && !ui1.newShown && ui1.label === 'Your payment name', ui1);
     const once = await pop.eval("({ lbl: !document.querySelector('#nameLbl').classList.contains('hide'), addr: !document.querySelector('#nameAddr').classList.contains('hide'), copy: !document.querySelector('#btnNameCopy').classList.contains('hide'), quiet: document.querySelector('#btnNameRemove').classList.contains('quiet') })");
     check('the name is said once: below it only Remove name, as a quiet link', !once.lbl && !once.addr && !once.copy && once.quiet, once);
-    await shot('R-3-name.png');
+    await shot(WORD_NAME ? 'R-3w-word-name.png' : 'R-3-name.png');
     await noWords('Receive showing the name');
     // The stock the wallet leaves with the name service, and its top-up after a lookup.
     if (process.env.LNADDR_STORE) {

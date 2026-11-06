@@ -521,7 +521,8 @@ git archive --format=zip -o ambra-extension.zip HEAD -- manifest.json background
   and in an asset carry their invoices; Confidential gives the confidential address alone
   and is off again once Receive is left; a name nobody holds is refused in Send.
   `NAME_FILE=<file>` writes the name there and waits for another wallet to pay it USDX
-  (`NAME_WAIT_MS`, ten minutes by default). `BEFORE=1` only takes the receive screen.
+  (`NAME_WAIT_MS`, ten minutes by default). `BEFORE=1` only takes the receive screen. `WORD_NAME=1` takes the name with **Get a name**
+  and checks it is shown with a capital for each word and read back from the QR code in lower case.
   `ONLY_A=1` runs the first wallet alone (faucet and trade).
 - The testnet faucet, once per wallet, from the service worker's own code against a
   real faucet with a stand-in node (no chain, no coins):
