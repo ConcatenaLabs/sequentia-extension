@@ -110,6 +110,11 @@ wasm. Read this before changing anything.
   `channelsChanged`, and the receive code is made again to name them (`codeNamesChannels`).
   Which channel pays, and every refusal, is the library's (`send` routes over a channel by
   itself when the receive code names one).
+- **A person waiting comes first.** While the popup's trade composer prices or confirms a
+  trade it holds the host's upkeep (`default.holdUpkeep`, op `holdUpkeep`, at most two
+  minutes, let go when the step ends): no scheduled pass, mailbox read or channel read
+  starts meanwhile, so the library's one-at-a-time queue holds no sync, care or bond watch
+  ahead of the person's next step. The pass held back runs when the hold ends.
 - **Care is the library's, run by the host.** The offscreen host runs `care` once
   after the leaf wallet opens and after a sync at most every ten minutes
   (`careDue`, `src/leaf-schedule.js`, the web wallet's rules), in either mode,

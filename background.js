@@ -636,6 +636,7 @@ const uiMethods = {
   // Asked by that link when a Sequentia wallet pays the name: a new receive code for it.
   'default.nameCode': async () => await dm.nameCode(),
   'default.holdReads': async ({ ms }) => { await leaves.holdReads(ms); return { ok: true }; },
+  'default.holdUpkeep': async ({ ms }) => { await leaves.holdUpkeep(ms); return { ok: true }; },
   'default.invoiceReceived': async ({ hash }) => await dm.invoiceReceived(hash),
   'default.faucet': async ({ asset }) => await dm.faucet(asset || ''),
   'default.faucetReceived': async () => ({ claimed: await dm.faucetReceived() }),
