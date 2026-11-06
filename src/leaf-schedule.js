@@ -224,3 +224,23 @@ export function laterMode(cur, on, at) {
   if (t < cur.at) return cur;
   return { on: !!on, at: t };
 }
+
+// Reads (`read`: the wallet's mailbox) until `came()` says what is awaited has arrived, or `ms` have
+// passed: a read that has not answered by then is not waited for (the library may be busy with a
+// sync; what it takes in later is reported as any arrival is), and the next read comes `every` ms
+// after the last. -> came().
+export async function readUntil({ read, came, ms, every = 2000, now = Date.now, sleep = (t) => new Promise((r) => setTimeout(r, t)) }) {
+  const until = now() + ms;
+  const left = () => Math.max(0, until - now());
+  while (!came() && left() > 0) {
+    let timer;
+    const answered = await Promise.race([
+      Promise.resolve().then(read).then(() => true, () => true),
+      new Promise((r) => { timer = setTimeout(() => r(false), left()); }),
+    ]);
+    clearTimeout(timer);
+    if (!answered || came() || !left()) break;
+    await sleep(Math.min(every, left()));
+  }
+  return came();
+}
