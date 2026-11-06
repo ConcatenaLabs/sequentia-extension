@@ -228,14 +228,21 @@ async function leafOpen() {
   try { return !!(await leaves.status()).open; } catch { return false; }
 }
 // The single-use Sequentia receive request: the one shown before while it waits, has a day before
-// it lapses and names the channels the wallet can be paid over now, or a new one.
-async function leafCode(fresh) {
+// it lapses and names the channels the wallet can be paid over now, or a new one. With `quick`, the
+// one shown before is used without asking the library (busy, maybe, with a sync) whether it still
+// waits: only its lapse and the host's last schedule reading are looked at, and a payer that finds
+// it paid or lapsed meanwhile is given a new one (the faucet: `faucet`).
+async function leafCode(fresh, { quick = false } = {}) {
   const tag = await walletTag();
   const all = (await stGet('local', CODE_KEY)) || {};
   let kept = all[tag];
   if (kept && !fresh) {
     const st = await leaves.status().catch(() => null);
     if (st && st.payable && !codeNamesChannels(kept, st.payable)) kept = null;
+    if (quick && kept && kept.text && kept.owner && kept.until && kept.until - Date.now() / 1000 > CODE_MARGIN_S) {
+      const r = (((st && st.schedule) || {}).receive_requests || []).find((x) => x.owner === kept.owner);
+      if (!r || r.state === 'waiting') return kept;
+    }
   }
   if (!fresh && kept && kept.text && kept.owner) {
     try {
@@ -372,6 +379,7 @@ export async function faucet(asset) {
     const j = await r.json().catch(() => ({}));
     if (!r.ok) {
       const e = new Error(j.error || ('HTTP ' + r.status));
+      e.status = r.status; e.reason = j.reason || null;
       if (faucetAlreadyPaid(r.status, j)) e.alreadyPaid = true;
       throw e;
     }
@@ -380,18 +388,32 @@ export async function faucet(asset) {
   const what = (j) => `${Number(j.amount).toLocaleString('en-US', { maximumFractionDigits: 8 })} ${j.asset}`;
   const t0 = Date.now();
   // BTC is paid on chain to the wallet's address, which boards it into the Bitcoin ark by itself.
+  // Every other asset to the receive code: the code shown before at once, a new one once should the
+  // faucet refuse it (paid or lapsed meanwhile); the coin is in the mailbox once the faucet answers,
+  // and the host's mailbox read takes it in (never a whole sync). A faucet that is busy says so,
+  // and is not asked for the address instead.
   if (asset !== 'BTC' && (await isDefault()) && (await leafOpen())) {
     try {
-      const code = await leafCode(false);
-      const j = await post(asset ? { request: code.text, asset } : { request: code.text });
+      let code, j, quick = true;
+      for (;;) {
+        code = await leafCode(false, { quick });
+        try { j = await post(asset ? { request: code.text, asset } : { request: code.text }); break; } catch (e) {
+          if (e.alreadyPaid || e.reason === 'busy') throw e;
+          if (quick && e.status === 400) { await forgetCode(); quick = false; continue; }
+          throw e;
+        }
+      }
       await forgetCode();
-      await leaves.runAny('mailbox').catch(() => {});
-      await leaves.hostOp('sync').catch(() => {});
-      console.info(`[faucet] paid the receive code in ${Date.now() - t0} ms`);
-      return { text: DEFAULT_WORDS.faucetReceived(what(j)), to: 'code', ms: Date.now() - t0 };
+      const hex = String((j.leaf && j.leaf.asset) || '').toLowerCase();
+      const r = hex ? await leaves.hostOp('takeIn', { asset: hex, since: t0 }).catch(() => null) : null;
+      const got = !!(r && r.arrived);
+      console.info(`[faucet] ${j.asset} to the receive code: ${got ? 'received' : 'still on its way'} ${Date.now() - t0} ms after the click`);
+      return got ? { text: DEFAULT_WORDS.faucetReceived(what(j)), to: 'code', ms: Date.now() - t0 }
+        : { text: DEFAULT_WORDS.faucetOnItsWay(what(j)), to: 'code', ms: Date.now() - t0, arriving: { asset: hex, received: DEFAULT_WORDS.faucetReceived(what(j)) } };
     } catch (e) {
-      // The wallet has the asset: the address is the same wallet, so it is not asked again.
-      if (e.alreadyPaid) throw e;
+      // The wallet has the asset (the address is the same wallet), or the faucet is busy: said as
+      // the faucet says it, and not asked again.
+      if (e.alreadyPaid || e.reason === 'busy') throw e;
       console.warn('[faucet] to the receive code:', e.message, '; to the address instead');
     }
   }

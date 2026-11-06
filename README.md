@@ -85,7 +85,8 @@ confidential `tsqb1…` addresses are an explicit opt-in).
   web wallet's), whose link with the name service the offscreen document keeps while the
   wallet is unlocked: a Lightning wallet paying it gets an invoice of the wallet's ark for
   the amount it chose, a Sequentia wallet a new receive code. The testnet faucet pays the
-  code. Where the operator makes channel leaves of an asset, the wallet holds
+  code, and the wallet reads its mailbox for the coin at once (the offscreen host's
+  `takeIn`, every 2 s for up to 45 s), so the popup says Received within seconds. Where the operator makes channel leaves of an asset, the wallet holds
   one by itself (`care` with `channels`), the code names it, and a payment from another
   wallet's channel is in the figure within a second while the popup is open (the host reads
   the channels every 300 ms then, every 5 s otherwise), with no round between. Coins that arrive at the address

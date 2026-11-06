@@ -103,6 +103,8 @@ export const DEFAULT_WORDS = Object.freeze({
   fee: (amount, ticker) => `Fee ${amount} ${ticker}`,
   sentLater: (amount, ticker, minutes) => `Sent ${amount} ${ticker}. ${arrivesWords(minutes)}`,
   faucetReceived: (what) => `Received ${what}.`,
+  // The faucet has paid and the wallet has not taken the coin in yet (it was busy with an update).
+  faucetOnItsWay: (what) => `The faucet sent ${what}. It shows in your balance as soon as your wallet has taken it in, usually within a few minutes.`,
   // A stake, a pool's delegation and a mix are made from coins the wallet holds on the chain: what
   // they need is moved out of the Ark first, by the wallet itself.
   movingOut: (what, purpose, minutes) => `Moving ${what} out of the Ark so it can be ${purpose}. ${readyWords(minutes)} Keep this page open.`,

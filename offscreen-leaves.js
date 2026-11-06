@@ -56,6 +56,8 @@
 //   'run'   { command, args, paying? }      -> the library's { result, start }; with
 //        `paying`, a command the planned coins cover is made through the next round
 //   'sync'                                  -> runs sync now (events as on the schedule)
+//   'takeIn' { asset, since, ms? }          -> reads the mailbox until a coin of `asset` has
+//        arrived since `since` (ms), or `ms` (45 s) have passed: { arrived }
 //   'watch' { takes, tickMs? }              -> the takes to sync for every tickMs while
 //        their forfeits wait on the wallet; each change of one is sent as `leafTake`
 //   'scan'  { scan }                        -> the receive keys `care` looks for claims under
@@ -85,7 +87,7 @@
 // change, `channelsChanged` is sent, and the receive code is made again to name them.
 // The mnemonic is handed to the worker and not kept here.
 
-import { inFlight, nextAskMs, freshRequestWaits, syncDecision, careDue, careSummary, careArgs, payThrough, CARE_EVERY_MS, laterMode,
+import { inFlight, nextAskMs, freshRequestWaits, readUntil, syncDecision, careDue, careSummary, careArgs, payThrough, CARE_EVERY_MS, laterMode,
   channelPollMs, channelArrivals, payableChannels } from './src/leaf-schedule.js';
 import { frozenAtoms } from './src/leaf-profiles.js';
 import { redoingAtoms } from './vendor/default-arca.js';
@@ -240,8 +242,11 @@ async function takeHome(q) {
   return r;
 }
 
+// Every coin the library takes in, by whichever read: the service worker told, and the asset kept
+// with when, for takeIn.
 function arrivals(mailbox) {
   for (const c of (Array.isArray(mailbox && mailbox.accepted) ? mailbox.accepted : [])) {
+    S.arrived = [...(S.arrived || []).slice(-49), { asset: String(c.asset || '').toLowerCase(), at: Date.now() }];
     emit('leafArrived', { leaf_id: c.leaf_id, asset: c.asset, value: String(c.value ?? ''), kind: c.kind });
   }
 }
@@ -389,6 +394,30 @@ function plan(ms) {
 // ---- default mode: coins on the chain go into the tree, payments show in seconds ----
 const MAILBOX_POLL_MS = 10_000;
 const MAILBOX_QUIET_MS = 20_000;
+// A payment another service says it made to the receive code (the faucet's): how long the host
+// reads the mailbox for it, and how often, before the popup says it is still on its way.
+const TAKE_IN_MS = 45_000;
+const TAKE_IN_EVERY_MS = 2_000;
+
+// The faucet answers once its coin is in the wallet's mailbox, so `mailbox` (a read of seconds)
+// takes it in, never a whole sync, which can sit in a round for a minute or more. It waits only
+// for the library's command already running; meanwhile the wallet's own mailbox and channel reads
+// stay off (lastAsked). It reads again every TAKE_IN_EVERY_MS until a coin of `asset` has arrived
+// since `since` (by this read or any other, a sync's included) or `ms` have passed; then the
+// balance is reported, so the figure holds the coin before the popup says Received.
+// -> { arrived }.
+async function takeIn({ asset, since = 0, ms = TAKE_IN_MS } = {}) {
+  const hex = String(asset || '').toLowerCase();
+  const came = () => (S.arrived || []).some((a) => a.asset === hex && a.at >= Number(since || 0));
+  const arrived = await readUntil({ came, ms: Number(ms || TAKE_IN_MS), every: TAKE_IN_EVERY_MS, read: async () => {
+    S.lastAsked = Date.now();
+    const t0 = Date.now();
+    try { arrivals((await call('run', { command: 'mailbox' })).result); } catch (e) { console.warn('[leaves] mailbox read:', e && e.message); }
+    if (Date.now() - t0 > 2000) console.info(`[leaves] mailbox read: ${Date.now() - t0} ms`);
+  } });
+  if (arrived) await reportBalance();
+  return { arrived };
+}
 
 // Each asset the operator serves, held at the phrase's keys on the chain at least at its
 // smallest leaf, is boarded whole less its fee (vendor/default-arca.js boardAll: the fee the
@@ -672,6 +701,9 @@ async function handle(op, args) {
     case 'sync':
       if (!S.open) throw { kind: 'refused', message: 'the leaf wallet is not open' };
       return await sync('asked');
+    case 'takeIn':
+      if (!S.open) throw { kind: 'refused', message: 'the leaf wallet is not open' };
+      return await takeIn(args);
     case 'watch': {
       S.watch = new Set((args.takes || []).map(String));
       if (args.tickMs) S.watchMs = Math.max(1000, Number(args.tickMs));

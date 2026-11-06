@@ -447,6 +447,11 @@ chrome.runtime.onMessage.addListener((msg) => {
     // The leaf wallet's balance changed: the figures and the headline count it.
     if (msg.event === 'leaves-changed' && OV) rpc('overview', { withLn: false }).then((v) => { OV = v; renderOverview(); if (isDefault() && !$('tSend').classList.contains('hide')) updateDefaultAvail(); }).catch(() => {});
   }
+  if (msg && msg.scope === 'leaf-event' && msg.event === 'leafArrived' && faucetWaiting && msg.data
+    && String(msg.data.asset || '').toLowerCase() === faucetWaiting.asset) {
+    $('faucetStatus').className = 'status ok'; $('faucetStatus').textContent = faucetWaiting.received;
+    faucetWaiting = null;
+  }
   // A payment into a channel, or the channels a payer can pay changed: the receive code shown is
   // made again (it names them, and a paid one is done with).
   if (msg && msg.scope === 'leaf-event' && ((msg.event === 'leafArrived' && msg.data && msg.data.kind === 'channel') || msg.event === 'channelsChanged') && receiveOpen()) {
@@ -1516,6 +1521,8 @@ async function paintFaucet() {
   try { const r = await rpc('default.faucetReceived', {}); if (r && r.claimed) { faucetGot = new Set(r.claimed); markFaucet(); } }
   catch (e) { console.warn('[faucet] what this wallet has received:', e.message); }
 }
+// The faucet's coin the wallet had not taken in when the line last spoke: { asset, received }.
+let faucetWaiting = null;
 for (const b of document.querySelectorAll('#faucetBtns button')) b.onclick = async () => {
   const btns = [...document.querySelectorAll('#faucetBtns button')];
   btns.forEach((x) => { x.disabled = true; });
@@ -1523,12 +1530,14 @@ for (const b of document.querySelectorAll('#faucetBtns button')) b.onclick = asy
   try {
     const r = await rpc('default.faucet', { asset: b.dataset.faucet });
     $('faucetStatus').className = 'status ok'; $('faucetStatus').textContent = r.text;
+    // Not taken in yet: the line says Received once a later read of the wallet takes it in.
+    faucetWaiting = r.arriving && r.arriving.asset ? r.arriving : null;
     refreshOverview();
     if (isDefault()) renderDefaultReceive();
   } catch (e) {
     $('faucetStatus').className = 'status err';
     // The faucet's own refusal is a sentence a person can act on; anything else is a failure.
-    $('faucetStatus').textContent = /from the faucet\.|the faucet has already/i.test(e.message) ? e.message : 'The faucet could not pay: ' + e.message;
+    $('faucetStatus').textContent = /from the faucet\.|the faucet has already|^The faucet (is|has many)/i.test(e.message) ? e.message : 'The faucet could not pay: ' + e.message;
   } finally { btns.forEach((x) => { x.disabled = false; }); await paintFaucet(); }
 };
 
