@@ -79,6 +79,33 @@ export function moveOutAtoms ({ held, board, hold, price, precision }) {
   return over > 0n ? over : 0n
 }
 
+// The BTC the move down sends to the address (#530): what is above `board` (moveOutAtoms, `over`),
+// less the move's own fee, which the ark pays on top of what it sends, so it then rests at `board`
+// rather than that fee below it; at most `max`, the most the ark can send there (its fee off).
+// -> sats, 0n when nothing is left to move.
+export function moveOutSats (over, fee, max = null) {
+  let s = big(over) - big(fee)
+  if (max != null && s > big(max)) s = big(max)
+  return s > 0n ? s : 0n
+}
+
+// When the move down may be tried again after `failures` refusals in a row (#523): two minutes
+// after the first, doubling each time, at most an hour; at once after none.
+export const MOVE_RETRY_MS = 2 * 60_000
+export const MOVE_RETRY_MAX_MS = 60 * 60_000
+export function moveRetryMs (failures) {
+  if (!(failures > 0)) return 0
+  return Math.min(MOVE_RETRY_MS * 2 ** (failures - 1), MOVE_RETRY_MAX_MS)
+}
+
+// Whether the move down waits for a person (#523): never while a person reviews or makes a BTC
+// payment, nor within a minute after one (`personAt`, ms), since both spend the same coins and the
+// move is sized on the balance before the payment.
+export const PERSON_QUIET_MS = 60_000
+export function moveWaits ({ reviewing = false, personAt = 0, now = Date.now() }) {
+  return !!reviewing || now - (personAt || 0) < PERSON_QUIET_MS
+}
+
 // The USD from which one payment goes to the address rather than the Ark, or null for never.
 export function directUsd ({ direct }) {
   return direct == null ? null : direct
