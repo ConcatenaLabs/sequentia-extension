@@ -78,7 +78,8 @@ export const MAX_FEE_PPM = 10_000
 export const USER_MODE_FORBIDDEN_WORDS = Object.freeze(['rail', 'rails', 'round', 'rounds', 'leaf', 'leaves', 'operator', 'covenant',
   'covenants', 'expiry', 'atom', 'atoms', 'forfeit', 'forfeits', 'channel', 'channels', 'relay', 'maker', 'makers', 'hash', 'preimage',
   'htlc', 'submarine', 'lsp', 'tree', 'anchor', 'unroll', 'exit', 'checkpoint', 'reassignment', 'on-chain', 'lightning', 'bridge', 'gateway',
-  'node', 'nodes', 'claim', 'claims', 'distribution', 'distributions', 'lapse', 'lapses', 'lapsed', 'locktime', 'locktimes'])
+  'node', 'nodes', 'claim', 'claims', 'distribution', 'distributions', 'lapse', 'lapses', 'lapsed', 'locktime', 'locktimes',
+  'parent chain', 'input', 'inputs', 'vb'])
 
 export function forbiddenIn (text) {
   const t = String(text || '').toLowerCase()
