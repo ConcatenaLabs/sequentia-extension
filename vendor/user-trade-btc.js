@@ -163,7 +163,17 @@ export function btcTrades ({ run, deps, put, log, now, settleStep, maxFeePpm, fi
       const sc = choice.btc.settle
       rec.settleTargets = sc ? [{ asset: sc.asset, value: sc.value, fee: sc.fee }] : []
       put(rec)
-      const r = await run('lightning_pay', { invoice: o.invoice, asset: choice.btc.quote.asset, max_fee_ppm: maxFeePpm, shown: choice.btc.quote })
+      let r
+      try { r = await run('lightning_pay', { invoice: o.invoice, asset: choice.btc.quote.asset, max_fee_ppm: maxFeePpm, shown: choice.btc.quote }) } catch (e) {
+        // What the payment would spend changed since the ticket was shown (the wallet's coins moved
+        // meanwhile: a coin arrived or settled, and another one is chosen): nothing was signed, and
+        // the price is asked again and shown, never paid on terms nobody saw.
+        if (!/changed since it was shown/.test(String(e && e.message))) throw e
+        rec.state = 'failed'; rec.error = 'what the payment spends changed before it was confirmed'; put(rec)
+        release(choice.entry.maker, o.swap)
+        if (choice.btc.invoice) B().cancelInvoice(choice.btc.invoice.payment_hash).catch(() => {})
+        const x = new Error('the price is no longer held'); x.code = 'lapsed'; x.cause = e; throw x
+      }
       rec.change = r.change || null
       // The change coin by its id: the payment's transfer makes the payment's leaf, then the change.
       // Named, it is followed even once the wallet pays on it, which the next trade often does.
