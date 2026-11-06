@@ -28,7 +28,8 @@
 //   'received' { hash }               -> the receive's state, claimed when paid
 //   'ln'    { method, args }          -> the trade composer's BTC (`lightning()`), BigInt as { $big }
 //   'board' { lim, changeNext, cap }  -> boards the confirmed BTC at the first `lim` keys
-//   'name'  { op: 'state' | 'register' | 'release', name? } -> { name, address } of the payment name
+//   'name'  { op: 'state' | 'register' | 'words' | 'release', name? } -> { name, address, display,
+//           isWordName } of the payment name ('words' takes the wallet's word name)
 // The balance is sent to the service worker as `arkBalance` after every change.
 //
 // The payment name (vendor/lnaddr.js, the web wallet's module): `name@LNADDR_DOMAIN`, held by a key of
@@ -138,9 +139,12 @@ function followNameInvoice(inv) {
 async function name({ op, name: wanted }) {
   if (!A.name) throw { message: 'the Bitcoin ark wallet is not open' };
   if (op === 'register') await A.name.register(String(wanted || ''));
+  else if (op === 'words') await A.name.claimWordName();
   else if (op === 'release') await A.name.release();
   else if (op !== 'state') throw { message: 'no name operation ' + op };
-  return { name: A.name.name(), address: A.name.address() };
+  // `display`: a word name with a capital for each word (vendor/word-name.js), for the person to
+  // read; `address` stays in lower case, as the QR code, Copy and every lookup use it.
+  return { name: A.name.name(), address: A.name.address(), display: A.name.display(), isWordName: A.name.isWordName() };
 }
 
 function stop() {

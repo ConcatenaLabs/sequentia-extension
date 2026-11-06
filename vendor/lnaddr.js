@@ -34,6 +34,8 @@
 import { HDKey, mnemonicToSeedSync, schnorr, sha256 } from './btc.js';
 import { readPayCode, buildPayCode, readShortRequest, libraryRequest } from './pay-code.js';
 import { STOCK_SIZE, pickStockIndices, planTopUp, HANDED_KEEP } from './name-stock.js';
+import { wordNameCandidates, displayName } from './word-name.js';
+export { wordNameCandidates, displayName };
 
 // The name key's path, beside the Lightning keys' branches (seqln-keys.js uses m/1017'/0' to 3').
 export const NAME_KEY_PATH = "m/1017'/16'/0'";
@@ -54,8 +56,12 @@ const unhex = (h) => {
 export const NAME_WORDS = Object.freeze({
   label: 'Your payment name',
   tip: 'Other wallets can pay you at this name, in any amount they choose. A Sequentia wallet can pay it while this wallet is closed; other wallets, while it is open.',
-  none: 'Choose a name other wallets can pay you at, in any amount they choose.',
-  choose: 'Choose a name',
+  none: 'Get a name other wallets can pay you at, in any amount they choose.',
+  choose: 'Choose your own',
+  getName: 'Get a name',
+  getting: 'Getting a name…',
+  useWords: 'Use a word name instead',
+  noWordName: 'No word name is free for this wallet now. Choose your own instead.',
   hint: 'yourname',
   save: 'Save',
   cancel: 'Cancel',
@@ -329,6 +335,26 @@ export function mountLnAddress ({ base, domain, key, invoice, code, limits = () 
     keep(n); start(); topUp();
     return n;
   }
+  // The wallet's word name (word-name.js): the first of its key's candidates the service does not
+  // hold already. Registering it releases any other name the key holds.
+  async function claimWordName () {
+    const k = keyOrThrow();
+    for (const c of wordNameCandidates(k.pub)) {
+      try { return await register(c.name); } catch (e) { if (e && e.code === 'taken') continue; throw e; }
+    }
+    throw new Error(NAME_WORDS.noWordName);
+  }
+  // The name as shown: a word name with each word's capital (AmberFalcon@domain), any other as it is.
+  function display () {
+    if (!name) return null;
+    let pub = null; try { const k = key(); pub = k && k.pub; } catch {}
+    return `${displayName(name, pub)}@${domain}`;
+  }
+  // Whether the name held is one of this key's word names.
+  function isWordName () {
+    if (!name) return false;
+    try { const k = key(); return !!k && wordNameCandidates(k.pub).some((c) => c.name === name); } catch { return false; }
+  }
   async function release () {
     if (!name) return;
     const k = keyOrThrow(), t = ts(), n = name;
@@ -395,5 +421,5 @@ export function mountLnAddress ({ base, domain, key, invoice, code, limits = () 
   function start () { stopped = false; if (!running && name) { loop(); topUp(); } }
   function stop () { stopped = true; try { if (ctl) ctl.abort(); } catch {} }
 
-  return { name: () => name, address: () => (name ? `${name}@${domain}` : null), register, release, recover, start, stop, topUp, stock: () => stockRec(), running: () => running };
+  return { name: () => name, address: () => (name ? `${name}@${domain}` : null), display, isWordName, register, claimWordName, release, recover, start, stop, topUp, stock: () => stockRec(), running: () => running };
 }

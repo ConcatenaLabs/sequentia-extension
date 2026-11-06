@@ -1424,7 +1424,8 @@ async function renderDefaultReceive(fresh = false) {
     $('btnDNew').classList.toggle('hide', !v.newCode);
     $('btnDFull').classList.toggle('hide', !v.toggle); $('btnDFull').textContent = v.toggle || '';
     $('recvDPublic').textContent = v.publicLine || ''; $('recvDPublic').classList.toggle('hide', !v.publicLine);
-    $('recvDCode').textContent = r.code;
+    // A word name is read with a capital for each word; the QR code and Copy keep it in lower case.
+    $('recvDCode').textContent = r.shown || r.code;
     paintNameBox();
     if (r.qr) $('recvDQr').src = r.qr; else $('recvDQr').removeAttribute('src');
     if (r.invoiceHash) watchInvoice(r.invoiceHash, r.invoiceKind || 'BTC', atoms);
@@ -1492,13 +1493,17 @@ async function renderName() {
   const dev = !isDefault();
   $('nameLbl').textContent = dev ? NAME_WORDS.devLabel : NAME_WORDS.label;
   $('nameTip').textContent = nameNow ? (dev ? NAME_WORDS.devTip : NAME_WORDS.tip) : NAME_WORDS.none;
-  $('nameAddr').textContent = st.address || '';
+  $('nameAddr').textContent = st.display || st.address || '';
   $('nameAddr').classList.toggle('hide', !nameNow || nameEditing);
   $('nameForm').classList.toggle('hide', !nameEditing);
   $('nameDomain').textContent = '@' + LNADDR_DOMAIN;
   $('nameInput').placeholder = NAME_WORDS.hint;
   const vis = (id, on) => $(id).classList.toggle('hide', !on);
-  vis('btnNameChoose', !nameNow && !nameEditing); vis('btnNameSave', nameEditing); vis('btnNameCancel', nameEditing);
+  vis('btnNameGet', !nameNow && !nameEditing); vis('btnNameChoose', !nameNow && !nameEditing);
+  // A name that is not one of this wallet's word names can become one in one tap.
+  vis('btnNameWords', !!nameNow && !nameEditing && !st.isWordName); $('btnNameWords').textContent = NAME_WORDS.useWords;
+  if (!nameBusy) $('btnNameGet').textContent = NAME_WORDS.getName;
+  vis('btnNameSave', nameEditing); vis('btnNameCancel', nameEditing);
   vis('btnNameRemove', !!nameNow && !nameEditing);
   paintNameBox();
   $('btnNameChoose').textContent = NAME_WORDS.choose; $('btnNameCancel').textContent = NAME_WORDS.cancel; $('btnNameCopy').textContent = NAME_WORDS.copy;
@@ -1506,6 +1511,18 @@ async function renderName() {
   // The code carries the name while it is held: drawn again when it changes.
   if (was !== nameNow && was !== null && isDefault() && receiveOpen()) renderDefaultReceive();
 }
+// Get a name: the wallet's own word name, registered in one tap; the same for a wallet holding a
+// name of another kind (Use a word name instead).
+async function getWordName(btn) {
+  if (nameBusy) return;
+  const st = $('nameStatus');
+  nameBusy = true; btn.textContent = NAME_WORDS.getting; st.textContent = '';
+  try { await rpc('default.nameWords'); nameEditing = false; st.className = 'status'; }
+  catch (e) { st.className = 'status err'; st.textContent = e.message; }
+  finally { nameBusy = false; await renderName(); if (isDefault()) renderDefaultReceive(); }
+}
+$('btnNameGet').onclick = () => getWordName($('btnNameGet'));
+$('btnNameWords').onclick = () => getWordName($('btnNameWords'));
 $('btnNameChoose').onclick = () => { nameEditing = true; $('nameStatus').textContent = ''; renderName(); try { $('nameInput').focus(); } catch {} };
 $('btnNameCancel').onclick = () => { nameEditing = false; $('nameStatus').textContent = ''; renderName(); };
 $('nameInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('btnNameSave').click(); });
