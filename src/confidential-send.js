@@ -30,7 +30,7 @@ export const UNDER_WAY = Object.freeze(['waiting', 'in_round', 'unlocking']);
 
 // What of `asset` the moves this wallet asked for are still bringing to its address: the records
 // it kept of them (`records`: [{ id, asset, atoms, at }]), read against the library's `offboards`.
-// A move paid on the chain counts until the wallet's own reading shows that transaction
+// A move paid on the chain counts until that payout is final and the wallet's own reading shows it
 // (`seen(txid)`), so the coins are never asked for twice while the reading catches up.
 export function movesComing(asset, records, offboards, seen = () => false) {
   const byId = new Map((Array.isArray(offboards) ? offboards : []).filter((o) => o && o.offboard).map((o) => [o.offboard, o]));
@@ -40,7 +40,8 @@ export function movesComing(asset, records, offboards, seen = () => false) {
     if (!r || r.asset !== asset) continue;
     const o = byId.get(r.id);
     if (!o) continue;
-    const coming = UNDER_WAY.includes(o.state) || (o.state === 'paid' && o.txid && !seen(o.txid));
+    // Paid on the chain, it counts until the payout is final and the wallet's reading shows it.
+    const coming = UNDER_WAY.includes(o.state) || (o.state === 'paid' && (!o.final || (o.txid && !seen(o.txid))));
     if (!coming) continue;
     atoms += big(o.amount ?? r.atoms);
     open.push({ ...r, state: o.state });
