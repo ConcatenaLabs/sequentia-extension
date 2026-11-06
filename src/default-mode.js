@@ -305,7 +305,7 @@ export async function receiveCode({ sats = null, asset = 'BTC', amount = null, f
   const named = !!(nm && nm.name);
   if (named && !full) {
     const text = nameQrText(nm.address);
-    return { code: text, qr: qr(text), isCode: true, isName: true, named: true };
+    return { code: text, shown: nm.display || text, qr: qr(text), isCode: true, isName: true, named: true };
   }
   let sequentia = null, ark = null, lightning = null, lnurl = null, btcAmount = null, invoiceHash = null, invoiceKind = null;
   const open = await leafOpen();
@@ -361,6 +361,8 @@ export async function nameState() {
 }
 export async function nameRegister(name) { await ensureArk(); return await arkHost('name', { op: 'register', name }); }
 export async function nameRelease() { await ensureArk(); return await arkHost('name', { op: 'release' }); }
+// Get a name: the wallet's own word name (vendor/word-name.js), in one tap.
+export async function nameWords() { await ensureArk(); return await arkHost('name', { op: 'words' }); }
 // A code of the stock the payment name leaves with the name service (vendor/name-stock.js): the
 // address at `index`, a new ark address and a new receive request, without touching the code
 // Receive shows. None (null) while the wallet can't hold coins with the operator yet: such a code

@@ -86,7 +86,10 @@ confidential `tsqb1…` addresses are an explicit opt-in).
   **Confidential** switch under the code makes it the wallet's confidential address alone,
   saying what stays public, and is off whenever Receive opens. Under it, **Your payment
   name**: `name@sequentiatestnet.com`, held by a key of the phrase (`vendor/lnaddr.js`, the
-  web wallet's), whose link with the name service the offscreen document keeps while the
+  web wallet's). **Get a name** takes the wallet's word name in one tap (`vendor/word-name.js`: two
+  words from a list, shown with a capital for each, `AmberFalcon@…`, derived from the name's key so a
+  restore gets it back; lower case in the QR code, Copy and every lookup); **Choose your own** and,
+  for a name of the wallet's own choosing, **Use a word name instead** are quiet links. The offscreen document keeps the name's link with the name service while the
   wallet is unlocked: a Lightning wallet paying it gets an invoice of the wallet's ark for
   the amount it chose, and a Sequentia wallet, open or closed, one of the signed receive
   codes the link leaves with the service and tops up while the wallet is unlocked

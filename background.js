@@ -633,6 +633,7 @@ const uiMethods = {
   'default.name': async () => await dm.nameState(),
   'default.nameRegister': async ({ name }) => await dm.nameRegister(String(name || '')),
   'default.nameRelease': async () => await dm.nameRelease(),
+  'default.nameWords': async () => await dm.nameWords(),
   // Asked by that link for the stock it leaves with the name service (vendor/name-stock.js): a new
   // receive code at the address `index`, and the indices the stock picks from.
   'default.nameCode': async ({ index }) => await dm.nameCode({ index: Number(index) }),

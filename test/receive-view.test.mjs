@@ -31,7 +31,7 @@ test('the name is said once: while Receive shows it, the name block keeps only R
   for (const id of ['nameLbl', 'nameTip']) assert.ok(body.includes(`vis('${id}', !above)`), id);
   assert.match(body, /vis\('btnNameCopy', !!nameNow && !nameEditing && !above\)/);
   assert.match(body, /\$\('btnNameRemove'\)\.classList\.toggle\('quiet', above\)/);
-  assert.match(pop, /\$\('recvDCode'\)\.textContent = r\.code;\n    paintNameBox\(\);/, 'painted with each answer');
+  assert.match(pop, /\$\('recvDCode'\)\.textContent = r\.shown \|\| r\.code;\n    paintNameBox\(\);/, 'painted with each answer');
   assert.match(readFileSync(new URL('../popup/ui.css', import.meta.url), 'utf8'), /button\.quiet \{[^}]*text-decoration: underline/);
   assert.match(NAME_WORDS.qrTip, /while this wallet is closed/);
 });

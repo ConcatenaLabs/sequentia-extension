@@ -41,7 +41,7 @@ test('Confidential: the confidential address alone, before any other part is ask
 
 test('without an amount the picture is the name; the full code carries its LNURL-pay; with an amount, the invoice', () => {
   const dm = read('src/default-mode.js');
-  assert.match(dm, /if \(named && !full\) \{\n    const text = nameQrText\(nm\.address\);\n    return \{ code: text, qr: qr\(text\), isCode: true, isName: true, named: true \};/);
+  assert.match(dm, /if \(named && !full\) \{\n    const text = nameQrText\(nm\.address\);\n    return \{ code: text, shown: nm\.display \|\| text, qr: qr\(text\), isCode: true, isName: true, named: true \};/);
   assert.match(dm, /if \(n === 0n\) \{ try \{ nm = await nameState\(\); \} catch \{ nm = null; \} \}/, 'only without an amount');
   assert.ok(dm.indexOf('if (named && !full)') > dm.indexOf('if (confidential) {'), 'Confidential gives its own address first');
   assert.match(dm, /if \(n === 0n && named\) lnurl = nameLnurlUrl\(nm\.name, LNADDR_DOMAIN\);/);
