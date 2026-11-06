@@ -39,6 +39,11 @@ export const BTC_WORDS = Object.freeze({
   inTwo: 'Your Bitcoin address does not hold all of it, so the rest comes from what you hold for instant payments.',
   sentPart: (amount, why) => `Sent ${amount} BTC; the rest did not go out: ${why}. Send the rest again.`,
   failed: (why) => `Nothing was sent: ${why}`,
+  // The ark's server refused the payment (arkRefused, #522): said in one sentence, never in the
+  // server's words, with the way that still works.
+  refusedLater: 'Nothing was sent: this payment could not go out just now. Try again in a few minutes.',
+  refusedChain: (amount) => `Nothing was sent: this payment could not go out just now. Your Bitcoin address holds ${amount} BTC: a payment to an address of up to that goes from there.`,
+  faucetLater: 'The faucet could not send BTC just now. Try again in a few minutes.',
   recvTitle: 'Receive BTC with an invoice',
   recvSub: 'Make an invoice for BTC. Once it is paid, the BTC is yours in seconds.',
   invoiceReady: (amount) => `Invoice ready. Share it to receive ${amount} BTC.`,
@@ -54,6 +59,9 @@ export const BTC_WORDS = Object.freeze({
   payWaiting: 'On its way: waiting for the other side to accept it.',
   payCameBack: 'Not paid: the payment came back, and the BTC is in your balance again.',
   payUpTo: (amount) => `You can pay up to ${amount} BTC this way now.`,
+  // An invoice above the most one payment may move this way now (the operator's limit, #525): a
+  // bare invoice has no address to fall back to, so the payee is asked for one.
+  payTooLarge: 'This invoice is more than can be paid in seconds now. Ask for a receive code or a Bitcoin address instead, and pay that from Send.',
   payHint: 'Paste an invoice',
   notBtc: (ticker) => `This invoice asks for ${ticker}. Only invoices for BTC are paid here.`,
   // When the ark refuses the wallet or stops answering and BTC there would soon need renewing,
@@ -179,6 +187,14 @@ function bareRoute (s, decode) {
   return null
 }
 
+// Whether an error is the ark's server refusing or failing a request (its gRPC status, passed on by
+// the wallet as "An error occurred while communicating with the server: code: '…', message: …"),
+// rather than something the page itself can say more about. Default mode then says BTC_WORDS'
+// refusal, never the server's text.
+export function arkRefused (message) {
+  return /communicating with the server|code: '[^']+', message:|bad user input|status: (Unavailable|Internal|Unknown|InvalidArgument|FailedPrecondition)|transport error/i.test(String(message || ''))
+}
+
 // One figure from the wallet's balance: everything it holds in the ark, spendable or on its way.
 export function arkFigures (b) {
   if (!b) return { total: 0n, spendable: 0n, arriving: 0n, claimable: 0n }
@@ -218,6 +234,39 @@ export function boardAmount (utxos, info, boardFee, feerate = BOARD_FEERATE, cap
   if (amount < min) return null
   const max = info.max_vtxo_sat != null ? big(info.max_vtxo_sat) : null
   return { amount: max != null && amount > max ? max : amount, chainFee, inputs: conf.length }
+}
+
+// A board the page just put on the network spends its coins `hold.inputs` ('txid:vout') and may
+// leave `hold.change` ({ txid, vout, value, address }) at its change address. The ark counts the
+// board as arriving at once, while a read of an address can lag the broadcast by up to a minute.
+// So an address the board touched is figured from its own coin list (`utxos`, each { txid, vout,
+// value }), less the board's inputs still listed, plus its change not listed yet: the same answer
+// whether that read has seen the board or not, so the board is counted once (#533).
+export function heldBesideBoard (utxos, hold, address) {
+  const listed = new Set()
+  let held = 0n
+  for (const u of utxos || []) {
+    const op = u.txid + ':' + u.vout
+    listed.add(op)
+    if (!hold || !hold.inputs.has(op)) held += big(u.value)
+  }
+  const c = hold && hold.change
+  if (c && c.address === address && !listed.has(c.txid + ':' + c.vout)) held += big(c.value)
+  return held
+}
+// Whether the lists of the addresses a board touched (`lists`: address -> coins) show it whole:
+// none of its inputs listed, and its change, if any, listed. The hold can then end.
+export function boardSeen (lists, hold) {
+  if (!hold) return true
+  let changeSeen = !hold.change
+  for (const [, utxos] of lists) {
+    for (const u of utxos || []) {
+      const op = u.txid + ':' + u.vout
+      if (hold.inputs.has(op)) return false
+      if (hold.change && op === hold.change.txid + ':' + hold.change.vout) changeSeen = true
+    }
+  }
+  return changeSeen
 }
 
 // The wallet in its worker, and what the page does with it.
@@ -477,11 +526,28 @@ export function mountBtcArk ({ makeWorker, mnemonic, config, decode, onChange = 
     let r
     if (q.route === 'ark') r = await run('send', { address: dest, sats: String(q.sats) })
     else if (q.route === 'invoice') {
-      r = await run('pay', { invoice: dest, max_fee_sats: String(q.fee), wait: true }, PAY_TIMEOUT_MS)
+      const d = decode(dest)
+      const hash = d && d.ok ? d.paymentHash : null
+      try {
+        r = await run('pay', { invoice: dest, max_fee_sats: String(q.fee), wait: true }, PAY_TIMEOUT_MS)
+      } catch (e) {
+        // The call failed or timed out, but the payment may have left. A payee holding it keeps
+        // the wallet's `pay` running past the call's time, and the wallet answers one command at
+        // a time: a timed-out payment is on its way until payOutcome, asking behind it, learns how
+        // it ended. Otherwise what the wallet records for the hash decides: on its way, taken or
+        // come back is followed; never sent, the error stands.
+        if (hash && /did not answer in time/.test(String(e && e.message))) {
+          log('[btc ark] payment', hash, 'still running after', PAY_TIMEOUT_MS / 1000, 's: followed')
+          return { route: q.route, fee: q.fee, sats: q.sats, state: 'pending', hash }
+        }
+        const st = hash ? await run('pay_status', { hash, drive: true }).catch(() => null) : null
+        if (!st || !['pending', 'complete', 'failed'].includes(st.state)) throw e
+        log('[btc ark] payment', hash, 'is', st.state, 'after:', e && e.message)
+        r = { state: st.state === 'failed' ? 'pending' : st.state, preimage: st.preimage }
+      }
       if (r.state === 'failed') throw new Error(r.reason || 'the payment failed')
       // 'complete' once the payee took it; 'pending' while they hold it (payOutcome follows it).
-      const d = decode(dest)
-      r = { ...r, hash: d && d.ok ? d.paymentHash : null }
+      r = { ...r, hash }
     } else r = await run('offboard', { address: dest, sats: String(q.sats) }, PAY_TIMEOUT_MS)
     refresh().catch(() => {})
     return { route: q.route, fee: q.fee, sats: q.sats, ...r }
