@@ -549,7 +549,11 @@ export async function prepareSend({ to, amtS, asset }) {
   if (engine.isConfidentialAddress(address)) return await confidentialSend({ address, asset, atoms, amt });
   // An address: from the chain when the wallet's coins there cover it, else out of the tree.
   const { held, arriving } = await treeHeld(asset);
-  const route = addressRoute(atoms, engine.availableFor(asset), held - arriving);
+  // What a board just spent is not the chain's to pay from, though the wallet's reading may still
+  // list it: the chain is only tried with what is left beside the board (leaves.onchainLess), so
+  // a payment right after a board never signs a spent coin.
+  const onchain = await leaves.onchainLess(asset, engine.availableFor(asset), engine.seqTxHeld).catch(() => engine.availableFor(asset));
+  const route = addressRoute(atoms, onchain, held - arriving);
   if (route === 'chain') {
     const plan = await chainReview({ address, amtS, asset, amt, request });
     if (plan) return plan;
