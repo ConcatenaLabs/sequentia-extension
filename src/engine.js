@@ -328,6 +328,15 @@ export function currentAddress(confidential = false) {
   const addr = confidential ? a : a.toUnconfidential();
   return { address: addr.toString(), index: addrIndex, confidential };
 }
+// The payment name's stock of codes (vendor/name-stock.js): the address at `index`, the first
+// index neither chain has seen paid, and the index Receive shows (null before one is shown).
+export function addressAt(index) {
+  if (!wollet) throw new Error('wallet is locked');
+  if (!Number.isInteger(index) || index < 0) throw new Error('no address index');
+  return wollet.address(index).address().toUnconfidential().toString();
+}
+export function nextUnusedIndex() { if (!wollet) throw new Error('wallet is locked'); return unifiedNextUnused(); }
+export function shownIndex() { return addrIndex; }
 // New code, and developer mode's New address: an address not shown before, within the twenty past
 // the last one paid that a restore from the phrase reads (vendor/receive-index.js).
 export function newAddress(confidential = false) {

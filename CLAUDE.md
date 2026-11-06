@@ -74,7 +74,11 @@ wasm. Read this before changing anything.
   invoice → Lightning, BTC → the ark first). The leaf host boards on-chain assets
   and reads the mailbox every 10 s in default mode (`defaults`). The payment name's link with the name service
   (`vendor/lnaddr.js` `mountLnAddress`) lives in `offscreen-ark.js` beside the ark that makes
-  its invoices; a Sequentia payer's code comes from the service worker (`default.nameCode`). BTC lives on the
+  its invoices; it leaves the name's stock of signed receive codes with the service and tops it
+  up (`vendor/name-stock.js`), each code made by the service worker at the index the stock picks
+  (`default.nameCode`, from `default.nameIndices`). Receive shows the name as the QR code when the
+  wallet has one (`receiveCode` `isName`, words in `src/receive-view.js`); Send checks a name's code
+  against the name's key and the key kept from paying it before (`namePins`). BTC lives on the
   Bitcoin ark in the offscreen document (`offscreen-ark.js`, scope `ark`), open in
   both modes so its BTC is in BTC's figure; it boards the wallet's confirmed tb1
   coins in default mode, signed in that document with the phrase's own keys, within

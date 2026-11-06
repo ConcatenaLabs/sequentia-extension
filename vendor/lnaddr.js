@@ -18,10 +18,22 @@
 //
 // The page keeps one link with the service while it holds a name (`mountLnAddress`): a request the
 // service holds open until a payer asks something, about every 25 seconds. A wallet that is not
-// open has no link, and a payer is told it is offline.
+// open has no link: a Lightning payer is told it is offline.
+//
+// A Sequentia wallet paying the name is never stuck on that: the wallet leaves a stock of receive
+// codes with the service (name-stock.js), each at an address of its own within what a restore
+// finds, each signed by the name's key (`signCode`). The service hands each out once; the payer's
+// wallet checks the signature against the key published beside the name, and refuses a code that
+// fails, so a service that is broken into can withhold codes but never hand out an address of its
+// own. The payer's wallet also keeps the key it first paid a name at (`pins`), and refuses a code
+// under another key, which catches a service that publishes a key of its own for a name already
+// paid. When the stock runs out, the service hands out the most recent code again (`reused`); the
+// payer then pays it without its single-use Sequentia part, at its address or its ark address.
 //
 // No DOM: it runs under Node (lnaddr.test.mjs), and tooling/lsp/lnaddr.mjs imports it.
 import { HDKey, mnemonicToSeedSync, schnorr, sha256 } from './btc.js';
+import { readPayCode, buildPayCode, readShortRequest, libraryRequest } from './pay-code.js';
+import { STOCK_SIZE, pickStockIndices, planTopUp, HANDED_KEEP } from './name-stock.js';
 
 // The name key's path, beside the Lightning keys' branches (seqln-keys.js uses m/1017'/0' to 3').
 export const NAME_KEY_PATH = "m/1017'/16'/0'";
@@ -41,7 +53,7 @@ const unhex = (h) => {
 // mode's `dev*` lines do.
 export const NAME_WORDS = Object.freeze({
   label: 'Your payment name',
-  tip: 'Other wallets can pay you at this name, in any amount they choose, while this wallet is open.',
+  tip: 'Other wallets can pay you at this name, in any amount they choose. A Sequentia wallet can pay it while this wallet is closed; other wallets, while it is open.',
   none: 'Choose a name other wallets can pay you at, in any amount they choose.',
   choose: 'Choose a name',
   hint: 'yourname',
@@ -52,8 +64,20 @@ export const NAME_WORDS = Object.freeze({
   copied: 'Copied',
   remove: 'Remove name',
   removing: 'Removing…',
+  // Receive, when the wallet has a name: the picture is the name.
+  qrTip: 'Any asset, any amount. Another wallet that pays this name gets a new receive code of yours each time.',
+  public: 'Anyone who has your name can look it up and get a receive code of yours.',
+  copyName: 'Copy name',
+  copiedName: 'Name copied',
+  showFull: 'Show full code',
+  showName: 'Show name',
+  fullTip: 'For a wallet that can\'t look names up, or to pay without a connection. Each code is paid once; a new one shows when it is.',
+  // What Send says when a name's code does not check out. Nothing is sent.
+  unsigned: 'This name gave a receive code its wallet did not sign, so nothing was sent. Ask the recipient for their full code.',
+  changed: 'This name now belongs to another wallet than the one you paid before, so nothing was sent. Ask the recipient for their full code.',
+  busy: 'Too many lookups from your network. Try again in a minute.',
   devLabel: 'Lightning address',
-  devTip: 'LNURL-pay (LUD-06, LUD-16) at this service: a payer picks the amount and this page makes the invoice on the Bitcoin ark while it is open. A Sequentia wallet paying it is given a new receive code.',
+  devTip: 'LNURL-pay (LUD-06, LUD-16) at this service: a payer picks the amount and this page makes the invoice on the Bitcoin ark while it is open. A Sequentia wallet paying it is given one of the signed receive codes this page leaves with the service.',
 });
 
 // Why `name` can't be a name, or null. Names are written in lower case.
@@ -90,11 +114,44 @@ export function verifySig (pubHex, digest, sigHex) {
 
 // `name@domain` as LUD-16 writes it -> { name, domain }, or null for anything else. The user part
 // of LUD-16 also takes `.` and `+`; another service's names are read with them.
+// BIP353's spelling (`₿name@domain`) is read too.
 export function parseLnAddress (text) {
-  const m = /^\s*(?:lightning:)?([a-z0-9._+-]+)@([a-z0-9.-]+\.[a-z]{2,})\s*$/i.exec(String(text || ''));
+  const m = /^\s*(?:lightning:|\u20bf)?([a-z0-9._+-]+)@([a-z0-9.-]+\.[a-z]{2,})\s*$/i.exec(String(text || ''));
   if (!m) return null;
   return { name: m[1].toLowerCase(), domain: m[2].toLowerCase() };
 }
+
+// What Receive's QR code holds for a name: `name@domain` as it is written, in lower case. Of the
+// spellings a payer's wallet may scan, it is the one the most read as a payment name: LUD-16 gives
+// the name in lower case, `lightning:` in front of it is refused by some wallets' scanners (and in
+// upper case by more), and BIP353's `₿name@domain` needs a DNS record most wallets would look for
+// first. Our wallets read all three.
+export function nameQrText (address) { return String(address || '').trim().toLowerCase(); }
+
+// A code's id: the first 16 bytes of its SHA-256, in hex. The stock names codes by it.
+export function codeId (code) { return hex(sha256(enc(String(code)))).slice(0, 32); }
+
+// A receive code signed for `name@domain` by the name's key: { id, code, sig }. The signature says
+// only "this is a receive code of this name at this service"; the same digest signs a code the open
+// wallet gives for one request (`id` the request's), so a payer checks both alike.
+export function signCode (priv, domain, name, code, id = codeId(code)) {
+  return { id, code, sig: signWith(priv, signedDigest('code', domain, name, id, code)) };
+}
+export function verifyCode (pubHex, domain, name, { id, code, sig } = {}) {
+  if (typeof code !== 'string' || !code || typeof id !== 'string' || !id) return false;
+  return verifySig(pubHex, signedDigest('code', domain, name, id, code), sig);
+}
+
+// When a code's single-use Sequentia part lapses (seconds), or null when it has none or says none.
+export function requestUntil (code) {
+  let c = null; try { c = readPayCode(code); } catch {}
+  if (!c || !c.sequentia) return null;
+  const s = readShortRequest(c.sequentia);
+  const u = s ? s.request.until : (libraryRequest(c.sequentia) || {}).until;
+  return Number.isFinite(Number(u)) ? Number(u) : null;
+}
+// How long before its Sequentia part lapses a payer still pays it there.
+export const PAY_MARGIN_S = 600;
 
 // The LUD-06 metadata of a name: what the payer's wallet shows, as the raw string the payRequest
 // carries.
@@ -102,7 +159,9 @@ export function lnurlMetadata (name, domain) {
   return JSON.stringify([['text/plain', `Payment to ${name}@${domain}`], ['text/identifier', `${name}@${domain}`]]);
 }
 
-async function getJson (fetchFn, url, timeoutMs) {
+const OFFLINE_WORDS = "The recipient's wallet is offline. Try again when it is open.";
+
+async function getJson (fetchFn, url, timeoutMs, statusOnError = false) {
   const ctl = typeof AbortController === 'function' ? new AbortController() : null;
   const t = ctl ? setTimeout(() => ctl.abort(), timeoutMs) : null;
   let r;
@@ -110,24 +169,42 @@ async function getJson (fetchFn, url, timeoutMs) {
   catch { throw new Error('The address could not be reached. Check your connection and try again.'); }
   finally { if (t) clearTimeout(t); }
   let j = null; try { j = await r.json(); } catch {}
-  if (j && String(j.status || '').toUpperCase() === 'ERROR') throw new Error(String(j.reason || 'The address refused the payment.'));
+  if (j && String(j.status || '').toUpperCase() === 'ERROR') { const e = new Error(String(j.reason || 'The address refused the payment.')); if (statusOnError) e.status = r.status; throw e; }
   if (!r.ok || !j) throw new Error('The address could not be reached. Check your connection and try again.');
   return j;
 }
 
 // What a payment to a Lightning address pays.
-//   our domain: the name's receive code (`{ code }`), paid as any receive code, any asset;
+//   our domain: the name's receive code (`{ code }`), paid as any receive code, any asset, once its
+//     signature checks out against the name's key (and the key the payer paid it at before, `pins`);
 //   another domain: BTC only, over LNURL-pay, an invoice of exactly `msat` (`{ invoice }`).
 // `decode` is bolt11.js's decodeBolt11: the invoice must be for Bitcoin and for the amount asked.
-// -> { code } | { invoice }, or throws a sentence the page shows.
-export async function resolveLnAddress ({ text, asset, msat = null, domain, base, decode, fetch: fetchFn = (...a) => fetch(...a), timeoutMs = 20_000 }) {
+// `pins` is { get(address) -> key hex | null, set(address, key hex) }, kept by the payer's wallet.
+// A code handed out before (`reused`), or whose Sequentia part lapses within PAY_MARGIN_S, comes back
+// without that single-use part: it is paid at its address or its ark address.
+// -> { code, fresh, reused } | { invoice }, or throws a sentence the page shows.
+export async function resolveLnAddress ({ text, asset, msat = null, domain, base, decode, pins = null, fetch: fetchFn = (...a) => fetch(...a), timeoutMs = 20_000, nowS = () => Date.now() / 1000 }) {
   const a = parseLnAddress(text);
   if (!a) throw new Error('not a payment name');
   if (domain && a.domain === String(domain).toLowerCase()) {
     if (nameProblem(a.name)) throw new Error('No wallet goes by that name.');
-    const j = await getJson(fetchFn, `${base}/lnaddr/${a.name}`, timeoutMs);
+    let j;
+    try { j = await getJson(fetchFn, `${base}/lnaddr/${a.name}`, timeoutMs, true); } catch (e) { if (e.status === 429) throw new Error(NAME_WORDS.busy); throw e; }
     if (typeof j.code !== 'string' || !j.code) throw new Error('No wallet goes by that name.');
-    return { code: j.code, fresh: !!j.fresh };
+    const addr = `${a.name}@${a.domain}`;
+    const pub = String(j.pubkey || '').toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(pub) || !verifyCode(pub, a.domain, a.name, j)) throw new Error(NAME_WORDS.unsigned);
+    let pinned = null; try { pinned = pins ? pins.get(addr) : null; } catch {}
+    if (pinned && pinned !== pub) throw new Error(NAME_WORDS.changed);
+    let c; try { c = readPayCode(j.code); } catch { c = null; }
+    if (!c || !(c.address || c.ark || c.sequentia)) throw new Error(NAME_WORDS.unsigned);
+    if (!pinned && pins) { try { pins.set(addr, pub); } catch {} }
+    const until = requestUntil(j.code);
+    const stale = c.sequentia && (j.reused || (until != null && until - nowS() < PAY_MARGIN_S));
+    // Without its single-use part: what is left of the signed code, rebuilt from its own parts.
+    if (stale && !c.address) throw new Error(OFFLINE_WORDS);
+    const code = stale ? buildPayCode({ address: c.address, ark: c.ark || undefined }) : j.code;
+    return { code, fresh: !!j.fresh && !j.reused, reused: !!j.reused };
   }
   if (asset !== 'BTC') throw new Error('This address takes BTC only.');
   if (msat == null || BigInt(msat) <= 0n) throw new Error('Enter an amount.');
@@ -160,9 +237,17 @@ export async function resolveLnAddress ({ text, asset, msat = null, domain, base
 //   code       async () -> a receive code of the wallet's own, new for the payer
 //   limits     () -> { min_sat, max_sat } the wallet takes now, or null while it can't take any
 //   store      { get(k), set(k, v|null) } for the name, per wallet
-export function mountLnAddress ({ base, domain, key, invoice, code, limits = () => null, store, fetch: fetchFn = (...a) => fetch(...a), log = () => {}, now = () => Date.now(), onChange = () => {}, retryMs = 5_000 }) {
+// The stock (name-stock.js), left out by a wallet that keeps none:
+//   stockCode  async (index) -> a receive code of the wallet's own at address `index`, with a new
+//              Sequentia part and ark address, and no amount
+//   nextUnused () -> the first address index neither chain has seen paid
+//   shownIndex () -> the index of the address Receive shows, or null
+// With a stock, a code the service asks for while the wallet is open is made the same way.
+export function mountLnAddress ({ base, domain, key, invoice, code, limits = () => null, store, fetch: fetchFn = (...a) => fetch(...a), log = () => {}, now = () => Date.now(), onChange = () => {}, retryMs = 5_000,
+  stockCode = null, nextUnused = () => 0, shownIndex = () => null, stockSize = STOCK_SIZE, topUpEveryMs = 15_000 }) {
   let name = null; try { name = store.get('lnaddr.name') || null; } catch {}
   let running = false, stopped = true, ctl = null;
+  let topping = null, toppedAt = 0;
   const ts = () => Math.floor(now() / 1000);
   const keyOrThrow = () => { const k = key(); if (!k) throw new Error('Your wallet is locked; unlock it and try again.'); return k; };
 
@@ -175,6 +260,55 @@ export function mountLnAddress ({ base, domain, key, invoice, code, limits = () 
     return j;
   }
   function keep (n) { name = n; try { store.set('lnaddr.name', n); } catch {} try { onChange(n); } catch {} }
+
+  // The stock this wallet made for its name: { name, mine: id -> { index, until }, handed: [index] }.
+  function stockRec () {
+    let r = null; try { r = JSON.parse(store.get('lnaddr.stock') || 'null'); } catch {}
+    if (!r || r.name !== name || typeof r.mine !== 'object' || !Array.isArray(r.handed)) r = { name, mine: {}, handed: [] };
+    return r;
+  }
+  function keepStock (r) { r.handed = r.handed.slice(-HANDED_KEEP); try { store.set('lnaddr.stock', JSON.stringify(r)); } catch {} }
+  // One new code at an address the stock may use, signed; its index is remembered as handed out
+  // when `handed` is set (a code given at once, not left in the stock).
+  async function makeCodes (count, rec, k, n) {
+    const held = [...Object.values(rec.mine).map((c) => c.index), shownIndex()].filter((i) => Number.isInteger(i));
+    const out = [];
+    for (const index of pickStockIndices(count, { nextUnused: nextUnused(), held, handed: rec.handed })) {
+      const c = await stockCode(index);
+      if (!c) continue;
+      out.push({ index, until: requestUntil(c), signed: signCode(k.priv, domain, n, c) });
+    }
+    return out;
+  }
+  async function stockPost (k, n, add, drop) {
+    const t = ts();
+    return post('stock', { name: n, ts: t, add, drop,
+      sig: signWith(k.priv, signedDigest('stock', domain, n, t, add.map((a) => a.id).join(','), drop.join(','))) });
+  }
+  // Fill the stock up to `stockSize`, replacing codes near their lapse. `held`: the ids the service
+  // holds, when the caller has them already. -> the number held after, or null when not run.
+  async function topUp (held = null) {
+    if (!stockCode || !name) return null;
+    if (topping) return topping;
+    topping = (async () => {
+      const k = key(); if (!k) return null;
+      const n = name, rec = stockRec();
+      if (!held) held = (await stockPost(k, n, [], [])).held || [];
+      const plan = planTopUp({ mine: rec.mine, held, nowS: now() / 1000, size: stockSize });
+      for (const id of plan.served) { rec.handed.push(rec.mine[id].index); delete rec.mine[id]; }
+      for (const id of plan.drop) delete rec.mine[id];
+      const made = plan.make ? await makeCodes(plan.make, rec, k, n) : [];
+      if (n !== name) return null;
+      keepStock(rec);
+      if (!made.length && !plan.drop.length) return held.length;
+      const j = await stockPost(k, n, made.map((m) => m.signed), plan.drop);
+      for (const m of made) rec.mine[m.signed.id] = { index: m.index, until: m.until };
+      keepStock(rec);
+      toppedAt = now();
+      return (j.held || []).length;
+    })().catch((e) => { log('[lnaddr] stock:', e && e.message); return null; }).finally(() => { topping = null; });
+    return topping;
+  }
 
   // The name this wallet's key holds at the service, if any (a wallet restored elsewhere finds it).
   async function recover () {
@@ -192,7 +326,7 @@ export function mountLnAddress ({ base, domain, key, invoice, code, limits = () 
     const p = nameProblem(n); if (p) throw new Error(p);
     const k = keyOrThrow(), t = ts();
     await post('register', { name: n, pubkey: k.pub, ts: t, sig: signWith(k.priv, signedDigest('register', domain, n, k.pub, t)) });
-    keep(n); start();
+    keep(n); start(); topUp();
     return n;
   }
   async function release () {
@@ -209,7 +343,12 @@ export function mountLnAddress ({ base, domain, key, invoice, code, limits = () 
         const pr = await invoice(BigInt(req.msat));
         body = { name: n, id: req.id, pr, sig: signWith(k.priv, signedDigest('invoice', domain, n, req.id, pr)) };
       } else if (req.kind === 'code') {
-        const c = await code();
+        let c;
+        if (stockCode) {
+          const rec = stockRec(), [m] = await makeCodes(1, rec, k, n);
+          if (!m) throw new Error('no code');
+          c = m.signed.code; rec.handed.push(m.index); keepStock(rec);
+        } else c = await code();
         body = { name: n, id: req.id, code: c, sig: signWith(k.priv, signedDigest('code', domain, n, req.id, c)) };
       } else return;
     } catch (e) {
@@ -245,11 +384,16 @@ export function mountLnAddress ({ base, domain, key, invoice, code, limits = () 
           seen.add(req.id); if (seen.size > 200) seen.delete(seen.values().next().value);
           answer(n, k, req);
         }
+        // The stock, topped up while the wallet is open: at most every `topUpEveryMs`.
+        if (j && Array.isArray(j.held) && stockCode && now() - toppedAt >= topUpEveryMs) {
+          const rec = stockRec(), plan = planTopUp({ mine: rec.mine, held: j.held, nowS: now() / 1000, size: stockSize });
+          if (plan.make || plan.drop.length || plan.served.length) { toppedAt = now(); topUp(j.held); }
+        }
       }
     } finally { running = false; ctl = null; }
   }
-  function start () { stopped = false; if (!running && name) loop(); }
+  function start () { stopped = false; if (!running && name) { loop(); topUp(); } }
   function stop () { stopped = true; try { if (ctl) ctl.abort(); } catch {} }
 
-  return { name: () => name, address: () => (name ? `${name}@${domain}` : null), register, release, recover, start, stop, running: () => running };
+  return { name: () => name, address: () => (name ? `${name}@${domain}` : null), register, release, recover, start, stop, topUp, stock: () => stockRec(), running: () => running };
 }

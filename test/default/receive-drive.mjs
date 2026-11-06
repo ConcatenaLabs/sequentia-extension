@@ -4,7 +4,12 @@
 // docs/DEFAULT_MODE.md, Receive).
 //
 //   - New code moves the code to a new address, and makes its other parts new.
-//   - A payment name chosen under the code: a code without an amount carries its LNURL-pay
+//   - A payment name chosen under the code: the QR code becomes the name (read back from the
+//     picture, it is `name@domain` in lower case), with the line saying names are public, Copy name
+//     and Show full code and no New code; the wallet leaves its stock of signed codes with the name
+//     service (`LNADDR_STORE`: the service's store file, read for the stock) and tops it up after a
+//     lookup takes one; a code the service forged is refused (`FORGE_FILE`: the proxy's
+//     --lnaddr-forge file). Show full code gives the code, which carries the name's LNURL-pay
 //     (`lightning=LNURL1…`), which the name service answers with a pay request, and whose callback
 //     gives an invoice of this wallet's for the amount a Lightning wallet chose.
 //   - An amount in BTC carries the Bitcoin ark's invoice; an amount in an asset the operator
@@ -18,7 +23,10 @@
 // `BEFORE=1` takes the receive screen alone, for a build that predates these.
 //
 //   CHROME=… node test/default/receive-drive.mjs <evidence-dir> <work-dir>
-import { mkdirSync, writeFileSync, appendFileSync } from 'node:fs';
+//
+// `LNADDR_BASE` names the name service the extension was built against (src/config.js LSP.url, a
+// copy pointed at the web wallet's tooling/live-proxy.mjs --lnaddr), else the testnet's.
+import { mkdirSync, writeFileSync, appendFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Browser, sleep } from '../leaves/cdp.mjs';
@@ -45,6 +53,12 @@ function check(name, ok, detail) {
 const USDX = '048c7943385563c3f74982760f88654a4acb1ecc0bd49803c2f52b304ee7ce11';
 const param = (c, k) => { const m = new RegExp('[?&]' + k + '=([^&]*)', 'i').exec(c); return m ? decodeURIComponent(m[1]) : null; };
 const addrOf = (c) => c.replace(/^bitcoin:/i, '').split('?')[0].toLowerCase();
+const LNADDR_BASE = process.env.LNADDR_BASE || 'https://sequentiatestnet.com/lsp';
+const WELL_KNOWN = LNADDR_BASE.replace(/\/lsp$/, '');
+// The stock the service holds for `name`, from its store file (LNADDR_STORE), or null.
+const stockOf = (name) => { try { const j = JSON.parse(readFileSync(process.env.LNADDR_STORE, 'utf8')); return ((j.names[name] || {}).stock || []).length; } catch { return null; } };
+// The web wallet's QR decoder, beside this checkout or at JSQR.
+const JSQR = process.env.JSQR || resolve(EXT, '../sequentia-web-wallet/jsqr.js');
 
 async function main() {
   const b = new Browser({ chrome: CHROME, profile: join(work, 'profile-R'), ext: EXT, consoleLog: join(out, 'console-R.log'), headless: true });
@@ -104,12 +118,58 @@ async function main() {
     await pop.click('#btnNameSave');
     const named = await waitFor("(()=>{ const t=document.querySelector('#nameAddr').innerText; const s=document.querySelector('#nameStatus').innerText; return t || (s ? 'ERR '+s : false) })()", 120000);
     check('the wallet holds a payment name', named === `${want}@sequentiatestnet.com`, named);
+    // The picture is the name.
+    const nameShown = await waitFor(`document.querySelector('#recvDCode').innerText===${JSON.stringify(named)} ? true : false`, 120000).catch(() => false);
+    check('Receive shows the name in place of the code', nameShown);
+    await sleep(800);
+    if (existsSync(JSQR)) {
+      await pop.eval(readFileSync(JSQR, 'utf8') + '; true');
+      const qrText = await pop.eval("(async()=>{ const i=document.querySelector('#recvDQr'); await i.decode(); const c=document.createElement('canvas'); c.width=i.naturalWidth; c.height=i.naturalHeight; const x=c.getContext('2d'); x.drawImage(i,0,0); const r=jsQR(x.getImageData(0,0,c.width,c.height).data,c.width,c.height); return r ? r.data + ' v' + r.version : 'none' })()");
+      check('the QR code read back is the name, in lower case', String(qrText).split(' ')[0] === named.toLowerCase(), qrText);
+    } else note('no QR decoder at ' + JSQR + ': the picture is not read back');
+    const ui1 = await pop.eval("({ pub: document.querySelector('#recvDPublic').innerText, pubShown: !document.querySelector('#recvDPublic').classList.contains('hide'), copy: document.querySelector('#btnDCopy').innerText, full: document.querySelector('#btnDFull').innerText, fullShown: !document.querySelector('#btnDFull').classList.contains('hide'), newShown: !document.querySelector('#btnDNew').classList.contains('hide'), label: document.querySelector('#recvDLbl').innerText })");
+    check('the name says it is public, offers Copy name and Show full code, and no New code',
+      ui1.pubShown && /Anyone who has your name/.test(ui1.pub) && ui1.copy === 'Copy name' && ui1.fullShown && ui1.full === 'Show full code' && !ui1.newShown && ui1.label === 'Your payment name', ui1);
+    await shot('R-3-name.png');
+    await noWords('Receive showing the name');
+    // The stock the wallet leaves with the name service, and its top-up after a lookup.
+    if (process.env.LNADDR_STORE) {
+      const t2 = Date.now(); let n = null;
+      while (Date.now() - t2 < 240000) { n = stockOf(want); if (n >= 10) break; await sleep(2000); }
+      check('the wallet leaves ten signed codes with the name service', n >= 10, `${n} after ${((Date.now() - t2) / 1000).toFixed(1)} s`);
+      const look = await fetch(`${LNADDR_BASE}/lnaddr/${want}`).then((r) => r.json()).catch((e) => ({ error: e.message }));
+      const { verifyCode } = await import('../../vendor/lnaddr.js');
+      const { readPayCode: rpc0 } = await import('../../vendor/pay-code.js');
+      const lc = look.code ? rpc0(look.code) : null;
+      check('a lookup gets a full code signed by the name\'s key', !!look.code && verifyCode(look.pubkey, 'sequentiatestnet.com', want, look) && !!lc.sequentia && !!lc.address && look.fresh === true, { fresh: look.fresh, parts: lc && Object.keys(lc).filter((k) => lc[k] && k !== 'other') });
+      const after = stockOf(want);
+      const t3 = Date.now(); let n2 = after;
+      while (Date.now() - t3 < 120000) { n2 = stockOf(want); if (n2 >= 10) break; await sleep(2000); }
+      check('the open wallet tops the stock up again', after < 10 && n2 >= 10, `${after} -> ${n2} in ${((Date.now() - t3) / 1000).toFixed(1)} s`);
+    }
+    // Send to this name: resolved and verified (and its key kept); a forged code is refused.
+    const own = await ui('default.prepareSend', { to: named, amtS: '1', asset: USDX }).then((r) => 'resolved: ' + r.title, (e) => 'refused: ' + e.message);
+    note('Send to the wallet\'s own name: ' + own);
+    check('Send resolves the name to a signed code (here refused only for want of USDX)', !/did not sign|another wallet|No wallet/.test(own), own);
+    if (process.env.FORGE_FILE) {
+      writeFileSync(process.env.FORGE_FILE, 'address');
+      const f1 = await ui('default.prepareSend', { to: named, amtS: '1', asset: USDX }).then(() => 'no refusal', (e) => e.message);
+      check('a code whose address the service swapped is refused', /did not sign, so nothing was sent/.test(f1), f1);
+      writeFileSync(process.env.FORGE_FILE, 'key');
+      const f2 = await ui('default.prepareSend', { to: named, amtS: '1', asset: USDX }).then(() => 'no refusal', (e) => e.message);
+      check('a code under a key the service put in place of the name\'s is refused', /belongs to another wallet than the one you paid before/.test(f2), f2);
+      rmSync(process.env.FORGE_FILE, { force: true });
+    }
+    // Show full code.
+    await pop.click('#btnDFull');
     const c3 = await waitFor("(()=>{ const t=document.querySelector('#recvDCode').innerText; return /[?&]lightning=LNURL1/.test(t) ? t : false })()", 120000).catch(() => null);
-    check('without an amount the code carries the name\'s LNURL-pay', !!c3);
+    check('Show full code gives the code, which carries the name\'s LNURL-pay', !!c3);
+    check('and offers Show name back', (await pop.eval("document.querySelector('#btnDFull').innerText")) === 'Show name');
+    await shot('R-3b-full-code.png');
     if (c3) {
       const url = lnurlDecode(param(c3, 'lightning'));
       check('it is the name\'s own LNURL-pay', url === `https://sequentiatestnet.com/.well-known/lnurlp/${want}`, url);
-      const pr = await fetch(url).then((r) => r.json()).catch((e) => ({ error: e.message }));
+      const pr = await fetch(url.replace('https://sequentiatestnet.com', WELL_KNOWN)).then((r) => r.json()).catch((e) => ({ error: e.message }));
       check('which the service answers with a pay request', pr.tag === 'payRequest', { tag: pr.tag, reason: pr.reason });
       if (pr.callback) {
         const msat = 2000n * 1000n;
@@ -117,10 +177,9 @@ async function main() {
         const d = cb.pr ? decodeBolt11(cb.pr) : null;
         check('a Lightning wallet paying it gets an invoice for the amount it chose, from this wallet', !!d && d.ok && d.chain === 'btc' && BigInt(d.amountMsat) === msat, cb.pr ? cb.pr.slice(0, 20) + '…' : cb);
       }
-      note(`code with the name: ${c3.length} characters`);
+      note(`code with the name: ${c3.length} characters; the name: ${named.length}`);
     }
-    await shot('R-3-name.png');
-    await noWords('Receive with a name');
+    await noWords('Receive, the full code with a name');
     // Amounts.
     const setAmount = (v, ticker) => pop.eval(`(()=>{ const s=document.querySelector('#recvDAsset'); const o=[...s.options].find(o=>o.textContent.trim()===${JSON.stringify(ticker)}); if(!o) return 'no '+${JSON.stringify(ticker)}+': '+[...s.options].map(o=>o.textContent).join(','); s.value=o.value; s.dispatchEvent(new Event('change')); const i=document.querySelector('#recvDAmt'); i.value=${JSON.stringify(v)}; i.dispatchEvent(new Event('input')); return true })()`);
     await waitFor("[...document.querySelector('#recvDAsset').options].length > 1", 60000).catch(() => null);

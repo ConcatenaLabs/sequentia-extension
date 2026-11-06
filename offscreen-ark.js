@@ -34,7 +34,11 @@
 // The payment name (vendor/lnaddr.js, the web wallet's module): `name@LNADDR_DOMAIN`, held by a key of
 // the phrase. While the ark is open this document keeps the link with the service that answers a
 // payer: a Lightning wallet's invoice comes from this ark, for the amount it chose; a Sequentia
-// wallet is given a new receive code, which the service worker makes (`default.nameCode`).
+// wallet is given one of the signed receive codes this link leaves with the service and tops up
+// while the ark is open (vendor/name-stock.js), each made by the service worker at an address the
+// stock picks (`default.nameCode`), from the indices the service worker last gave
+// (`default.nameIndices`, read every ten seconds: a reading a little old only picks inside an
+// older window, which a restore still reads).
 
 import { mountBtcArk, arkConfig } from './vendor/btc-ark.js';
 import { decodeBolt11 } from './vendor/bolt11.js';
@@ -45,7 +49,13 @@ import { mountLnAddress, nameKey } from './vendor/lnaddr.js';
 import { LSP, LNADDR_DOMAIN } from './src/config.js';
 
 const BTC_DUST = 294n;
-const A = { ark: null, fp: null, phrase: null, lastBoard: null, lastError: null, name: null, nameKey: null };
+const A = { ark: null, fp: null, phrase: null, lastBoard: null, lastError: null, name: null, nameKey: null, idx: null, idxTimer: null };
+const sw = async (method, params = {}) => {
+  const r = await chrome.runtime.sendMessage({ scope: 'ui', method, params });
+  if (!r || !r.ok) throw new Error((r && r.error) || method + ' failed');
+  return r.result;
+};
+async function readIndices() { try { A.idx = await sw('default.nameIndices'); } catch { /* the last reading stands */ } }
 // What a payer may send to the name: from NAME_MIN_SAT up to the ark's largest coin, never above
 // NAME_MAX_SAT (the web wallet's limits).
 const NAME_MIN_SAT = 1000n, NAME_MAX_SAT = 1_000_000n;
@@ -96,11 +106,11 @@ function startName(fp) {
       followNameInvoice(inv);
       return inv.invoice;
     },
-    code: async () => {
-      const r = await chrome.runtime.sendMessage({ scope: 'ui', method: 'default.nameCode', params: {} });
-      if (!r || !r.ok || typeof r.result !== 'string') throw new Error((r && r.error) || 'no receive code');
-      return r.result;
-    },
+    code: async () => { throw new Error('the stock makes codes'); },
+    // No code until the indices are known: the stock never guesses where the window is.
+    stockCode: async (index) => { if (!A.idx) return null; const c = await sw('default.nameCode', { index }); return typeof c === 'string' && c ? c : null; },
+    nextUnused: () => (A.idx && Number.isInteger(A.idx.nextUnused) ? A.idx.nextUnused : 0),
+    shownIndex: () => (A.idx && Number.isInteger(A.idx.shown) ? A.idx.shown : null),
     limits: () => {
       if (!A.ark || !A.ark.isOpen()) return null;
       let max = NAME_MAX_SAT;
@@ -111,7 +121,9 @@ function startName(fp) {
     onChange: () => emit('nameChanged', { name: A.name && A.name.name() }),
     log: (...a) => console.info(...a),
   });
-  A.name.recover().then(() => { if (A.name) A.name.start(); });
+  clearInterval(A.idxTimer);
+  A.idxTimer = setInterval(readIndices, 10_000);
+  readIndices().then(() => A.name && A.name.recover()).then(() => { if (A.name) A.name.start(); });
 }
 // A payment to the name is claimed as soon as the server holds it, as Receive's own invoice is.
 function followNameInvoice(inv) {
@@ -134,6 +146,7 @@ async function name({ op, name: wanted }) {
 function stop() {
   if (A.ark) { try { A.ark.close(); } catch {} }
   if (A.name) { try { A.name.stop(); } catch {} }
+  clearInterval(A.idxTimer); A.idxTimer = null; A.idx = null;
   A.ark = null; A.fp = null; A.phrase = null; A.name = null; A.nameKey = null;
 }
 
