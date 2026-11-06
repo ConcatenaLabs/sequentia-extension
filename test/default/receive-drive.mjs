@@ -130,6 +130,8 @@ async function main() {
     const ui1 = await pop.eval("({ pub: document.querySelector('#recvDPublic').innerText, pubShown: !document.querySelector('#recvDPublic').classList.contains('hide'), copy: document.querySelector('#btnDCopy').innerText, full: document.querySelector('#btnDFull').innerText, fullShown: !document.querySelector('#btnDFull').classList.contains('hide'), newShown: !document.querySelector('#btnDNew').classList.contains('hide'), label: document.querySelector('#recvDLbl').innerText })");
     check('the name says it is public, offers Copy name and Show full code, and no New code',
       ui1.pubShown && /Anyone who has your name/.test(ui1.pub) && ui1.copy === 'Copy name' && ui1.fullShown && ui1.full === 'Show full code' && !ui1.newShown && ui1.label === 'Your payment name', ui1);
+    const once = await pop.eval("({ lbl: !document.querySelector('#nameLbl').classList.contains('hide'), addr: !document.querySelector('#nameAddr').classList.contains('hide'), copy: !document.querySelector('#btnNameCopy').classList.contains('hide'), quiet: document.querySelector('#btnNameRemove').classList.contains('quiet') })");
+    check('the name is said once: below it only Remove name, as a quiet link', !once.lbl && !once.addr && !once.copy && once.quiet, once);
     await shot('R-3-name.png');
     await noWords('Receive showing the name');
     // The stock the wallet leaves with the name service, and its top-up after a lookup.
