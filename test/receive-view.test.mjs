@@ -23,6 +23,19 @@ test('the full code: Show name back only when the wallet holds a name and asked 
   assert.equal(receiveView({ isCode: false }).label, 'Receive');
 });
 
+test('the name is said once: while Receive shows it, the name block keeps only Remove name, quiet', async () => {
+  const { readFileSync } = await import('node:fs');
+  const pop = readFileSync(new URL('../popup/popup.js', import.meta.url), 'utf8');
+  const i = pop.indexOf('function paintNameBox()'), body = pop.slice(i, pop.indexOf('\n}\n', i));
+  assert.match(body, /const above = !!nameNow && !!\(recvCode && recvCode\.isName\) && isDefault\(\);/);
+  for (const id of ['nameLbl', 'nameTip']) assert.ok(body.includes(`vis('${id}', !above)`), id);
+  assert.match(body, /vis\('btnNameCopy', !!nameNow && !nameEditing && !above\)/);
+  assert.match(body, /\$\('btnNameRemove'\)\.classList\.toggle\('quiet', above\)/);
+  assert.match(pop, /\$\('recvDCode'\)\.textContent = r\.code;\n    paintNameBox\(\);/, 'painted with each answer');
+  assert.match(readFileSync(new URL('../popup/ui.css', import.meta.url), 'utf8'), /button\.quiet \{[^}]*text-decoration: underline/);
+  assert.match(NAME_WORDS.qrTip, /while this wallet is closed/);
+});
+
 test('every word it shows names no protocol', () => {
   for (const r of [{ isCode: true, isName: true }, { isCode: true, named: true }])
     for (const w of Object.values(receiveView(r, { full: true }))) if (typeof w === 'string') assert.deepEqual(forbiddenIn(w), [], w);

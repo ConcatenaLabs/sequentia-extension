@@ -1425,6 +1425,7 @@ async function renderDefaultReceive(fresh = false) {
     $('btnDFull').classList.toggle('hide', !v.toggle); $('btnDFull').textContent = v.toggle || '';
     $('recvDPublic').textContent = v.publicLine || ''; $('recvDPublic').classList.toggle('hide', !v.publicLine);
     $('recvDCode').textContent = r.code;
+    paintNameBox();
     if (r.qr) $('recvDQr').src = r.qr; else $('recvDQr').removeAttribute('src');
     if (r.invoiceHash) watchInvoice(r.invoiceHash, r.invoiceKind || 'BTC', atoms);
     // The address stands in while the wallet cannot hold coins with the operator yet: the open
@@ -1469,6 +1470,19 @@ $('recvDAsset').onchange = () => { $('recvDAmt').placeholder = recvAsset() === '
 
 // ---- the payment name (vendor/lnaddr.js): name@LNADDR_DOMAIN, under the code ----
 let nameEditing = false, nameBusy = false, nameNow = null;
+// While Receive shows the name (`isName`), the card says it once: the name block keeps only Remove
+// name, a quiet link at the card's foot. With the full code it is shown whole, as before.
+function paintNameBox() {
+  const above = !!nameNow && !!(recvCode && recvCode.isName) && isDefault();
+  const vis = (id, on) => $(id).classList.toggle('hide', !on);
+  vis('nameLbl', !above); vis('nameTip', !above);
+  vis('nameAddr', !!nameNow && !nameEditing && !above);
+  vis('btnNameCopy', !!nameNow && !nameEditing && !above);
+  $('btnNameRemove').classList.toggle('quiet', above);
+  $('btnNameRemove').classList.toggle('ghost', !above);
+  $('btnNameRemove').classList.toggle('tiny', !above);
+  $('nameBox').style.marginTop = above ? '6px' : '12px';
+}
 async function renderName() {
   let st = null; try { st = await rpc('default.name'); } catch {}
   const box = $('nameBox');
@@ -1485,7 +1499,8 @@ async function renderName() {
   $('nameInput').placeholder = NAME_WORDS.hint;
   const vis = (id, on) => $(id).classList.toggle('hide', !on);
   vis('btnNameChoose', !nameNow && !nameEditing); vis('btnNameSave', nameEditing); vis('btnNameCancel', nameEditing);
-  vis('btnNameCopy', !!nameNow && !nameEditing); vis('btnNameRemove', !!nameNow && !nameEditing);
+  vis('btnNameRemove', !!nameNow && !nameEditing);
+  paintNameBox();
   $('btnNameChoose').textContent = NAME_WORDS.choose; $('btnNameCancel').textContent = NAME_WORDS.cancel; $('btnNameCopy').textContent = NAME_WORDS.copy;
   if (!nameBusy) { $('btnNameSave').textContent = NAME_WORDS.save; $('btnNameRemove').textContent = NAME_WORDS.remove; }
   // The code carries the name while it is held: drawn again when it changes.

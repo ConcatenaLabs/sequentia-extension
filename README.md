@@ -79,7 +79,9 @@ confidential `tsqb1…` addresses are an explicit opt-in).
   USD when it publishes none). A wallet with a payment name shows the name instead while no
   amount is typed and Confidential is off: the QR code holds `name@sequentiatestnet.com`, with
   **Copy name** and **Show full code**, whose full code carries the name's LNURL-pay as
-  `lightning=`. **New code** moves to an address not shown before, within
+  `lightning=`. The name is then said once, in one card: the QR, the name, one line on who
+  can pay it and when, the line saying names are public, Copy name and Show full code, the
+  Confidential switch, and **Remove name** as a quiet link at its foot. **New code** moves to an address not shown before, within
   the twenty past the last one paid that a restore reads (`vendor/receive-index.js`). The
   **Confidential** switch under the code makes it the wallet's confidential address alone,
   saying what stays public, and is off whenever Receive opens. Under it, **Your payment

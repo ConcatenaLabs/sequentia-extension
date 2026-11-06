@@ -65,7 +65,7 @@ export const NAME_WORDS = Object.freeze({
   remove: 'Remove name',
   removing: 'Removing…',
   // Receive, when the wallet has a name: the picture is the name.
-  qrTip: 'Any asset, any amount. Another wallet that pays this name gets a new receive code of yours each time.',
+  qrTip: 'Any asset, any amount, a new receive code of yours for each payer. A Sequentia wallet can pay this name while this wallet is closed; other wallets, while it is open.',
   public: 'Anyone who has your name can look it up and get a receive code of yours.',
   copyName: 'Copy name',
   copiedName: 'Name copied',
