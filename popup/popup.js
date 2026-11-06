@@ -1642,6 +1642,9 @@ function refValue(h, atoms) {
   try { return '≈ ' + new Intl.NumberFormat('en-US', { style: 'currency', currency: OV.ref, maximumFractionDigits: 2 }).format(v); }
   catch { return '≈ ' + v.toFixed(2) + ' ' + OV.ref; }
 }
+// Trades the popup waits on now, and the longest the wallet's upkeep is held for one of them.
+let tradeHolds = 0;
+const TRADE_HOLD_MS = 120_000;
 async function fetchJsonOnce(url, init) {
   const r = await fetch(url, init ? { ...init, headers: { 'content-type': 'application/json' } } : { cache: 'no-store', signal: AbortSignal.timeout(READ_TIMEOUT_MS) });
   const j = await r.json().catch(() => ({}));
@@ -1658,6 +1661,13 @@ async function renderTrade() {
         console.log(`[trade] ${cmd} asked`);
         try { return await rpc('default.leaf', { command: cmd, args: args || {} }); }
         finally { console.log(`[trade] ${cmd}: ${Date.now() - t} ms`); }
+      },
+      // The wallet's upkeep starts nothing new while a person waits on a quote or a confirmation
+      // (the offscreen host's `holdUpkeep`), as the web wallet's does.
+      hold: async (f) => {
+        if (tradeHolds++ === 0) rpc('default.holdUpkeep', { ms: TRADE_HOLD_MS }).catch(() => {});
+        try { return await f(); }
+        finally { if (--tradeHolds === 0) rpc('default.holdUpkeep', { ms: 0 }).catch(() => {}); }
       } },
       fetchJson: async (url, init) => {
         const t = Date.now();
