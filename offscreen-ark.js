@@ -28,16 +28,27 @@
 //   'received' { hash }               -> the receive's state, claimed when paid
 //   'ln'    { method, args }          -> the trade composer's BTC (`lightning()`), BigInt as { $big }
 //   'board' { lim, changeNext, cap }  -> boards the confirmed BTC at the first `lim` keys
+//   'name'  { op: 'state' | 'register' | 'release', name? } -> { name, address } of the payment name
 // The balance is sent to the service worker as `arkBalance` after every change.
+//
+// The payment name (vendor/lnaddr.js, the web wallet's module): `name@LNADDR_DOMAIN`, held by a key of
+// the phrase. While the ark is open this document keeps the link with the service that answers a
+// payer: a Lightning wallet's invoice comes from this ark, for the amount it chose; a Sequentia
+// wallet is given a new receive code, which the service worker makes (`default.nameCode`).
 
 import { mountBtcArk, arkConfig } from './vendor/btc-ark.js';
 import { decodeBolt11 } from './vendor/bolt11.js';
 import { HDKey, mnemonicToSeedSync, btc } from './vendor/btc.js';
 import { BTC_ARK, T4_API, BTC_FEERATE } from './src/config.js';
 import { toWire, fromWire } from './src/wire.js';
+import { mountLnAddress, nameKey } from './vendor/lnaddr.js';
+import { LSP, LNADDR_DOMAIN } from './src/config.js';
 
 const BTC_DUST = 294n;
-const A = { ark: null, fp: null, phrase: null, lastBoard: null, lastError: null };
+const A = { ark: null, fp: null, phrase: null, lastBoard: null, lastError: null, name: null, nameKey: null };
+// What a payer may send to the name: from NAME_MIN_SAT up to the ark's largest coin, never above
+// NAME_MAX_SAT (the web wallet's limits).
+const NAME_MIN_SAT = 1000n, NAME_MAX_SAT = 1_000_000n;
 
 async function fingerprint(text) {
   const d = await crypto.subtle.digest('SHA-256', new TextEncoder().encode('ark-host/' + String(text).trim()));
@@ -71,12 +82,59 @@ async function start({ mnemonic }) {
   });
   await A.ark.open();
   emit('arkBalance', figuresWire(A.ark.figures()));
+  startName(fp);
   return { open: true };
+}
+
+function startName(fp) {
+  if (A.name) return;
+  A.name = mountLnAddress({
+    base: LSP.url, domain: LNADDR_DOMAIN,
+    key: () => { if (!A.phrase) return null; if (!A.nameKey) A.nameKey = nameKey(A.phrase); return A.nameKey; },
+    invoice: async (msat) => {
+      const inv = await A.ark.invoice(String(BigInt(msat) / 1000n), 'Payment to ' + A.name.address());
+      followNameInvoice(inv);
+      return inv.invoice;
+    },
+    code: async () => {
+      const r = await chrome.runtime.sendMessage({ scope: 'ui', method: 'default.nameCode', params: {} });
+      if (!r || !r.ok || typeof r.result !== 'string') throw new Error((r && r.error) || 'no receive code');
+      return r.result;
+    },
+    limits: () => {
+      if (!A.ark || !A.ark.isOpen()) return null;
+      let max = NAME_MAX_SAT;
+      const i = A.ark.info(); if (i && i.max_vtxo_sat != null && BigInt(i.max_vtxo_sat) < max) max = BigInt(i.max_vtxo_sat);
+      return max >= NAME_MIN_SAT ? { min_sat: NAME_MIN_SAT, max_sat: max } : null;
+    },
+    store: { get: (k) => localStorage.getItem('lnaddr.' + k + '.' + fp), set: (k, v) => v == null ? localStorage.removeItem('lnaddr.' + k + '.' + fp) : localStorage.setItem('lnaddr.' + k + '.' + fp, v) },
+    onChange: () => emit('nameChanged', { name: A.name && A.name.name() }),
+    log: (...a) => console.info(...a),
+  });
+  A.name.recover().then(() => { if (A.name) A.name.start(); });
+}
+// A payment to the name is claimed as soon as the server holds it, as Receive's own invoice is.
+function followNameInvoice(inv) {
+  (async () => {
+    while (A.ark && Date.now() / 1000 < Number(inv.expires_at)) {
+      await new Promise((ok) => setTimeout(ok, 3000));
+      let r = null; try { r = await A.ark.received(inv.payment_hash); } catch {}
+      if (r && r.state === 'paid') { emit('arkBalance', figuresWire(A.ark.figures())); return; }
+    }
+  })();
+}
+async function name({ op, name: wanted }) {
+  if (!A.name) throw { message: 'the Bitcoin ark wallet is not open' };
+  if (op === 'register') await A.name.register(String(wanted || ''));
+  else if (op === 'release') await A.name.release();
+  else if (op !== 'state') throw { message: 'no name operation ' + op };
+  return { name: A.name.name(), address: A.name.address() };
 }
 
 function stop() {
   if (A.ark) { try { A.ark.close(); } catch {} }
-  A.ark = null; A.fp = null; A.phrase = null;
+  if (A.name) { try { A.name.stop(); } catch {} }
+  A.ark = null; A.fp = null; A.phrase = null; A.name = null; A.nameKey = null;
 }
 
 // ---- the board's funding, built and signed here with the phrase's own keys ----
@@ -159,6 +217,7 @@ async function handle(op, args) {
       return toWire(await l[m](fromWire(args.args)));
     }
     case 'board': return await board(args);
+    case 'name': return await name(args);
     // Developer mode's exit by hand: each coin priced, then the coins worth it taken out.
     case 'exitEstimate': return await need().exitEstimate();
     case 'exitStart': { const r = await need().exitStart(Array.isArray(args.vtxos) ? args.vtxos.map(String) : null); emit('arkBalance', figuresWire(A.ark.figures())); return r; }

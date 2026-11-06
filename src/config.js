@@ -27,6 +27,10 @@ export const LSP = {
   hostPubkeyBtc: '020a749af93e2a5a4d67ad28585cec31b55a146969eb77ca3d076eb59ff111ed51',
 };
 
+// Payment names (vendor/lnaddr.js): `name@<this domain>`, a Lightning address served by the LSP's
+// payment-name service (LSP.url + '/lnaddr'); the same names as the web wallet's.
+export const LNADDR_DOMAIN = 'sequentiatestnet.com';
+
 // The operator default mode holds assets with (vendor/default-arca.js): its server, the node
 // its leaf wallet follows the chain through, and the operator's key, pinned. A wallet in default
 // mode that has joined none joins this one by itself, and only while its server shows this key.

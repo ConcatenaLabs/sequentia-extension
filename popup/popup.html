@@ -97,7 +97,7 @@
       <div class="card hide" id="sendDefault">
         <h2>Send</h2>
         <label class="sub" for="sendDTo">Recipient</label>
-        <input id="sendDTo" placeholder="a receive code, an address or an invoice" class="mono">
+        <input id="sendDTo" placeholder="a receive code, a payment name, an address or an invoice" class="mono">
         <select id="sendDAsset"></select>
         <div class="sub" id="sendDAvail" style="margin-top:4px"></div>
         <input id="sendDAmt" placeholder="Amount" inputmode="decimal">
@@ -134,14 +134,36 @@
       <div class="card hide" id="recvDefault">
         <h2 id="recvDLbl">Receive code</h2>
         <p class="sub" id="recvDTip"></p>
-        <input id="recvDAmt" placeholder="Amount in BTC (optional)" inputmode="decimal">
+        <div id="recvDAmtRow" class="row recv-amt-row">
+          <input id="recvDAmt" placeholder="Amount in BTC (optional)" inputmode="decimal">
+          <select id="recvDAsset" class="hide"></select>
+        </div>
         <img id="recvDQr" class="qr" alt="">
         <div id="recvDCode" class="addr mono"></div>
         <div class="row" style="margin-top:6px">
           <button id="btnDCopy" class="ghost tiny">Copy receive code</button>
           <button id="btnDNew" class="ghost tiny">New code</button>
         </div>
+        <div id="recvDConfRow" style="margin-top:10px">
+          <label class="recv-switch"><input type="checkbox" role="switch" id="recvDConf"><span id="recvDConfLbl">Confidential</span></label>
+          <p class="sub" id="recvDConfTip" style="margin:4px 0 0"></p>
+          <p class="sub hide" id="recvDConfNote" style="margin:4px 0 0"></p>
+        </div>
         <div id="recvDStatus" class="status"></div>
+        <div id="nameBox" class="hide" style="margin-top:12px">
+          <h2 id="nameLbl" style="margin-top:0">Your payment name</h2>
+          <p class="sub" id="nameTip"></p>
+          <div id="nameAddr" class="addr mono hide"></div>
+          <div id="nameForm" class="row hide"><input id="nameInput" class="mono" autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="32"><span class="sub" id="nameDomain" style="align-self:center;white-space:nowrap"></span></div>
+          <div class="row" style="margin-top:6px">
+            <button id="btnNameChoose" class="ghost tiny">Choose a name</button>
+            <button id="btnNameSave" class="ghost tiny hide">Save</button>
+            <button id="btnNameCancel" class="ghost tiny hide">Cancel</button>
+            <button id="btnNameCopy" class="ghost tiny hide">Copy</button>
+            <button id="btnNameRemove" class="ghost tiny hide">Remove name</button>
+          </div>
+          <div id="nameStatus" class="status"></div>
+        </div>
       </div>
       <div class="card hide" id="faucetCard">
         <h2>Testnet faucet</h2>

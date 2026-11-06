@@ -66,10 +66,14 @@ wasm. Read this before changing anything.
   every default-mode screen is tested against `forbiddenIn` (`vendor/user-trade.js`).
   `src/default-mode.js` (service worker) joins the operator pinned in
   `src/config.js` (`ARCA`) by itself in user mode, after its server and then the
-  wallet's own answer show the pinned key; makes the receive code; asks the faucet;
+  wallet's own answer show the pinned key; makes the receive code (New code's address by
+  `vendor/receive-index.js`, the Confidential switch's confidential address, an asset
+  amount's `lightning_receive` invoice, a payment name's LNURL-pay); asks the faucet;
   and routes each send (code → the tree, address → the chain else `offboard`,
   invoice → Lightning, BTC → the ark first). The leaf host boards on-chain assets
-  and reads the mailbox every 10 s in default mode (`defaults`). BTC lives on the
+  and reads the mailbox every 10 s in default mode (`defaults`). The payment name's link with the name service
+  (`vendor/lnaddr.js` `mountLnAddress`) lives in `offscreen-ark.js` beside the ark that makes
+  its invoices; a Sequentia payer's code comes from the service worker (`default.nameCode`). BTC lives on the
   Bitcoin ark in the offscreen document (`offscreen-ark.js`, scope `ark`), open in
   both modes so its BTC is in BTC's figure; it boards the wallet's confirmed tb1
   coins in default mode, signed in that document with the phrase's own keys, within
