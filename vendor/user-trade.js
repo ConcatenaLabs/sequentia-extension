@@ -119,6 +119,8 @@ export const USER_WORDS = Object.freeze({
   enter: 'Enter how much you pay.',
   tooSmall: 'That amount is too small to trade.',
   noFirmOffer: 'Nobody could confirm a price for this just now. Nothing has moved: try again in a moment.',
+  // The wallet's own library was busy finishing something it started for longer than a quote waits.
+  walletBusy: 'Your wallet is still finishing something it started, so it could not get a price in time. Nothing has moved: try again in a moment.',
   noFunds: (pay) => `You have no ${pay} to trade.`,
   // More than can be traded now, the rest vesting later (the wallet's one sentence for it).
   notVested: DEFAULT_WORDS.notVested,
@@ -355,6 +357,9 @@ export const QUOTE_READ_MS = 30_000
 // the wallet's library to learn it (each quote reads it again behind the price). A trade confirmed
 // since reads it afresh.
 export const HOLDINGS_FRESH_MS = 60_000
+// The longest a quote takes, whatever the wallet's library is doing, before the person is told the
+// wallet is busy (the BTC desk alone gets its own window on top).
+export const QUOTE_MOST_MS = 45_000
 // When the BTC desk is the only source a trade can take (buying or selling BTC), its firm terms
 // (an offer and a Lightning invoice) are waited for this long, not QUOTE_FIRM_MS: there is no
 // other answer to take instead, and a late one was a refusal for nothing. Seen live: the desk's
@@ -415,7 +420,14 @@ export function createEngine (deps) {
   // A wallet that holds no leaves (it joined no operator) can pay nothing from them.
   async function spendable () {
     let coins
-    try { coins = await run('coins') } catch (e) { log('[user trade] no leaves:', e && e.message); return new Map() }
+    // The coins the wallet holds as its store has them (`held`, `brief`: no read of the chain), and
+    // in full only when one is given up in a refresh, whose waiting the full read names: a full
+    // read of every coin asks the node for each, and queued behind other work it held quotes for
+    // minutes.
+    try {
+      coins = await run('coins', { held: true, brief: true })
+      if ((coins || []).some((c) => c && c.state === 'given')) coins = await run('coins', { held: true })
+    } catch (e) { log('[user trade] no leaves:', e && e.message); return new Map() }
     const plans = await run('plans').catch(() => ({ plans: [] }))
     const sp = spendableFrom(coins, plans, { waiting: true })
     holdings = { sp, at: now() }
@@ -948,7 +960,28 @@ export function createEngine (deps) {
     try { return await (deps.leaves && deps.leaves.hold ? deps.leaves.hold(() => f(...a)) : f(...a)) } finally { asked-- }
   }
 
-  async function quote ({ payAsset, receiveAsset, amount, onStep = null }) {
+  // A quote ends within QUOTE_MOST_MS whatever the wallet's library is doing (longer for the BTC
+  // desk alone, which is given its own window): past it the person is told the wallet is busy, in
+  // plain words, and a price that comes later is let go of. Without it a library held by one long
+  // command kept a quote for six minutes, and every request behind it waited too.
+  async function quote (args) {
+    const cap = { until: Date.now() + (deps.quoteMostMs ?? QUOTE_MOST_MS) }
+    let late = false, timer = null
+    const inner = quoteOnce({ ...args, cap }).then((q) => {
+      if (late && q && q.ok) { log('[user trade] a price came after the quote ended, let go:', q.ticket && q.ticket.source); drop(q.choice) }
+      return q
+    })
+    const bound = new Promise((resolve) => {
+      const tick = () => {
+        const left = cap.until - Date.now()
+        if (left <= 0) { late = true; resolve({ ok: false, why: 'wallet-busy' }) } else timer = setTimeout(tick, Math.min(left, 1000))
+      }
+      tick()
+    })
+    try { return await Promise.race([inner, bound]) } finally { clearTimeout(timer) }
+  }
+
+  async function quoteOnce ({ payAsset, receiveAsset, amount, onStep = null, cap = null }) {
     quoteStep = onStep
     tooOldFrom = null
     liveShort = false
@@ -1045,6 +1078,8 @@ export function createEngine (deps) {
     const window = btcOnly ? Math.max(firmMs, deps.btcOnlyFirmMs || BTC_ONLY_FIRM_MS) : firmMs
     const until = Date.now() + window
     const readMs = deps.quoteReadMs ?? QUOTE_READ_MS
+    // The BTC desk alone is given its own window, and the quote's bound grows to hold it.
+    if (cap && btcOnly) cap.until = Math.max(cap.until, until + readMs + 5000)
     for (let round = 0; round < 2 && !cands.length; round++) {
       const next = ranked.slice(round * FIRM_AT_ONCE, (round + 1) * FIRM_AT_ONCE)
       const worth = next.length ? next : ranked.slice(0, FIRM_AT_ONCE)

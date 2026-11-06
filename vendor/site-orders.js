@@ -183,6 +183,7 @@ export function makeSiteOrders (d) {
     if (q.why === 'part-ready') return W.partReady(fmt(pay, q.ready), tick(pay), q.soon)
     if (q.why === 'too-small') return W.tooSmall
     if (q.why === 'no-firm-offer') return W.noFirmOffer
+    if (q.why === 'wallet-busy') return W.walletBusy
     // A reason this list does not know is never told as the amount's fault.
     return W.failed
   }
