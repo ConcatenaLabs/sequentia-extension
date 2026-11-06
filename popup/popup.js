@@ -1581,11 +1581,23 @@ function updateDefaultAvail() {
   const row = OV && OV.rows.find((r) => r.key === $('sendDAsset').value);
   $('sendDAvail').textContent = row ? 'balance ' + fmtAtoms(BigInt(row.total) - BigInt(row.vestingAtoms || 0), row.precision) : '';
 }
+// A payment to a confidential address first moves its coins out of what is held for instant
+// payments (src/confidential-send.js): while they move, the wallet says so and asks again every
+// ten seconds, and the review shows once they are there. Closing the popup loses nothing: the
+// move goes on, and Review asks again.
+const MOVE_ASK_MS = 10_000;
 $('btnDReview').onclick = async () => {
   $('sendDErr').className = 'status'; $('sendDErr').textContent = '';
+  const ask = { to: $('sendDTo').value.trim(), amtS: $('sendDAmt').value.trim(), asset: $('sendDAsset').value };
   try {
     $('btnDReview').disabled = true;
-    const plan = await rpc('default.prepareSend', { to: $('sendDTo').value.trim(), amtS: $('sendDAmt').value.trim(), asset: $('sendDAsset').value });
+    let plan = await rpc('default.prepareSend', ask);
+    while (plan && plan.moving) {
+      $('sendDErr').className = 'status'; $('sendDErr').textContent = plan.text;
+      await new Promise((r) => setTimeout(r, MOVE_ASK_MS));
+      plan = await rpc('default.prepareSend', ask);
+    }
+    $('sendDErr').textContent = '';
     defaultReview(plan);
   } catch (e) { $('sendDErr').className = 'status err'; $('sendDErr').textContent = e.message; }
   finally { $('btnDReview').disabled = false; }
@@ -1664,6 +1676,9 @@ function refValue(h, atoms) {
   try { return '≈ ' + new Intl.NumberFormat('en-US', { style: 'currency', currency: OV.ref, maximumFractionDigits: 2 }).format(v); }
   catch { return '≈ ' + v.toFixed(2) + ' ' + OV.ref; }
 }
+// Trades the popup waits on now, and the longest the wallet's upkeep is held for one of them.
+let tradeHolds = 0;
+const TRADE_HOLD_MS = 120_000;
 async function fetchJsonOnce(url, init) {
   const r = await fetch(url, init ? { ...init, headers: { 'content-type': 'application/json' } } : { cache: 'no-store', signal: AbortSignal.timeout(READ_TIMEOUT_MS) });
   const j = await r.json().catch(() => ({}));
@@ -1680,6 +1695,13 @@ async function renderTrade() {
         console.log(`[trade] ${cmd} asked`);
         try { return await rpc('default.leaf', { command: cmd, args: args || {} }); }
         finally { console.log(`[trade] ${cmd}: ${Date.now() - t} ms`); }
+      },
+      // The wallet's upkeep starts nothing new while a person waits on a quote or a confirmation
+      // (the offscreen host's `holdUpkeep`), as the web wallet's does.
+      hold: async (f) => {
+        if (tradeHolds++ === 0) rpc('default.holdUpkeep', { ms: TRADE_HOLD_MS }).catch(() => {});
+        try { return await f(); }
+        finally { if (--tradeHolds === 0) rpc('default.holdUpkeep', { ms: 0 }).catch(() => {}); }
       } },
       fetchJson: async (url, init) => {
         const t = Date.now();

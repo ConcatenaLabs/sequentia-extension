@@ -102,7 +102,7 @@ let failed = null;
 const S = { open: false, fp: null, timer: null, heldFor: null, schedule: null, coins: [], participations: [], lastSync: null, lastError: null, tickMs: TICK_MS,
   watch: new Set(), watchMs: 3000, seen: new Map(), scan: null, careAt: null, careMs: CARE_EVERY_MS, lastCare: null, releasing: null, bond: null, lastWatch: null,
   claimsAt: null, vesting: null, defaultMode: false, defaultModeAt: -1, quietUntil: 0, lastAsked: 0, info: null, boardRefused: new Map(), lastBoard: null, mailTimer: null,
-  channels: [], chanTimer: null, visible: false, inUseAt: 0, channelIn: 0, holdUntil: 0, running: 0 };
+  channels: [], chanTimer: null, visible: false, inUseAt: 0, channelIn: 0, holdUntil: 0, running: 0, upkeepHoldUntil: 0 };
 
 function errorOf(e) {
   if (e && typeof e === 'object' && e.message) {
@@ -183,7 +183,7 @@ const SCAN_BUSY = /Scan already in progress/;
 const READS = new Set(['info', 'address', 'balance', 'coins', 'record', 'boards', 'participations', 'schedule', 'refusals', 'quote', 'board_quote', 'exit_quote',
   'take_quote', 'order_quote', 'orders', 'plans', 'claims', 'distributions',
   // The trade composer's quotes and reads (vendor/user-trade.js): they move no coin.
-  'settle_quote', 'order_fill_resting_quote', 'swap_read', 'swaps', 'offboard_quote',
+  'settle_quote', 'order_fill_resting_quote', 'swap_read', 'swaps', 'offboard_quote', 'offboards',
   'lightning_pay_quote', 'lightning_receive_quote', 'lightning_payments', 'lightning_receives']);
 
 // The takes the service worker asked the host to watch (`watch`): while one waits on
@@ -299,7 +299,7 @@ function watchChannels() {
   const usedAt = Math.max(S.lastAsked || 0, S.inUseAt || 0, S.channelIn || 0);
   S.chanTimer = setTimeout(async () => {
     const live = (S.channels || []).some((c) => c && c.coin_state === 'live');
-    if (live && S.open && S.defaultMode && !ticking && !S.running && !(Date.now() < (S.holdUntil || 0))) {
+    if (live && S.open && S.defaultMode && !ticking && !S.running && !(Date.now() < (S.holdUntil || 0)) && !upkeepHeld()) {
       try {
         const before = S.channels || [];
         const after = (await call('run', { command: 'channel_sync', args: {} })).result;
@@ -502,7 +502,7 @@ function watchMailbox() {
   clearTimeout(S.mailTimer);
   if (!S.open || !S.defaultMode) return;
   S.mailTimer = setTimeout(async () => {
-    if (S.open && S.defaultMode && !ticking && Date.now() - S.lastAsked > MAILBOX_QUIET_MS) {
+    if (S.open && S.defaultMode && !ticking && !upkeepHeld() && Date.now() - S.lastAsked > MAILBOX_QUIET_MS) {
       try {
         const mb = (await call('run', { command: 'mailbox' })).result;
         if (mb && ((mb.accepted || []).length || (mb.pending || []).length)) {
@@ -515,9 +515,16 @@ function watchMailbox() {
   }, MAILBOX_POLL_MS);
 }
 
+// While a person waits on the wallet (a trade's price, its confirmation: the popup's `holdUpkeep`),
+// the wallet's own upkeep starts nothing new: the library answers one command at a time, and a
+// sync, a care pass or a bond watch started then held the person's next step for up to a minute.
+// The pass runs once the hold ends; a hold lapses by itself after the time it was given.
+const upkeepHeld = () => Date.now() < (S.upkeepHoldUntil || 0);
+
 let ticking = false;
 async function tick() {
   if (!S.open || ticking) return;
+  if (upkeepHeld()) { plan(Math.min(S.upkeepHoldUntil - Date.now(), 5000)); return; }
   ticking = true;
   let wait = S.tickMs;
   try {
@@ -724,6 +731,13 @@ async function handle(op, args) {
     case 'holdReads':
       S.holdUntil = Number(args.ms) > 0 ? Date.now() + Number(args.ms) : 0;
       return { holdUntil: S.holdUntil };
+    case 'holdUpkeep': {
+      const was = upkeepHeld();
+      S.upkeepHoldUntil = Number(args.ms) > 0 ? Date.now() + Math.min(Number(args.ms), 180_000) : 0;
+      // Let go: the pass held back runs now.
+      if (was && !upkeepHeld() && S.open) plan(0);
+      return { holdUntil: S.upkeepHoldUntil };
+    }
     case 'stop':
       clearTimeout(S.mailTimer);
       clearTimeout(S.chanTimer);

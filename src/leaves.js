@@ -260,6 +260,12 @@ export async function tellInUse(on) {
   if (!(await offscreenUp())) return null;
   try { return await host('inUse', { on: !!on }); } catch { return null; }
 }
+// No upkeep pass started for `ms` (0 lets it go on): while a person waits on a trade's price or
+// its confirmation.
+export async function holdUpkeep(ms) {
+  if (!(await offscreenUp())) return null;
+  try { return await host('holdUpkeep', { ms: Number(ms) || 0 }); } catch { return null; }
+}
 // No channel read for `ms` (0 lets them go on): while a person reviews a payment.
 export async function holdReads(ms) {
   if (!(await offscreenUp())) return null;

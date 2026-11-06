@@ -638,6 +638,7 @@ const uiMethods = {
   'default.nameCode': async ({ index }) => await dm.nameCode({ index: Number(index) }),
   'default.nameIndices': async () => await dm.nameIndices(),
   'default.holdReads': async ({ ms }) => { await leaves.holdReads(ms); return { ok: true }; },
+  'default.holdUpkeep': async ({ ms }) => { await leaves.holdUpkeep(ms); return { ok: true }; },
   'default.invoiceReceived': async ({ hash }) => await dm.invoiceReceived(hash),
   'default.faucet': async ({ asset }) => await dm.faucet(asset || ''),
   'default.faucetReceived': async () => ({ claimed: await dm.faucetReceived() }),

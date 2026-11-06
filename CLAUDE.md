@@ -71,7 +71,10 @@ wasm. Read this before changing anything.
   amount's `lightning_receive` invoice, a payment name's LNURL-pay); asks the faucet
   and takes its coin in by a mailbox read (the host's `takeIn`), never a whole sync;
   and routes each send (code → the tree, address → the chain else `offboard`,
-  invoice → Lightning, BTC → the ark first). The leaf host boards on-chain assets
+  invoice → Lightning, BTC → the ark first; a confidential address → the chain, its amount
+  hidden beside a blinded output to the wallet's own confidential address, a round amount first
+  moved out of the tree while the popup says so and asks again, `vendor/confidential-pay.js` and
+  `src/confidential-send.js`). The leaf host boards on-chain assets
   and reads the mailbox every 10 s in default mode (`defaults`). The payment name's link with the name service
   (`vendor/lnaddr.js` `mountLnAddress`) lives in `offscreen-ark.js` beside the ark that makes
   its invoices; it leaves the name's stock of signed receive codes with the service and tops it
@@ -114,6 +117,11 @@ wasm. Read this before changing anything.
   `channelsChanged`, and the receive code is made again to name them (`codeNamesChannels`).
   Which channel pays, and every refusal, is the library's (`send` routes over a channel by
   itself when the receive code names one).
+- **A person waiting comes first.** While the popup's trade composer prices or confirms a
+  trade it holds the host's upkeep (`default.holdUpkeep`, op `holdUpkeep`, at most two
+  minutes, let go when the step ends): no scheduled pass, mailbox read or channel read
+  starts meanwhile, so the library's one-at-a-time queue holds no sync, care or bond watch
+  ahead of the person's next step. The pass held back runs when the hold ends.
 - **Care is the library's, run by the host.** The offscreen host runs `care` once
   after the leaf wallet opens and after a sync at most every ten minutes
   (`careDue`, `src/leaf-schedule.js`, the web wallet's rules), in either mode,
@@ -166,7 +174,7 @@ wasm. Read this before changing anything.
   `vendor/seqob.js`, `vendor/covenant.js`, `vendor/covenant-order.js`, `vendor/covenant-flow.js`,
   `vendor/covenant-fill-host.js`, `vendor/noble-ciphers.js`, `vendor/contracts.js`, `vendor/bolt11.js`,
   `vendor/lnupgrade.js`, `vendor/own-txs.js`, `vendor/stake-records.js`,
-  `vendor/default-arca.js`, `vendor/pay-code.js`, `vendor/faucet-wallet.js`, `vendor/btc-ark.js`, `vendor/lightning-to-ark.js`, `vendor/speed-up.js`,
+  `vendor/default-arca.js`, `vendor/confidential-pay.js`, `vendor/pay-code.js`, `vendor/faucet-wallet.js`, `vendor/btc-ark.js`, `vendor/lightning-to-ark.js`, `vendor/speed-up.js`,
   `vendor/user-trade.js`, `vendor/user-trade-btc.js`, `vendor/user-composer.js`,
   `vendor/asset-picker.js`, `vendor/market-view.js`, `vendor/chart.js`, `vendor/indicators.js`,
   `vendor/vendor/lightweight-charts/` (`vendor/` mirrors the web wallet's root, so the market
