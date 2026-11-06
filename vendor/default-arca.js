@@ -27,13 +27,13 @@ import { expandRequest } from './pay-code.js'
 // When a payment out of the tree arrives, from the operator's interval in minutes.
 function arrivesWords (minutes) {
   if (!minutes) return 'It arrives shortly.'
-  return minutes <= 5 ? 'It arrives in a few minutes.' : `It arrives in about ${minutes} minutes.`
+  return `It arrives within ${minutes} minute${minutes === 1 ? '' : 's'}.`
 }
 
 // When coins moved out of the Ark are ready, from the operator's interval in minutes.
 function readyWords (minutes) {
   if (!minutes) return 'They are ready shortly.'
-  return minutes <= 5 ? 'They are ready in a few minutes.' : `They are ready in about ${minutes} minutes.`
+  return `They are ready within ${minutes} minute${minutes === 1 ? '' : 's'}.`
 }
 
 export const DEFAULT_WORDS = Object.freeze({
@@ -110,6 +110,9 @@ export const DEFAULT_WORDS = Object.freeze({
   arrivesWithin: (minutes) => arrivesWords(minutes),
   fee: (amount, ticker) => `Fee ${amount} ${ticker}`,
   sentLater: (amount, ticker, minutes) => `Sent ${amount} ${ticker}. ${arrivesWords(minutes)}`,
+  // The same amount of the same asset to the same address, asked while the first is still on its
+  // way: the library goes on with the first (`already`) and sends nothing more.
+  sentAlready: (amount, ticker, minutes) => `${amount} ${ticker} to this address is already on its way, so nothing more was sent. ${arrivesWords(minutes)} To pay the same again, send once it has arrived.`,
   faucetReceived: (what) => `Received ${what}.`,
   // The faucet has paid and the wallet has not taken the coin in yet (it was busy with an update).
   faucetOnItsWay: (what) => `The faucet sent ${what}. It shows in your balance as soon as your wallet has taken it in, usually within a few minutes.`,
@@ -297,11 +300,35 @@ export function homeUnderWay (coins, kept, unreachable) {
   return { list, kept: left }
 }
 
-// The minutes a payment to an address from the tree takes at most, from the operator's interval
-// between settlements (the library's `round_within_seconds`), or null when it publishes none.
-export function arrivalMinutes (seconds) {
+// The minutes a payment to an address from the tree takes at most to reach the receiving
+// wallet's figure, from the wait for the operator's next settlement (`seconds`: its interval
+// between settlements, or the library's `round_within_seconds`) and the chain's block interval
+// (`blockSeconds`, the operator's `fills.block_seconds`, 60 when it says none). The whole way, not
+// the settlement alone: the settlement's block, the paying wallet handing over its part once that
+// block is in, the operator's payment to the address and its block, and the wallets' own passes
+// and reads of the chain: ADDRESS_PATH_BLOCKS blocks and ADDRESS_PATH_SLACK_S seconds beside the
+// settlement, rounded up to five minutes. On the testnet (a settlement a minute, a block a
+// minute) that is ten minutes; payments measured there took four to seven. A time stated is one
+// the wallet keeps. -> minutes, or null when the operator publishes no interval.
+export const ADDRESS_PATH_BLOCKS = 4
+export const ADDRESS_PATH_SLACK_S = 240
+export function arrivalMinutes (seconds, blockSeconds) {
   const n = Number(seconds)
-  return Number.isFinite(n) && n > 0 ? Math.max(1, Math.ceil(n / 60)) : null
+  if (!Number.isFinite(n) || n <= 0) return null
+  const b = Number(blockSeconds) > 0 ? Number(blockSeconds) : 60
+  const m = Math.ceil((n + ADDRESS_PATH_BLOCKS * b + ADDRESS_PATH_SLACK_S) / 60)
+  return Math.max(5, Math.ceil(m / 5) * 5)
+}
+
+// What the wallet says once the library has answered a payment to an address out of the tree
+// (`v`, its `offboard` answer), and whether it is a new payment to write down in History. The same
+// amount of the same asset to the same address, asked while the first is still on its way, is that
+// first payment (`already`): nothing more is sent, and it is never said to be. `minutes`: the
+// review's arrival time, `blockSeconds` the chain's block interval. -> { text, sent }
+export function offboardOutcome (v, amount, ticker, minutes, blockSeconds) {
+  const mins = arrivalMinutes(v && v.round_within_seconds, blockSeconds) || minutes
+  if (v && v.already) return { text: DEFAULT_WORDS.sentAlready(amount, ticker, minutes), sent: false }
+  return { text: DEFAULT_WORDS.sentLater(amount, ticker, mins), sent: true }
 }
 
 // When Receive asks again for a receive code the operator did not give (#521), after `failures`
@@ -487,23 +514,47 @@ export async function boardAll (run, c, tries = 3) {
 }
 
 // What a board just made takes off the chain: `onchain` atoms as the page's own reading of the
-// chain shows them, less what the board spent (`board`: { spent, below, at }, from boardSpent)
-// while that reading does not show it spent yet. The board's leaf counts as arriving in the tree
-// from the moment it is made, so without this the coins count twice until the reading catches
-// up (a block, or the page's next scan). The board is taken as seen once the reading drops to
-// what it left (`below`), or after half an hour. -> { atoms, seen }
+// chain shows them, less what the board spent (`board`: { spent, below, at, txid }, from
+// boardSpent) while that reading does not hold the board yet. The board's leaf counts as arriving
+// in the tree from the moment it is made, so without this the coins count twice until the
+// reading catches up (a block, or the page's next scan).
+//
+// `holds(txid)` says whether the page's reading holds a transaction (true, false, or undefined
+// when it cannot tell). With it the board is taken as seen exactly when the reading holds the
+// board's transaction, and until then only what the reading still holds of the coins the board
+// spent comes off: the library read `held` (= below + spent) when it boarded, so a reading short
+// of that has not seen part of them (a coin that just arrived) and takes off that much less. A
+// coin that reaches the address after the board is never taken off for it: the reading drops by
+// the board and rises by the new coin at once, and comparing it with what the board left
+// (`below`) would read the new coin as the board's, so it would vanish until the next board or
+// half an hour. Without `holds` (or a record kept before boards named their transaction) the
+// board is taken as seen once the reading drops to what it left. Never longer than half an
+// hour. -> { atoms, seen }
 export const BOARD_SEEN_MS = 30 * 60_000
-export function onchainLessBoards (board, onchain, nowMs) {
+export function onchainLessBoards (board, onchain, nowMs, holds) {
   const o = big(onchain)
   if (!board) return { atoms: o, seen: true }
-  if (o <= big(board.below) || nowMs - Number(board.at) > BOARD_SEEN_MS) return { atoms: o, seen: true }
-  const v = o - big(board.spent)
+  if (nowMs - Number(board.at) > BOARD_SEEN_MS) return { atoms: o, seen: true }
+  const spent = big(board.spent)
+  let known
+  if (board.txid && typeof holds === 'function') { try { known = holds(board.txid) } catch {} }
+  if (known === true) return { atoms: o, seen: true }
+  if (known === false) {
+    const held = big(board.below) + spent
+    const missing = held > o ? held - o : 0n
+    const off = spent > missing ? spent - missing : 0n
+    return { atoms: o - off, seen: false }
+  }
+  if (o <= big(board.below)) return { atoms: o, seen: true }
+  const v = o - spent
   return { atoms: v > 0n ? v : 0n, seen: false }
 }
 // The record onchainLessBoards keeps for a board of `held` atoms on the chain (the library's
-// reading when it boarded) that spent `spent`, made at `at`.
-export function boardSpent (held, spent, at) {
-  return { spent: String(big(spent)), below: String(big(held) - big(spent)), at }
+// reading when it boarded) that spent `spent`, made at `at`, its transaction `txid`.
+export function boardSpent (held, spent, at, txid) {
+  const rec = { spent: String(big(spent)), below: String(big(held) - big(spent)), at }
+  if (typeof txid === 'string' && /^[0-9a-f]{64}$/.test(txid)) rec.txid = txid
+  return rec
 }
 
 // The assets a wallet lists to pay or send from: BTC always (the parent chain, first-class,

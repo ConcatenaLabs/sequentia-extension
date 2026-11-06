@@ -458,7 +458,7 @@ async function boardArrivals() {
       const v = await boardAll(async (cmd, a) => (await runCommand(cmd, a)).result, c);
       if (v) {
         boarded = true; S.lastBoard = { at: Date.now(), asset: c.asset, value: v };
-        if (v.spent) (S.newBoards || (S.newBoards = {}))[c.asset] = boardSpent(c.onchain, v.spent, Date.now());
+        if (v.spent) (S.newBoards || (S.newBoards = {}))[c.asset] = boardSpent(c.onchain, v.spent, Date.now(), v.txid);
         emit('leafArrived', { asset: c.asset, value: String(c.onchain), kind: 'board' });
       }
       else S.boardRefused.set(c.asset, String(c.onchain));

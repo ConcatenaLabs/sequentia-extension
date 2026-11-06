@@ -47,13 +47,13 @@ test('a move waiting for the network is said to wait after three minutes; past t
 
 test('what the wallet says while it moves is the contract\'s, and says none of the forbidden words', () => {
   const said = [
-    DEFAULT_WORDS.movingOut('1.00004 USDX', DEFAULT_WORDS.confidentialPurpose, 1),
+    DEFAULT_WORDS.movingOut('1.00004 USDX', DEFAULT_WORDS.confidentialPurpose, 10),
     DEFAULT_WORDS.movingWaits('1.00004 USDX', DEFAULT_WORDS.confidentialPurpose),
     DEFAULT_WORDS.cannotMoveNow('1.00004 USDX'), DEFAULT_WORDS.notEnough('1', 'USDX'),
     DEFAULT_WORDS.notMoved, DEFAULT_WORDS.notReady, DEFAULT_WORDS.stillOpening, DEFAULT_WORDS.addressShort,
     DEFAULT_WORDS.confidentialHidden, DEFAULT_WORDS.confidentialAmountHidden('USDX'), DEFAULT_WORDS.confidentialSeen,
   ];
-  assert.equal(said[0], 'Moving 1.00004 USDX out of the Ark so it can be sent confidentially. They are ready in a few minutes. Keep this page open.');
+  assert.equal(said[0], 'Moving 1.00004 USDX out of the Ark so it can be sent confidentially. They are ready within 10 minutes. Keep this page open.');
   for (const s of said) assert.deepEqual(forbiddenIn(s), [], s);
 });
 
