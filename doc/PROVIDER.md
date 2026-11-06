@@ -305,7 +305,31 @@ The wallet's unspent outputs, optionally filtered to one asset:
 `value` is an atoms string. The DEX composes swap PSETs from these and sends
 them back through `signPset`, where the user approves the actual spend — so
 this read reveals holdings the origin could already infer from
-`getBalances`, never spend authority.
+`getBalances`, never spend authority. A coin whose amount is confidential carries
+`explicit: false` where the wallet can say so; a site that builds a transparent
+transaction (a covenant spend) leaves those out.
+
+### `prepareCoins({ coins: [{ asset, amount }] })` — approval when anything moves
+Makes sure the wallet holds at least `amount` atoms of each `asset` as coins on
+the chain in the clear, which a transaction the site composes from `getUtxos`
+can spend. A wallet that keeps part of what it holds elsewhere (as leaves in its
+operator's tree, which is where a wallet in user mode keeps what it receives)
+moves what is missing to its own address, and answers once those coins are on
+the chain:
+```js
+{ moved: [{ asset, amount }] }   // empty when the coins were already there
+```
+When nothing has to move it answers at once, with no approval. Otherwise its
+approval shows each amount it moves, the fee for the move and the site, and
+nothing moves without it; the coins stay the wallet's own. A wallet in
+developer mode, where the person moves coins between rails themselves, may
+refuse instead with the amount it is short. Refusals: `coins must be a list of
+{ asset, amount }`, `asset must be a 64-hex asset id`, `amount must be a
+positive number of atoms`, `the user rejected the request`, and the wallet's
+own sentence when the move cannot be made now. A site calls it when a
+composition comes up short of an asset the wallet holds, then reads `getUtxos`
+again. The web wallet serves it to sites of its own origin (its
+`docs/PAGE_API.md`), and lists it in `getCapabilities().methods`.
 
 ### `lnChannels()` — silent, requires connection
 Per-asset Lightning capacity on the user's own channels — the LNDEX
