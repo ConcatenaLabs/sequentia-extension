@@ -41,8 +41,11 @@ import { BTC_WORDS, destination } from '../vendor/btc-ark.js';
 import { decodeBolt11 } from '../vendor/bolt11.js';
 import { forbiddenIn } from '../vendor/user-trade.js';
 import { faucetWalletId, faucetClaimed, faucetAlreadyPaid } from '../vendor/faucet-wallet.js';
+import { movesComing, moveWaits, MOVE_WAIT_MS, KEEP_ON_CHAIN_MS } from './confidential-send.js';
+import { confidentialPlan, ownShare, feeMarginAtoms } from '../vendor/confidential-pay.js';
 
 const CODE_KEY = 'ext.default.code';     // { [walletTag]: { text, owner, until, channels } }
+const MOVES_KEY = 'ext.default.moves';   // { [walletTag]: [{ id, asset, atoms, at }] }: moves out for a confidential payment
 const ARK_SUM_KEY = 'ext.ark.sum';       // { [walletTag]: { total, spendable, arriving } }
 const CODE_MARGIN_S = 86_400;
 const BTC_BOARD_QUIET_MS = 120_000;
@@ -489,20 +492,15 @@ export async function prepareSend({ to, amtS, asset }) {
     }
   }
   if (!address) throw new Error(DEFAULT_WORDS_DECLINED);
+  // A confidential address is paid so that its amount is hidden: on the chain, never out of the
+  // tree, its coins moved out first when the chain holds too little (vendor/confidential-pay.js).
+  if (engine.isConfidentialAddress(address)) return await confidentialSend({ address, asset, atoms, amt });
   // An address: from the chain when the wallet's coins there cover it, else out of the tree.
   const { held, arriving } = await treeHeld(asset);
   const route = addressRoute(atoms, engine.availableFor(asset), held - arriving);
   if (route === 'chain') {
-    // The fee is paid in the asset moved; an asset no node prices is not sent this way.
-    let prep = null;
-    try { prep = await engine.prepareSeqSend([{ addr: address, amtS, asset }], asset); } catch (e) { console.warn('[default] chain send:', e.message); }
-    if (prep) {
-      const lines = [];
-      if (prep.review.feeEst) lines.push(DEFAULT_WORDS.fee(fmtAtoms(big(prep.review.feeEst), meta(prep.review.feeAssetHex).precision || 0), meta(prep.review.feeAssetHex).ticker));
-      if (request) lines.unshift(DEFAULT_WORDS.byAddress(DEFAULT_WORDS.arrivesNextBlock));
-      else lines.push(DEFAULT_WORDS.arrivesWithin(1));
-      return { id: stash({ kind: 'engine', prepId: prep.id, chain: 'sequentia', amt, ticker: m.ticker }), title: DEFAULT_WORDS.sendTitle(amt, m.ticker), lines, button: DEFAULT_WORDS.send };
-    }
+    const plan = await chainReview({ address, amtS, asset, amt, request });
+    if (plan) return plan;
   }
   if (route === 'tree' || (route === 'chain' && held - arriving >= atoms)) {
     let q;
@@ -518,6 +516,136 @@ export async function prepareSend({ to, amtS, asset }) {
     return { id: stash({ kind: 'offboard', asset, atoms, address, q, minutes, amt, ticker: m.ticker }), title: DEFAULT_WORDS.sendTitle(amt, m.ticker), lines, button: DEFAULT_WORDS.send };
   }
   throw new Error(DEFAULT_WORDS.addressShort);
+}
+
+// A payment on the chain from the wallet's own coins there, its fee paid in the asset moved; an
+// asset no node prices is not sent this way (null).
+async function chainReview({ address, amtS, asset, amt, request = null }) {
+  const m = meta(asset);
+  let prep = null;
+  try { prep = await engine.prepareSeqSend([{ addr: address, amtS, asset }], asset); } catch (e) { console.warn('[default] chain send:', e.message); }
+  if (!prep) return null;
+  const lines = [];
+  if (prep.review.feeEst) lines.push(DEFAULT_WORDS.fee(fmtAtoms(big(prep.review.feeEst), meta(prep.review.feeAssetHex).precision || 0), meta(prep.review.feeAssetHex).ticker));
+  if (request) lines.unshift(DEFAULT_WORDS.byAddress(DEFAULT_WORDS.arrivesNextBlock));
+  else lines.push(DEFAULT_WORDS.arrivesWithin(1));
+  return { id: stash({ kind: 'engine', prepId: prep.id, chain: 'sequentia', amt, ticker: m.ticker }), title: DEFAULT_WORDS.sendTitle(amt, m.ticker), lines, button: DEFAULT_WORDS.send };
+}
+
+// ---- a confidential address, from what is held for instant payments (src/confidential-send.js) ----
+// What the operator can pay out of an asset in a round now (its published `fundable`), or null
+// when it does not say.
+async function operatorFundable(asset) {
+  try {
+    const j = await fetch(ARCA.server + '/v1/info', { cache: 'no-store', signal: AbortSignal.timeout(15_000) }).then((r) => (r.ok ? r.json() : null));
+    const a = j && (j.assets || []).find((x) => x && x.asset === asset);
+    return a && a.fundable != null ? BigInt(a.fundable) : null;
+  } catch { return null; }
+}
+async function keptMoves() {
+  const tag = await walletTag();
+  const all = (await stGet('local', MOVES_KEY)) || {};
+  return (all[tag] || []).filter((r) => r && Date.now() - Number(r.at || 0) < MOVE_WAIT_MS + KEEP_ON_CHAIN_MS);
+}
+async function keepMove(rec) {
+  const tag = await walletTag();
+  if (!tag) return;
+  const all = (await stGet('local', MOVES_KEY)) || {};
+  all[tag] = [...(all[tag] || []).filter((r) => r && Date.now() - Number(r.at || 0) < MOVE_WAIT_MS + KEEP_ON_CHAIN_MS), rec];
+  await stSet('local', MOVES_KEY, all);
+}
+// A round amount is moved to the wallet's own address first when the chain holds too little
+// (vendor/confidential-pay.js); the popup asks again (Review) until it is there, and the payment
+// is then reviewed: on the chain, with a second blinded output to the wallet's own confidential
+// address beside it, so its amount is hidden. While the coins move: { moving: true, text }, the
+// contract's sentence. When the move cannot be made, one sentence says why and nothing moves.
+async function confidentialSend({ address, asset, atoms, amt }) {
+  const m = meta(asset);
+  const prec = m.precision || 0;
+  const words = (a) => `${fmtAtoms(a, prec)} ${m.ticker}`;
+  let margin;
+  try { margin = feeMarginAtoms(A.feeRateFor(asset)); } catch { throw new Error(DEFAULT_WORDS.addressShort); }
+  const records = await keptMoves();
+  let offboards = [];
+  if (records.some((r) => r.asset === asset)) {
+    // A move asked before: the wallet reads where it stands, and the chain again for its coins.
+    try { offboards = (await leaves.runAny('offboards')) || []; } catch (e) { console.warn('[default] moves under way:', e.message); }
+    await engine.sync().catch(() => {});
+    leaves.hostOp('sync').catch(() => {});
+  }
+  const { atoms: coming, open } = movesComing(asset, records, offboards, (t) => engine.hasSeqTx(t));
+  const minutesOf = (info) => arrivalMinutes(info && info.server_info && info.server_info.fills && info.server_info.fills.round_interval_seconds);
+  if (open.length) {
+    // Coins on their way: waited for, never asked twice.
+    const w = moveWaits(open);
+    if (w.over) throw new Error(DEFAULT_WORDS.notReady);
+    const what = words(open.reduce((n, r) => n + big(r.atoms), 0n));
+    const info = await leafInfo().catch(() => null);
+    return { moving: true, text: w.slow ? DEFAULT_WORDS.movingWaits(what, DEFAULT_WORDS.confidentialPurpose) : DEFAULT_WORDS.movingOut(what, DEFAULT_WORDS.confidentialPurpose, minutesOf(info)) };
+  }
+  const onchain = engine.availableFor(asset);
+  // What the chain holds may pay it alone, with the amount hidden: then nothing held for instant
+  // payments is read, and the payment does not wait on the leaf wallet.
+  const chainAlone = confidentialPlan({ amount: atoms, margin, onchain, instant: 0n, precision: prec });
+  if (chainAlone.move === 0n && chainAlone.hides) return await confidentialReview({ address, asset, atoms, amt, margin, onchain, m, prec });
+  if (!(await leafOpen())) throw new Error(DEFAULT_WORDS.stillOpening);
+  let held = 0n, arriving = 0n;
+  // A read the node drops now and then is asked again before the person is told.
+  for (let i = 0; ; i++) {
+    try { ({ held, arriving } = await treeHeld(asset)); break; } catch (e) {
+      console.warn('[default] what is held:', e.message);
+      if (i >= 2) throw new Error(DEFAULT_WORDS.notMoved);
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+  }
+  const info = await leafInfo().catch(() => null);
+  const served = (info && info.server_info && Array.isArray(info.server_info.assets)) ? info.server_info.assets : [];
+  const minLeaf = big((served.find((x) => x && x.asset === asset) || {}).min_leaf);
+  const plan = confidentialPlan({ amount: atoms, margin, onchain, instant: held - arriving, minLeaf, precision: prec });
+  if (plan.short) {
+    // What is still arriving would cover it: said so, rather than that the wallet holds too little.
+    if (plan.short <= arriving) throw new Error(DEFAULT_WORDS.stillArriving(m.ticker));
+    throw new Error(DEFAULT_WORDS.notEnough(fmtAtoms(plan.short, prec), m.ticker));
+  }
+  if (plan.move > 0n) {
+    const own = engine.freshAddress();
+    let q;
+    try { q = await leaves.runUser('offboard_quote', { asset, amount: String(plan.move), address: own }); }
+    catch (e) {
+      console.warn('[default] moving out, quote:', e.message);
+      // The library pays out only coins it holds final: a coin just received counts in the figure
+      // before it is, and is then still arriving for this.
+      if (/live coins of asset/.test(String(e.message))) throw new Error(DEFAULT_WORDS.stillArriving(m.ticker));
+      throw new Error(DEFAULT_WORDS.notMoved);
+    }
+    // A round pays the whole coin a move gives (what is moved and its change) out of the operator's
+    // own coins: when that is more than it can pay now, nothing is asked, so no coin waits.
+    const can = await operatorFundable(asset);
+    if (can != null && plan.move + big(q && q.change) > can) throw new Error(DEFAULT_WORDS.cannotMoveNow(words(plan.move)));
+    // The wallet's upkeep leaves these coins on the chain while they move and for a while after.
+    await leaves.hostOp('defaults', { on: true, quietUntil: Date.now() + MOVE_WAIT_MS + KEEP_ON_CHAIN_MS }).catch(() => {});
+    let v;
+    try { v = await leaves.runUser('offboard', { asset, amount: String(plan.move), address: own, shown: q }); }
+    catch (e) { console.warn('[default] moving out:', e.message); throw new Error(DEFAULT_WORDS.notMoved); }
+    if (v && v.offboard) await keepMove({ id: String(v.offboard), asset, atoms: String(plan.move), at: Date.now() });
+    console.info(`[default] moving ${plan.move} of ${asset.slice(0, 8)} to the wallet's address, for a confidential payment of ${atoms}`);
+    return { moving: true, text: DEFAULT_WORDS.movingOut(words(plan.move), DEFAULT_WORDS.confidentialPurpose, arrivalMinutes(v && v.round_within_seconds) || minutesOf(info)) };
+  }
+  return await confidentialReview({ address, asset, atoms, amt, margin, onchain, m, prec });
+}
+
+// The coins are on the chain: the payment, its amount hidden beside the wallet's own output.
+async function confidentialReview({ address, asset, atoms, amt, margin, onchain, m, prec }) {
+  const own = ownShare({ amount: atoms, margin, onchain });
+  const others = own > 0n ? engine.otherConfidentialCoins(asset) : [];
+  let prep;
+  try { prep = await engine.prepareConfidentialSend({ addr: address, asset, amount: String(atoms), own: String(own), others }); }
+  catch (e) { console.warn('[default] confidential payment:', e.message); throw new Error(DEFAULT_WORDS.addressShort); }
+  const lines = [];
+  if (prep.review.feeEst) lines.push(DEFAULT_WORDS.fee(fmtAtoms(big(prep.review.feeEst), prec), m.ticker));
+  lines.push(own === 0n ? DEFAULT_WORDS.confidentialSeen : others.length ? DEFAULT_WORDS.confidentialHidden : DEFAULT_WORDS.confidentialAmountHidden(m.ticker));
+  lines.push(DEFAULT_WORDS.arrivesNextBlock);
+  return { id: stash({ kind: 'engine', prepId: prep.id, chain: 'sequentia', amt, ticker: m.ticker }), title: DEFAULT_WORDS.sendTitle(amt, m.ticker), lines, button: DEFAULT_WORDS.send };
 }
 
 async function prepareBtc(text, amtS) {
@@ -641,7 +769,7 @@ export async function closeWallets() {
   arkAddress = null;
 }
 export async function forgetWallet(tag) {
-  for (const k of [CODE_KEY, ARK_SUM_KEY]) {
+  for (const k of [CODE_KEY, ARK_SUM_KEY, MOVES_KEY]) {
     const all = (await stGet('local', k)) || {};
     if (tag && all[tag]) { delete all[tag]; await stSet('local', k, all); }
   }

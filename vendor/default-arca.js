@@ -62,7 +62,15 @@ export const DEFAULT_WORDS = Object.freeze({
   receiveTipConf: 'Any Sequentia asset, any amount, paid to your confidential address.',
   // What a payment to a confidential address is moved out of the Ark for (movingOut).
   confidentialPurpose: 'sent confidentially',
-  confidentialTip: 'Hides the asset and amount of a payment from everyone but you and the payer.',
+  // The review of a payment to a confidential address, while the wallet pays it from coins in the
+  // clear with its change in the clear: the payment's output is blinded, but its amount and asset
+  // follow from the inputs, the change and the fee (sequentia-web-wallet#585).
+  confidentialSeen: 'This payment\u2019s amount and asset can still be worked out by anyone reading the chain.',
+  // The review of a payment to a confidential address made so that its amount is hidden
+  // (confidential-pay.js): the asset too when a confidential coin of another asset hides it.
+  confidentialHidden: 'Anyone reading the chain can see that a payment was made, but not its asset or amount.',
+  confidentialAmountHidden: (ticker) => `Anyone reading the chain can see that this payment is ${ticker}, but not how much.`,
+  confidentialTip: 'Asks the payer to hide the amount, and the asset where it can, from everyone but you and them.',
   confidentialNote: 'Everyone can still see that a payment was made. A payment that arrives in seconds is never confidential, so this one arrives after the next block, in about a minute. BTC is never confidential: to receive BTC, turn this off.',
   sendTitle: (amount, ticker) => `Send ${amount} ${ticker}?`,
   sendLine: 'It arrives in seconds.',
@@ -103,6 +111,8 @@ export const DEFAULT_WORDS = Object.freeze({
   fee: (amount, ticker) => `Fee ${amount} ${ticker}`,
   sentLater: (amount, ticker, minutes) => `Sent ${amount} ${ticker}. ${arrivesWords(minutes)}`,
   faucetReceived: (what) => `Received ${what}.`,
+  // The faucet has paid and the wallet has not taken the coin in yet (it was busy with an update).
+  faucetOnItsWay: (what) => `The faucet sent ${what}. It shows in your balance as soon as your wallet has taken it in, usually within a few minutes.`,
   // A stake, a pool's delegation and a mix are made from coins the wallet holds on the chain: what
   // they need is moved out of the Ark first, by the wallet itself.
   movingOut: (what, purpose, minutes) => `Moving ${what} out of the Ark so it can be ${purpose}. ${readyWords(minutes)} Keep this page open.`,
@@ -306,12 +316,16 @@ export function receiveCodeRetry (failures) {
 }
 
 // How a payment of `amount` atoms of an asset to an address is made: on the chain when the
-// wallet's coins there cover it (as it always was), else out of the tree when the tree's
-// spendable coins cover it, else not at all.
-export function addressRoute (amount, onchain, treeSpendable) {
+// wallet's coins there cover it with its network fee (`feeMargin`, what the fee may take of the
+// same asset, which default mode pays it in), else out of the tree when the tree's spendable
+// coins cover it, else on the chain when its coins there cover the amount alone (the fee may
+// still fit), else not at all. Coins on the chain a few atoms short of amount and fee never
+// refuse a payment the tree could make.
+export function addressRoute (amount, onchain, treeSpendable, feeMargin = 0n) {
   const a = big(amount)
-  if (a <= big(onchain)) return 'chain'
+  if (a + big(feeMargin) <= big(onchain)) return 'chain'
   if (a <= big(treeSpendable)) return 'tree'
+  if (a <= big(onchain)) return 'chain'
   return null
 }
 

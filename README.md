@@ -101,7 +101,14 @@ confidential `tsqb1…` addresses are an explicit opt-in).
   for (one of this domain at its wallet's receive code, another service's in BTC at the
   invoice it makes for the amount), a code is paid in the tree in seconds,
   an address from the chain or else out of the tree, an invoice over Lightning, BTC
-  from the ark first. Trade is the web wallet's composer: the pair's market (last
+  from the ark first. A confidential address (`tsqb1…`) is paid on the chain so that its amount
+  is hidden: beside the payment, a blinded output to the wallet's own confidential address takes
+  the rest of what the inputs hold (`vendor/confidential-pay.js`, the web wallet's). When the
+  chain holds too little, a round amount (all of the asset in the tree, or the next power of ten
+  above the need, whichever is smaller) moves to the wallet's own address first while Send says
+  "Moving <amount> <TICKER> out of the Ark so it can be sent confidentially…", and the review
+  opens once it is there (a closed popup loses nothing: the move goes on, and Review waits for
+  it). The review says what can still be seen. Trade is the web wallet's composer: the pair's market (last
   price, a 1D/1W/1M chart, the best bid and ask, recent trades) above You pay and
   You receive, each a searchable asset chooser with your assets first, and an amount
   on either side that shows the other. Every asset menu (Send's asset, the fee asset,

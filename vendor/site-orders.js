@@ -183,6 +183,7 @@ export function makeSiteOrders (d) {
     if (q.why === 'part-ready') return W.partReady(fmt(pay, q.ready), tick(pay), q.soon)
     if (q.why === 'too-small') return W.tooSmall
     if (q.why === 'no-firm-offer') return W.noFirmOffer
+    if (q.why === 'wallet-busy') return W.walletBusy
     // A reason this list does not know is never told as the amount's fault.
     return W.failed
   }
@@ -294,7 +295,10 @@ export function makeSiteOrders (d) {
     if (!p || now() - p.at > QUOTE_TTL_MS) { if (p) drop(id); throw new Error(SITE_WORDS.lapsed) }
     const market = { base: p.o.base, quote: p.o.quote }
     if (p.kind === 'take') {
-      const rec = await d.engine.confirm(p.choice, p.ticket)
+      let rec
+      // The price no longer held (the offer lapsed, or what it spends changed since it was shown):
+      // nothing was signed, and the site asks for the review again.
+      try { rec = await d.engine.confirm(p.choice, p.ticket) } catch (e) { if (e && e.code === 'lapsed') throw new Error(SITE_WORDS.lapsed); throw e }
       if (rec.state === 'failed') throw new Error(USER_WORDS.failed)
       const gave = p.ticket.amountIn, got = p.ticket.amountOut
       // In the market's terms: base and quote atoms of the one fill.

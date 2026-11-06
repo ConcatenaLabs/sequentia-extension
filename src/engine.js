@@ -335,6 +335,13 @@ export function newAddress(confidential = false) {
   addrIndex = nextReceiveIndex(addrIndex, unifiedNextUnused());
   return currentAddress(confidential);
 }
+// The wallet's first address no payment has reached, unconfidential, without moving the one
+// Receive shows: where the wallet moves its own coins (a confidential payment's coins, moved out of
+// the tree first).
+export function freshAddress() {
+  if (!wollet) throw new Error('wallet is locked');
+  return wollet.address(undefined).address().toUnconfidential().toString();
+}
 // QR data URI with the BARE address as payload (universally scannable on both
 // chains — deliberately NOT Address.QRCodeUri(), whose payload is a wrong-network
 // liquidnetwork: URI).
@@ -351,6 +358,12 @@ export function rawAddress(confidential = false) {
   persistAddrIndex();
   const a = r.address();
   return confidential ? a : a.toUnconfidential();
+}
+
+// Whether `text` is a confidential Sequentia address (`tsqb1…`): a payment to it is made on the
+// chain, blinded (src/confidential-send.js). Anything that is not an address answers false.
+export function isConfidentialAddress(text) {
+  try { return new Address(String(text || '').trim()).isBlinded(); } catch { return false; }
 }
 
 // Track a self-broadcast tx from another module (the DEX fill path).
@@ -399,8 +412,75 @@ export async function prepareSeqSend(rows, feeAssetHex, feeRateS) {
   // Best-effort fee estimate for the review — never the source of truth.
   let feeEst = null;
   try { const f = wollet.psetDetails(pset).balance().fee(); if (f != null) feeEst = String(f); } catch {}
+  // psetDetails throws on Sequentia's explicit outputs: the fee is then read off the transaction's
+  // own fee output (the one with an empty script), as the web wallet's review does.
+  if (feeEst == null) feeEst = psetFeeAtoms(pset);
   const id = stash({ kind: 'seq', pset, feeHex });
   return { id, review: { network: 'Sequentia (testnet); not parent-chain BTC', rows: review, feeAssetHex: feeHex, feeEst } };
+}
+
+// The fee a built transaction pays: its explicit fee output (the one with an empty script).
+function psetFeeAtoms(pset) {
+  try {
+    for (const o of pset.outputs()) {
+      const spk = o.scriptPubkey(); const script = spk ? String(spk.toString()) : '';
+      if (script === '' && o.asset() && o.amount() != null) return String(o.amount());
+    }
+  } catch {}
+  return null;
+}
+
+// The wallet's confidential coins of assets other than `hex`, never the Sequence token's (which may
+// be staked): [{ txid, vout, hex, atoms }] as strings, for a confidential payment that hides which
+// asset it pays among the assets it spends (vendor/confidential-pay.js).
+export function otherConfidentialCoins(hex) {
+  if (!wollet) throw new Error('wallet is locked');
+  const out = [];
+  try {
+    for (const u of wollet.utxos()) {
+      const sec = u.unblinded();
+      if (!sec.isExplicit || sec.isExplicit()) continue;
+      const a = sec.asset().toString();
+      if (a === hex || a === POLICY_HEX) continue;
+      const op = u.outpoint();
+      out.push({ txid: op.txid().toString(), vout: op.vout(), hex: a, atoms: String(sec.value()) });
+    }
+  } catch (e) { console.warn('[send] confidential coins:', e && e.message); return []; }
+  return out;
+}
+
+// A payment of `amount` atoms of `asset` to the confidential address `addr`, made so that its amount
+// is hidden (vendor/confidential-pay.js): beside it, `own` atoms to the wallet's own confidential
+// address, and each of `others` (otherConfidentialCoins) spent in full to it, with every coin of the
+// asset, so the asset is hidden among theirs. The fee is paid in the asset. Prepared as any send.
+export async function prepareConfidentialSend({ addr, asset, amount, own = '0', others = [] }) {
+  if (!wollet) throw new Error('wallet is locked');
+  const to = new Address(addr);
+  if (!to.isBlinded()) throw new Error('not a confidential address');
+  const id = new AssetId(asset);
+  const a = BigInt(amount), mine = BigInt(own);
+  let b = network.txBuilder();
+  b = asset === POLICY_HEX ? b.addLbtcRecipient(to, a) : b.addRecipient(to, a, id);
+  if (mine > 0n) {
+    const me = wollet.address(undefined).address(); // the wallet's own address, confidential
+    b = asset === POLICY_HEX ? b.addLbtcRecipient(me, mine) : b.addRecipient(me, mine, id);
+    const sums = new Map();
+    for (const o of others) sums.set(o.hex, (sums.get(o.hex) || 0n) + BigInt(o.atoms));
+    for (const [x, v] of sums) b = b.addRecipient(me, v, new AssetId(x));
+    if (others.length) {
+      const pick = [];
+      for (const u of wollet.utxos()) { try { if (u.unblinded().asset().toString() === asset) pick.push(u.outpoint()); } catch {} }
+      for (const o of others) {
+        const u = wollet.utxos().find((x) => { const p = x.outpoint(); return p.txid().toString() === o.txid && p.vout() === o.vout; });
+        if (u) pick.push(u.outpoint());
+      }
+      b = b.setWalletUtxos(pick);
+    }
+  }
+  b = asset === POLICY_HEX ? b.feeRate(A.policyFeeRate()) : b.feeRate(DEFAULT_FEERATE).feeAsset(id, A.feeRateFor(asset));
+  const pset = await withWollet(async () => b.finish(wollet));
+  const prepId = stash({ kind: 'seq', pset, feeHex: asset });
+  return { id: prepId, review: { rows: [{ addr, atoms: a.toString(), hex: asset }], feeAssetHex: asset, feeEst: psetFeeAtoms(pset) } };
 }
 
 // Bitcoin testnet4 send (sats; feeRate sat/vB). BtcWallet builds + signs.

@@ -1550,11 +1550,23 @@ function updateDefaultAvail() {
   const row = OV && OV.rows.find((r) => r.key === $('sendDAsset').value);
   $('sendDAvail').textContent = row ? 'balance ' + fmtAtoms(BigInt(row.total) - BigInt(row.vestingAtoms || 0), row.precision) : '';
 }
+// A payment to a confidential address first moves its coins out of what is held for instant
+// payments (src/confidential-send.js): while they move, the wallet says so and asks again every
+// ten seconds, and the review shows once they are there. Closing the popup loses nothing: the
+// move goes on, and Review asks again.
+const MOVE_ASK_MS = 10_000;
 $('btnDReview').onclick = async () => {
   $('sendDErr').className = 'status'; $('sendDErr').textContent = '';
+  const ask = { to: $('sendDTo').value.trim(), amtS: $('sendDAmt').value.trim(), asset: $('sendDAsset').value };
   try {
     $('btnDReview').disabled = true;
-    const plan = await rpc('default.prepareSend', { to: $('sendDTo').value.trim(), amtS: $('sendDAmt').value.trim(), asset: $('sendDAsset').value });
+    let plan = await rpc('default.prepareSend', ask);
+    while (plan && plan.moving) {
+      $('sendDErr').className = 'status'; $('sendDErr').textContent = plan.text;
+      await new Promise((r) => setTimeout(r, MOVE_ASK_MS));
+      plan = await rpc('default.prepareSend', ask);
+    }
+    $('sendDErr').textContent = '';
     defaultReview(plan);
   } catch (e) { $('sendDErr').className = 'status err'; $('sendDErr').textContent = e.message; }
   finally { $('btnDReview').disabled = false; }

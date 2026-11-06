@@ -26,7 +26,7 @@
 // step now (engine.offered), then the admitted rest, then every other asset known; it starts on
 // the first one offered.
 
-import { USER_WORDS, pickerOrder, costLine, tradeStateWord, tradeSteps } from './user-trade.js'
+import { USER_WORDS, QUOTE_FIRM_MS, pickerOrder, costLine, tradeStateWord, tradeSteps } from './user-trade.js'
 import { mountMarketView } from './market-view.js'
 import { openPicker, PICKER_WORDS } from './asset-picker.js'
 
@@ -276,7 +276,7 @@ export function mountUserComposer (ctx) {
     paintAbout()
     const btn = (text, id, f, cls) => { const b = el('button', cls || '', text); b.type = 'button'; b.id = id; b.disabled = S.busy; b.onclick = f; return b }
     if (!S.ticket) {
-      act.appendChild(btn(S.busy ? USER_WORDS.pricing : USER_WORDS.review, 'ucReview', review, 'primary'))
+      act.appendChild(btn(S.busy ? (S.pricingLong ? USER_WORDS.pricingLong : USER_WORDS.pricing) : USER_WORDS.review, 'ucReview', review, 'primary'))
       return
     }
     const k = S.ticket
@@ -299,7 +299,9 @@ export function mountUserComposer (ctx) {
     try { atoms = ctx.parseAtoms(String(S.amount || '').trim(), prec(S.pay)) } catch { atoms = 0n }
     if (!(big(atoms) > 0n)) { S.error = USER_WORDS.enter; paintTicket(); return }
     if (!S.get) { S.error = USER_WORDS.nothingOffered(name(S.pay)); paintTicket(); return }
-    S.busy = true; paintTicket()
+    S.busy = true; S.pricingLong = false; paintTicket()
+    // Past the makers' window the wallet may still be checking the price it was given: said so.
+    const longTimer = setTimeout(() => { if (S.busy && !S.ticket) { S.pricingLong = true; paintTicket() } }, QUOTE_FIRM_MS + 1000)
     const withBtc = S.pay === 'BTC' || S.get === 'BTC'
     if (withBtc) openProgress(S.pay, S.get)
     try {
@@ -309,6 +311,7 @@ export function mountUserComposer (ctx) {
       if (q.ok) { S.ticket = q.ticket; S.choice = q.choice; S.moving = !!q.moving }
       else S.error = q.why === 'vesting' ? USER_WORDS.notVested(show(big(q.atoms), prec(S.pay)), name(S.pay), q.vests) : q.why === 'no-funds' ? USER_WORDS.noFunds(name(S.pay)) : q.why === 'not-ready' ? USER_WORDS.notReady(name(S.pay), q.soon) : q.why === 'redoing' ? USER_WORDS.redoing(name(S.pay)) : q.why === 'busy' ? USER_WORDS.busy(name(S.pay)) : q.why === 'freeing' ? USER_WORDS.freeing(name(S.pay), q.soon) : q.why === 'readying' ? USER_WORDS.readying(name(S.pay), q.soon) : q.why === 'part-ready' ? USER_WORDS.partReady(amt(S.pay, q.ready), name(S.pay), q.soon) : q.why === 'too-small' ? USER_WORDS.tooSmall
         : q.why === 'no-firm-offer' ? USER_WORDS.noFirmOffer
+        : q.why === 'wallet-busy' ? USER_WORDS.walletBusy
         : q.why === 'btc-moving' ? USER_WORDS.btcMoving(ctx.btcMoveBlocks ? ctx.btcMoveBlocks() : 2)
         : q.why === 'not-listed' ? USER_WORDS.notListed(name(S.get), name(S.pay)) : USER_WORDS.notOffered(name(S.get), name(S.pay))
       // Coins being made ready for this trade: priced again by itself while the person waits,
@@ -317,7 +320,7 @@ export function mountUserComposer (ctx) {
     } catch (e) {
       console.warn('[user composer] quote:', e && e.message)
       S.error = USER_WORDS.notOffered(name(S.get), name(S.pay))
-    } finally { S.busy = false; closeProgress(); paintTicket() }
+    } finally { clearTimeout(longTimer); S.busy = false; S.pricingLong = false; closeProgress(); paintTicket() }
   }
 
   // ---- The price's progress ----
