@@ -124,7 +124,7 @@ async function main() {
     await sleep(800);
     if (existsSync(JSQR)) {
       await pop.eval(readFileSync(JSQR, 'utf8') + '; true');
-      const qrText = await pop.eval("(async()=>{ const i=document.querySelector('#recvDQr'); await i.decode(); const c=document.createElement('canvas'); c.width=i.naturalWidth; c.height=i.naturalHeight; const x=c.getContext('2d'); x.drawImage(i,0,0); const r=jsQR(x.getImageData(0,0,c.width,c.height).data,c.width,c.height); return r ? r.data + ' v' + r.version : 'none' })()");
+      const qrText = await pop.eval("(async()=>{ const i=document.querySelector('#recvDQr'); await i.decode(); const k=Math.max(1, Math.ceil(600/i.naturalWidth)); const c=document.createElement('canvas'); c.width=i.naturalWidth*k+80; c.height=i.naturalHeight*k+80; const x=c.getContext('2d'); x.fillStyle='#fff'; x.fillRect(0,0,c.width,c.height); x.imageSmoothingEnabled=false; x.drawImage(i,40,40,i.naturalWidth*k,i.naturalHeight*k); const r=jsQR(x.getImageData(0,0,c.width,c.height).data,c.width,c.height); return r ? r.data + ' v' + r.version : 'none' })()");
       check('the QR code read back is the name, in lower case', String(qrText).split(' ')[0] === named.toLowerCase(), qrText);
     } else note('no QR decoder at ' + JSQR + ': the picture is not read back');
     const ui1 = await pop.eval("({ pub: document.querySelector('#recvDPublic').innerText, pubShown: !document.querySelector('#recvDPublic').classList.contains('hide'), copy: document.querySelector('#btnDCopy').innerText, full: document.querySelector('#btnDFull').innerText, fullShown: !document.querySelector('#btnDFull').classList.contains('hide'), newShown: !document.querySelector('#btnDNew').classList.contains('hide'), label: document.querySelector('#recvDLbl').innerText })");
@@ -212,8 +212,9 @@ async function main() {
     const cc2 = await waitFor(`(()=>{ const t=document.querySelector('#recvDCode').innerText; return /^tsqb1/.test(t) && t!==${JSON.stringify(cc)} ? t : false })()`, 60000).catch(() => null);
     check('New code moves the confidential code to a new address too', !!cc2);
     await pop.click('[data-tab=balance]'); await sleep(500); await pop.click('[data-tab=receive]');
-    const back = await waitFor(`${isCode} ? document.querySelector('#recvDCode').innerText : false`, 120000).catch(() => null);
-    check('leaving Receive turns Confidential off again', !!back && !(await pop.eval("document.querySelector('#recvDConf').checked")));
+    // Back on Receive the name shows again, Confidential off.
+    const back = await waitFor(`document.querySelector('#recvDCode').innerText===${JSON.stringify(named)} ? true : false`, 120000).catch(() => null);
+    check('leaving Receive turns Confidential off again, and shows the name', !!back && !(await pop.eval("document.querySelector('#recvDConf').checked")));
     // Send to a name nobody holds: the service is asked, and its refusal shown in its own words.
     const unknown = await ui('default.prepareSend', { to: 'nobody-' + want + '@sequentiatestnet.com', amtS: '1', asset: USDX }).then(() => 'no refusal', (e) => e.message);
     check('Send to a name nobody holds is refused in plain words', /No wallet goes by that name/.test(unknown), unknown);
