@@ -61,8 +61,10 @@ export class ArcaWallet {
     }
     /**
      * Runs one command, as `arca <command>` does, `args` a JSON object of its
-     * arguments: the library's [`command::run`], whose answer is `{"result",
-     * "start"}` and whose commands are [`command::COMMANDS`].
+     * arguments: the library's [`command::run_answer`], whose answer is
+     * `{"result", "start", "cost"}`, whose refusal carries what the command
+     * cost before it was refused, and whose commands are
+     * [`command::COMMANDS`].
      * @param {string} command
      * @param {string} args
      * @returns {string}
