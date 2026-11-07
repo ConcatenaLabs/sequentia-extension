@@ -121,7 +121,10 @@ wasm. Read this before changing anything.
   time and holds the rest in its own queue (`src/leaf-queue.js`): a command a person
   started (`run` with `paying`) goes ahead of every upkeep command waiting, and the
   faucet's coin taken in (`takeIn`) ahead of upkeep too, so each waits at most for the one
-  command already running. The scheduled pass gives way between its commands while a
+  command already running. A read the trade composer asks while nobody waits on it (it
+  follows open trades every few seconds) is the wallet's own work instead: it goes in line
+  with the upkeep and does not count as a person asking, so it never keeps the mailbox and
+  channel reads off. The scheduled pass gives way between its commands while a
   person waits, starts no sooner than 15 s after a person's last command (put off 90 s at
   most, never while a take waits), and leaves the bond's watch to a later pass when a person
   is waiting. While the popup's trade composer prices or confirms a trade it also holds the

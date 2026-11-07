@@ -93,3 +93,11 @@ test('a hung library is started again rather than holding every command after it
   assert.match(host, /onHung: [\s\S]{0,300}restartWorker\(/);
   assert.match(host, /function restartWorker\(e\) \{[\s\S]{0,200}worker\.terminate\(\)/);
 });
+
+test('a read the trade composer asks while nobody waits is the wallet’s own work, not a person’s', () => {
+  assert.match(host, /const person = !!args\.paying && \(!READS\.has\(command\) \|\| upkeepHeld\(\)\);/);
+  assert.match(host, /if \(args\.paying && !person\) return await runCommand\(command, args\.args \|\| \{\}, UPKEEP\);/);
+  // Only a person's command moves lastAsked, which keeps the mailbox read off for 20 s.
+  const run = host.slice(host.indexOf("case 'run': {"), host.indexOf("case 'sync':"));
+  assert.ok(run.indexOf('if (args.paying && !person)') < run.indexOf('if (args.paying) S.lastAsked = Date.now();'));
+});
