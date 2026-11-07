@@ -89,7 +89,7 @@
 
 import { inFlight, nextAskMs, freshRequestWaits, readUntil, syncDecision, careDue, careSummary, careArgs, payThrough, CARE_EVERY_MS, laterMode,
   channelPollMs, channelArrivals, payableChannels } from './src/leaf-schedule.js';
-import { frozenAtoms } from './src/leaf-profiles.js';
+import { frozenAtoms, holdingRefusal } from './src/leaf-profiles.js';
 import { redoingAtoms } from './vendor/default-arca.js';
 import { boardCandidates, boardAll, boardSpent, CLAIMS_EVERY_MS, vestingLots, vestedOpen } from './vendor/default-arca.js';
 import { homeCoins, unreachableOf, homeQuote, homeTake, homeUnderWay } from './vendor/default-arca.js';
@@ -712,6 +712,10 @@ async function runCommand(command, cargs, prio = UPKEEP) {
     for (let i = 0; ; i++) {
       try { return await call('run', { command, args: cargs }, prio); }
       catch (e) {
+        // Refused for what the wallet holds out of round (a large payment just received, such as
+        // the faucet's five assets): what it received is given up at the next turn, not after the
+        // refresh's usual two minutes, so room comes back sooner (faucet#30).
+        if (holdingRefusal(e)) S.refreshedAt = 0;
         if (!(READS.has(command) || command === 'sync') || i >= 8 || !SCAN_BUSY.test(String((e && e.message) || e))) throw e;
         await new Promise((r) => setTimeout(r, 750 * (i + 1)));
       }
