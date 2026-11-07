@@ -117,11 +117,23 @@ wasm. Read this before changing anything.
   `channelsChanged`, and the receive code is made again to name them (`codeNamesChannels`).
   Which channel pays, and every refusal, is the library's (`send` routes over a channel by
   itself when the receive code names one).
-- **A person waiting comes first.** While the popup's trade composer prices or confirms a
-  trade it holds the host's upkeep (`default.holdUpkeep`, op `holdUpkeep`, at most two
-  minutes, let go when the step ends): no scheduled pass, mailbox read or channel read
-  starts meanwhile, so the library's one-at-a-time queue holds no sync, care or bond watch
-  ahead of the person's next step. The pass held back runs when the hold ends.
+- **A person waiting comes first.** The host keeps one command in the leaf worker at a
+  time and holds the rest in its own queue (`src/leaf-queue.js`): a command a person
+  started (`run` with `paying`) goes ahead of every upkeep command waiting, and the
+  faucet's coin taken in (`takeIn`) ahead of upkeep too, so each waits at most for the one
+  command already running. The scheduled pass gives way between its commands while a
+  person waits, starts no sooner than 15 s after a person's last command (put off 90 s at
+  most, never while a take waits), and leaves the bond's watch to a later pass when a person
+  is waiting. While the popup's trade composer prices or confirms a trade it also holds the
+  upkeep (`default.holdUpkeep`, op `holdUpkeep`, at most two minutes, let go when the step
+  ends). A sync the composer asks for (it follows open trades with one) waits while a
+  person waits, and one asked within 10 s of the last sync's end is answered by that sync;
+  a quote that finds coins not ready asks for one at the next quiet moment (`syncSoon`).
+  Between the pass's commands the host reads the mailbox and the channels when they are
+  due, so a payment to the receive code is not held up behind a whole pass. Every command
+  over 10 s is logged with what it waited, and a slow sync names its slowest steps
+  (`cost_by_step`). A command still running after 10 minutes ends the worker: every command
+  waiting fails at once, and the leaf wallet opens again at the next request.
 - **Care is the library's, run by the host.** The offscreen host runs `care` once
   after the leaf wallet opens and after a sync at most every ten minutes
   (`careDue`, `src/leaf-schedule.js`, the web wallet's rules), in either mode,
