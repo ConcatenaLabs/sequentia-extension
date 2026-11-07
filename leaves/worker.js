@@ -33,7 +33,8 @@ function errorOf (e) {
   if (typeof e === 'string') {
     try {
       const j = JSON.parse(e)
-      if (j && j.error) return j.error
+      // The refusal, with what the command cost before it when the library says.
+      if (j && j.error) return j.cost ? { ...j.error, cost: j.cost } : j.error
     } catch {}
     return { kind: 'error', message: e }
   }

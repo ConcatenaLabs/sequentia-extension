@@ -84,7 +84,14 @@ export function bondRefusal(e) {
 }
 export const BOND_WORDS = Object.freeze({
   refused: 'Not accepted: the security deposit that backs these instant payments is missing or being withdrawn, so this wallet takes no payment that rests on it. Nothing was signed.',
+  holding: 'Not yet: this wallet is settling what it was just paid, and takes a new instant payment once that is done, in a few minutes. Nothing was signed.',
 });
+// The library's refusal of a payment that would leave the wallet holding more out of round than
+// the bond covers, or than its instant budget: the bond stands, and room comes back once what the
+// wallet holds is settled in the next round (the web wallet's holdingRefusal).
+export function holdingRefusal(e) {
+  return /would hold out of round/i.test(String((e && e.message) || e || ''));
+}
 
 // A payment the operator's signer refuses for what it asks, which it would refuse again
 // however often it were asked (the server's `declined`): the library has put the coins back.
@@ -99,6 +106,7 @@ export const UPDATE_REFUSAL = 'This wallet is out of date for this: update it, t
 export function plainRefusal(e) {
   if (e && e.code === 'declined' && /\bupdate the wallet\b/i.test(String(e.message || ''))) return withMessage(e, UPDATE_REFUSAL);
   if (e && e.code === 'declined') return withMessage(e, DECLINED_REFUSAL);
+  if (holdingRefusal(e)) return withMessage(e, BOND_WORDS.holding);
   if (bondRefusal(e)) return withMessage(e, BOND_WORDS.refused);
   if (frozenRefusal(e)) return withMessage(e, FROZEN_REFUSAL);
   // A coin that has not vested (the operator's `vesting`): its date, plainly.

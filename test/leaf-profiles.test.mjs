@@ -2,7 +2,7 @@
 // rules and the words are the web wallet's, shared across the three wallets.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { supervisedAssets, frozenAtoms, frozenSentence, plainRefusal, frozenRefusal, FROZEN_REFUSAL, DECLINED_REFUSAL, UPDATE_REFUSAL, bondRefusal, BOND_WORDS, issuerAssets, batchLine } from '../src/leaf-profiles.js';
+import { supervisedAssets, frozenAtoms, frozenSentence, plainRefusal, frozenRefusal, FROZEN_REFUSAL, DECLINED_REFUSAL, UPDATE_REFUSAL, bondRefusal, holdingRefusal, BOND_WORDS, issuerAssets, batchLine } from '../src/leaf-profiles.js';
 import { developerWordsIn } from '../src/balance-view.js';
 
 const X = 'aa'.repeat(32);
@@ -84,6 +84,14 @@ test('a refusal of the bond reads plainly in user mode, in the words the three w
   assert.equal(bondRefusal(new Error('refused: the bonded stake')), false, 'a whole word only');
   assert.deepEqual(developerWordsIn(BOND_WORDS.refused), []);
   for (const w of ['leaf', 'operator', 'round', 'tree', 'bond']) assert.ok(!new RegExp(`\\b${w}\\b`, 'i').test(BOND_WORDS.refused), w);
+  // The bond stands and the wallet holds what it was just paid out of round up to what it covers
+  // (faucet#30: a new wallet's five faucet assets): said as settling, not as a missing deposit.
+  const held = new Error('refused: with this payment the wallet would hold out of round 204008250000000 atoms of the reference unit at this node\'s rates, more than the bond\'s 175368870000000: a double-sign would pay the operator more than its bond costs it; have coins refreshed in a round first');
+  assert.equal(holdingRefusal(held), true);
+  assert.equal(plainRefusal(held).message, BOND_WORDS.holding);
+  assert.equal(BOND_WORDS.holding, 'Not yet: this wallet is settling what it was just paid, and takes a new instant payment once that is done, in a few minutes. Nothing was signed.');
+  assert.deepEqual(developerWordsIn(BOND_WORDS.holding), []);
+  for (const w of ['leaf', 'operator', 'round', 'tree', 'bond']) assert.ok(!new RegExp(`\\b${w}\\b`, 'i').test(BOND_WORDS.holding), w);
 });
 
 test('issuer-operated assets are the ones the operator serves with an issuer entry, and a leaf says its batch', () => {

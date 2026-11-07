@@ -394,6 +394,7 @@ export function createEngine (deps) {
     for (let i = 0; ; i++) {
       const t0 = now()
       try { const v = await deps.leaves.command(cmd, a); if (now() - t0 > 2000) log(`[user trade] ${cmd} took ${now() - t0} ms`); return v } catch (e) {
+        if (now() - t0 > 2000) log(`[user trade] ${cmd} took ${now() - t0} ms, refused`)
         if (i < 8 && /Scan already in progress/.test(String(e && e.message))) { await sleep(500 + 500 * i); continue }
         throw e
       }
@@ -565,7 +566,7 @@ export function createEngine (deps) {
     const size = sizeEntry(entry, pay < have ? pay : have)
     if (!size) return null
     if (entry.source === 'btc-gateway') return btcT.firm(entry, payAsset, receiveAsset, pay, have, size, quoteStep)
-    if (entry.source === 'leaf-resting') return firmResting(entry, payAsset, receiveAsset, pay, have, size)
+    if (entry.source === 'leaf-resting') return firmResting(entry, payAsset, receiveAsset, pay, have, size, hard)
     if (entry.source === 'onchain-fill') return firmOnchain(entry, payAsset, receiveAsset, pay, have)
     if (entry.source === 'covenant-round') {
       // No more than the operator can pay its maker in this round now.
@@ -705,16 +706,23 @@ export function createEngine (deps) {
   // (`order_fill_resting_quote`, from the operator's own view of the order): what leaves the wallet
   // is the coins it gives less the change, and the coins the fill brings (what it gets, and the
   // change) are settled in the next round, at the fee a coin of their expiry pays.
-  async function firmResting (entry, payAsset, receiveAsset, pay, have, size) {
+  // Each asking again is one library command more that every other waits behind: none is asked
+  // past the quote's deadline (`hard`), nor again on a refusal the same as the last, which a
+  // smaller fill did not change (four such asks held a wallet for ten minutes).
+  async function firmResting (entry, payAsset, receiveAsset, pay, have, size, hard = Infinity) {
     const limit = pay < have ? pay : have
     let r = size.receive
+    let lastRefusal = null
     for (let i = 0; i < 4; i++) {
+      if (i > 0 && now() > hard) { log('[user trade] the resting fill is not asked again: the quote\'s time is up'); return null }
       let q
       try { q = await run('order_fill_resting_quote', { order: entry.id, amount: String(r) }) } catch (e) {
         // A fill spends only the wallet's coins no older than the order's: when those hold less
         // than the fill takes, the library says how much they hold, and the fill is sized to it.
         const m = /the outputs take (\d+) of asset \S+, more than the (\d+) the inputs hold/.exec(String(e && e.message))
-        if (m && BigInt(m[1]) > 0n) {
+        const same = m && lastRefusal === m[0]
+        if (m) lastRefusal = m[0]
+        if (m && BigInt(m[1]) > 0n && !same) {
           const r2 = (r * BigInt(m[2])) / BigInt(m[1]) - 1n
           const s2 = r2 > 0n ? sizeEntry(entry, (r2 * entry.rateNum) / entry.rateDen) : null
           if (s2 && s2.receive < r) { r = s2.receive; continue }
