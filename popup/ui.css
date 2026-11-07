@@ -122,3 +122,7 @@ a.link { color: var(--gold); text-decoration: none; cursor: pointer; }
 .recv-switch input:checked { background: var(--gold); }
 .recv-switch input:checked::after { left: 16px; }
 .recv-switch input:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+/* A payment to an address that did not reach it: one line each, with OK (renderNews). */
+.news-line { display: flex; gap: 10px; align-items: center; justify-content: space-between; }
+.news-line + .news-line { margin-top: 8px; }
+.news-text { margin: 0; font-size: 13px; }

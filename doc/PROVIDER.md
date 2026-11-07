@@ -94,7 +94,7 @@ not connected or locked. Use it to restore a session without prompting.
 ```
 `total` is the figure the wallet itself shows: for a Sequentia asset its coins on the
 chain, its leaves and its Lightning balance; for BTC the chain, the Bitcoin ark and
-Lightning. `arriving` is the part of it received and not yet spendable (default mode's
+Lightning. `arriving` is the part of it received and not yet spendable (developer mode's
 "<amount> <TICKER> arriving"). `by_place` splits `total` by where it is held and is
 answered in developer mode only. `spendable` is what the wallet's own trades can pay from
 at this moment (in user mode its leaves that are live and the BTC on its Bitcoin ark), so
@@ -1113,7 +1113,11 @@ is that trade when its price meets the limit, and otherwise rests whole on the b
 order placed from the wallet's leaves, listed on the relay once it rests and taken back by
 its refund once its time has run out (`cancelOrder`). Against BTC a limit order only
 trades. The approval shows what is paid, what is got and the fees, in default mode's
-words, and the answer has the same shape (`filled` is 1 for a trade). Every other wallet
+words, and the answer has the same shape (`filled` is 1 for a trade). A trade whose step takes
+longer than 20 seconds (a purchase paid in BTC pays the maker's invoice from the Bitcoin ark,
+behind the wallet's other work) is answered while it goes on, with `filled: 0`, `under_way: 1`
+and its `state` from `getOrders` (`'sending'`), and `gave` and `got` of `'0'`: nothing of it is a
+fill, and the site follows it through `getOrders`. Every other wallet
 that serves `placeOrder` through a channel or a relay (`doc/PAIRING.md`) settles it the
 same way.
 
@@ -1184,7 +1188,7 @@ relay's records of the chain:
              take_back_from, take_back_from_text, can_take_back,
              fills: [{ txid, filled, credit, state, standing }], note }],
   trades: [{ trade, at, market, side, type, kind, order,
-             state,            // 'sent' | 'settled' (| 'failed' for a trade against BTC)
+             state,            // 'sending' | 'sent' | 'settled' (| 'failed' for a trade against BTC)
              fills: [{ txid, base, quote, state }] }] }
 ```
 

@@ -178,7 +178,26 @@ async function renderHome() {
     const r = el('div', 'row'); r.appendChild(b); box.appendChild(r);
   }
 }
-setInterval(() => { if (OV && !$('tBalance').classList.contains('hide')) renderHome().catch(() => {}); }, 15000);
+setInterval(() => { if (OV && !$('tBalance').classList.contains('hide')) { renderHome().catch(() => {}); renderNews().catch(() => {}); } }, 15000);
+// A payment to an address that did not reach it (not made, or taken back): said once, on one card
+// above the list with OK, in both modes, the next time the popup is open if it was closed
+// meanwhile (the web wallet's default mode, Send).
+let newsAsking = 0;
+async function renderNews() {
+  const asked = ++newsAsking;
+  let news = [];
+  try { news = (await rpc('default.addressNews')).news || []; } catch { news = []; }
+  if (asked !== newsAsking) return;
+  const box = $('newsCard'); box.innerHTML = '';
+  box.classList.toggle('hide', !news.length);
+  for (const n of news) {
+    const line = el('div', 'news-line'); line.dataset.offboard = n.id;
+    line.appendChild(el('p', 'news-text', n.text));
+    const b = el('button', 'ghost tiny', DEFAULT_WORDS.newsOk);
+    b.onclick = async () => { await rpc('default.addressPaymentTold', { id: n.id }).catch(() => {}); renderNews().catch(() => {}); };
+    line.appendChild(b); box.appendChild(line);
+  }
+}
 async function takeHomeDialog() {
   const { m, c } = modal(DEFAULT_WORDS.homeTitle);
   const body = el('div', 'home-review'); c.appendChild(body);
@@ -220,6 +239,7 @@ function renderOverview() {
   if (!OV) return;
   applyMode();
   renderHome().catch(() => {});
+  renderNews().catch(() => {});
   $('headline').textContent = OV.totalRefStr || '—';
   $('headlineSub').textContent = 'Portfolio total' + (OV.pricesStale ? ' · prices may be stale' : '');
   $('syncNote').className = 'status';
@@ -259,9 +279,10 @@ function renderOverview() {
     // A holding its issuer has frozen for this wallet: one plain sentence, in both modes,
     // never hidden.
     if (BigInt(r.frozen || 0) > 0n) row.appendChild(el('div', 'sub frozen-line', frozenSentence(fmtAtoms(r.frozen, r.precision), r.ticker)));
-    // Default mode: what is held but cannot be spent yet, under the figure.
+    // Developer mode: what is held but cannot be spent yet, under the figure. Default mode shows
+    // the figure alone, which counts it (the web wallet's default mode, Balance).
     // Of it, what a Bitcoin reorganisation took back out of the chain is said apart: never a loss.
-    if (!(OV.mode === 'developer')) {
+    if (dev) {
       // What has vested and the wallet is taking up counts as arriving.
       const vestedArr = (Array.isArray(r.vesting) ? r.vesting : []).filter((l) => l.arriving).reduce((n, l) => n + BigInt(l.atoms), 0n);
       const arr = BigInt(r.arriving || 0) + vestedArr, rd0 = BigInt(r.redoing || 0), rd = rd0 > arr ? arr : rd0;
@@ -1632,15 +1653,29 @@ function defaultReview(plan) {
   ok.onclick = async () => {
     ok.disabled = no.disabled = true;
     st.className = 'status'; st.textContent = DEFAULT_WORDS.sending;
-    try {
-      const r = await rpc('default.confirmSend', { id: plan.id }).finally(release);
-      st.className = 'status ok'; st.textContent = r.text;
-      ok.classList.add('hide'); no.textContent = 'Close'; no.disabled = false;
-      $('sendDAmt').value = ''; $('sendDTo').value = '';
-      refreshOverview();
-    } catch (e) { st.className = 'status err'; st.textContent = e.message; no.disabled = false; }
+    let r;
+    try { r = await rpc('default.confirmSend', { id: plan.id }).finally(release); }
+    catch (e) { st.className = 'status err'; st.textContent = e.message; no.disabled = false; return; }
+    ok.classList.add('hide'); no.textContent = 'Close'; no.disabled = false;
+    $('sendDAmt').value = ''; $('sendDTo').value = '';
+    refreshOverview();
+    if (!r.follow) { st.className = 'status ok'; st.textContent = r.text; return; }
+    // A payment to an address out of the tree: "Sending" until the library says it is made, then
+    // "Sent"; one that ended unmade says so here, and not again on Balance.
+    st.className = 'status'; st.textContent = r.text;
+    const t0 = Date.now();
+    while (document.body.contains(m) && Date.now() - t0 < FOLLOW_MS) {
+      await new Promise((ok2) => setTimeout(ok2, 5000));
+      let p; try { p = await rpc('default.addressPayment', { id: r.follow }); } catch { continue; }
+      if (p.stage === 'made') { st.className = 'status ok'; st.textContent = r.sent; refreshOverview(); return; }
+      if (p.stage === 'not_made' || p.stage === 'reclaimed') {
+        await rpc('default.addressPaymentTold', { id: r.follow }).catch(() => {});
+        st.className = 'status err'; st.textContent = p.text; refreshOverview(); return;
+      }
+    }
   };
 }
+const FOLLOW_MS = 15 * 60_000;
 
 // ---- trade: the user composer (vendor/user-composer.js), the web wallet's own ----
 let leafAnchorDepth = null;

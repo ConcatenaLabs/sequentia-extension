@@ -35,6 +35,8 @@
 //   followTrades      false where the page's own composer already follows every trade it made
 //                     (the web wallet's Trade tab); `follow` then lists orders only
 //   now()             -> milliseconds; optional
+//   answerMs          how long a trade's step is waited on before the site is answered with the
+//                     trade under way (SITE_ANSWER_MS); optional
 //   log(...)          optional
 
 import { USER_WORDS, costLine, heldAlready, tradeStateWord } from './user-trade.js'
@@ -49,6 +51,11 @@ export const TAKE_BACK_MIN = 3600
 export const TAKE_BACK_MAX = 7 * DAY
 // What getCapabilities lists for the options this module serves.
 export const ORDER_FEATURES = Object.freeze(['order-post-only', 'order-no-rest', 'order-min-fill', 'order-take-back-after'])
+// A trade's step (paying a maker's invoice from the Bitcoin ark, a leaf received first) can take
+// minutes behind the wallet's other work. The site is answered once the step is taken or this
+// long has passed, whichever is first: then with the trade under way (`under_way`, `filled: 0`),
+// which getOrders follows, never with a fill that has not happened.
+export const SITE_ANSWER_MS = 20_000
 
 export const SITE_WORDS = Object.freeze({
   tradeTitle: 'Trade?',
@@ -295,17 +302,40 @@ export function makeSiteOrders (d) {
     if (!p || now() - p.at > QUOTE_TTL_MS) { if (p) drop(id); throw new Error(SITE_WORDS.lapsed) }
     const market = { base: p.o.base, quote: p.o.quote }
     if (p.kind === 'take') {
-      let rec
-      // The price no longer held (the offer lapsed, or what it spends changed since it was shown):
-      // nothing was signed, and the site asks for the review again.
-      try { rec = await d.engine.confirm(p.choice, p.ticket) } catch (e) { if (e && e.code === 'lapsed') throw new Error(SITE_WORDS.lapsed); throw e }
-      if (rec.state === 'failed') throw new Error(USER_WORDS.failed)
       const gave = p.ticket.amountIn, got = p.ticket.amountOut
       // In the market's terms: base and quote atoms of the one fill.
       const fill = p.o.side === 'sell' ? { base: String(gave), quote: String(got) } : { base: String(got), quote: String(gave) }
-      const v = db(); v.trades[rec.id] = { origin: p.origin, market, side: p.o.side, type: p.o.type, at: now(), ...fill }; write(v)
+      const mark = (recId) => { const v = db(); if (!v.trades[recId]) { v.trades[recId] = { origin: p.origin, market, side: p.o.side, type: p.o.type, at: now(), ...fill }; write(v) } }
+      // The engine writes the trade's record before its step: the record new since now is this trade.
+      const before = new Set((d.engine.records ? d.engine.records() : []).map((r) => r.id))
+      // The page's own follow of its trades waits until the step is taken, however the site is
+      // answered meanwhile.
+      try { d.busy && d.busy(true) } catch {}
+      const done = d.engine.confirm(p.choice, p.ticket)
+      done.then((rec) => { if (rec && rec.id && rec.state !== 'failed') mark(rec.id) }, (e) => log('[site orders] confirm:', e && e.message))
+        .finally(() => { try { d.busy && d.busy(false) } catch {} })
+      const later = Symbol('later')
+      let rec
+      // The price no longer held (the offer lapsed, or what it spends changed since it was shown):
+      // nothing was signed, and the site asks for the review again.
+      try { rec = await Promise.race([done, new Promise((r) => setTimeout(() => r(later), d.answerMs ?? SITE_ANSWER_MS))]) } catch (e) { if (e && e.code === 'lapsed') throw new Error(SITE_WORDS.lapsed); throw e }
+      if (rec === later) {
+        const r = (d.engine.records ? d.engine.records() : []).find((x) => !before.has(x.id))
+        // No record yet: nothing was signed or sent, and the site is told only that much.
+        if (!r) { log('[site orders] the trade has not started yet'); throw new Error(USER_WORDS.failed) }
+        mark(r.id)
+        log(`[site orders] answered the site with trade ${r.id} under way (${r.state})`)
+        return { trade: r.id, filled: 0, under_way: 1, state: tradeState(r), failed: [], order: null, order_error: null, gave: '0', got: '0' }
+      }
+      if (rec.state === 'failed') throw new Error(USER_WORDS.failed)
+      mark(rec.id)
       return { trade: rec.id, filled: 1, failed: [], order: null, order_error: null, gave, got }
     }
+    return await busy(placeRest)(p, market)
+  }
+
+  // Places an approved resting order. -> placeOrder's answer.
+  async function placeRest (p, market) {
     const offerId = [...crypto.getRandomValues(new Uint8Array(16))].map((x) => x.toString(16).padStart(2, '0')).join('')
     const rec = { origin: p.origin, market, side: p.o.side, price: String(p.o.price), amount: String(p.o.amount),
       sell: p.args.sell, sold: p.args.amount, rate_num: p.args.rate_num, rate_den: p.args.rate_den, offer_id: offerId, at: now() }
@@ -346,6 +376,8 @@ export function makeSiteOrders (d) {
   // the person's trade at "Sent".
   function tradeState (r) {
     if (!r) return 'sent'
+    // The wallet has not paid or signed its side yet: the step is being taken.
+    if (r.state === 'confirming' && !r.uncertain) return 'sending'
     if (r.state === 'settled') return 'settled'
     if (r.state === 'failed' || r.state === 'returned') return 'failed'
     return heldAlready(r) ? 'received' : 'sent'
@@ -430,5 +462,5 @@ export function makeSiteOrders (d) {
     return { order: p.order, txid: (r && (r.refund || r.txid || r.refund_txid)) || null }
   }
 
-  return { quote: busy(quote), confirm: busy(confirm), drop, follow, orders, quoteCancel, confirmCancel: busy(confirmCancel) }
+  return { quote: busy(quote), confirm, drop, follow, orders, quoteCancel, confirmCancel: busy(confirmCancel) }
 }

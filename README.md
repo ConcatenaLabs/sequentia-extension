@@ -20,8 +20,9 @@ confidential `tsqb1…` addresses are an explicit opt-in).
   holds on the Bitcoin ark and, for tSEQ,
   what is staked (each stake of the wallet's key under either lock, each
   unbonding output not yet withdrawn, and the delegation record); the headline
-  is the sum of every figure. User mode shows that one figure per asset, with
-  "<amount> <TICKER> arriving" under it for what cannot be spent yet, and a tap on
+  is the sum of every figure. User mode shows that one figure per asset, and
+  nothing under it about what is still on its way (developer mode says
+  "<amount> <TICKER> arriving" there), and a tap on
   a row opens what is staked of it and "Hide asset from list". What the wallet holds
   that cannot move before a date (a vesting allocation, such as tokens bought in a
   sale that vests) is part of the figure, with "<amount> <TICKER> vests on <date>"

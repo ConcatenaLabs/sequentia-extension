@@ -106,15 +106,33 @@ export const DEFAULT_WORDS = Object.freeze({
   sending: 'Sending\u2026',
   sent: (amount, ticker, seconds) => `Sent ${amount} ${ticker} (${seconds} s).`,
   stillArriving: (ticker) => `Part of this ${ticker} is still arriving: try again in a moment.`,
+  // A payment to an address whose coins are held but not spendable yet (the change of a payment
+  // just made, a coin just received): when it can go, as long as a payment to an address takes.
+  stillArrivingWithin: (ticker, minutes) => minutes
+    ? `Part of this ${ticker} is still arriving: it can be sent within ${minutes} minute${minutes === 1 ? '' : 's'}.`
+    : `Part of this ${ticker} is still arriving: try again in a moment.`,
   codeBtc: 'A receive code takes Sequentia assets. For BTC, use an address or an invoice.',
   codeMixed: 'A receive code is paid on its own: send it without other recipients.',
   addressShort: 'This amount can\u2019t be sent to an address right now. Send it to a receive code, or pay an invoice.',
   // A payment to an address out of the tree is made in the operator's next settlement, which the
   // paying wallet signs its part of as it is made: a page closed before then makes nothing (the
-  // coins stay the wallet's), so the review and "Sent" both ask for the page to stay open.
+  // coins stay the wallet's), so the review asks for the page to stay open, the wallet reads
+  // "Sending" until the payment is made, and only then "Sent" (offboardStage).
   arrivesWithin: (minutes) => `${arrivesWords(minutes)} ${KEEP_OPEN}`,
   fee: (amount, ticker) => `Fee ${amount} ${ticker}`,
-  sentLater: (amount, ticker, minutes) => `Sent ${amount} ${ticker}. ${arrivesWords(minutes)} ${KEEP_OPEN}`,
+  sendingLater: (amount, ticker) => `Sending ${amount} ${ticker}. Keep this page open until it is sent.`,
+  sentLater: (amount, ticker, minutes) => `Sent ${amount} ${ticker}. ${arrivesWords(minutes)}`,
+  // A payment to an address that ended without being made (the page was closed before it went, or
+  // the settlement went on without it): its coins are the wallet's again. Said once, in the review
+  // when it is open, else on a card above Balance's list the next time the wallet is open.
+  notMade: (amount, ticker, to) => `Your payment of ${amount} ${ticker} to ${to} was not made: nothing left your wallet. Send it again.`,
+  // Made, and taken back by the service before it reached the address (`reclaimed`).
+  notArrived: (amount, ticker, to) => `Your payment of ${amount} ${ticker} to ${to} did not arrive. Report a problem, so it can be put right.`,
+  newsOk: 'OK',
+  // History's row for each of them.
+  rowNotMade: 'Not sent',
+  rowNotMadeSub: 'Nothing left your wallet.',
+  rowNotArrived: 'Did not arrive',
   // The same amount of the same asset to the same address, asked while the first is still on its
   // way: the library goes on with the first (`already`) and sends nothing more.
   sentAlready: (amount, ticker, minutes) => `${amount} ${ticker} to this address is already on its way, so nothing more was sent. ${arrivesWords(minutes)} ${KEEP_OPEN} To pay the same again, send once it has arrived.`,
@@ -330,10 +348,59 @@ export function arrivalMinutes (seconds, blockSeconds) {
 // amount of the same asset to the same address, asked while the first is still on its way, is that
 // first payment (`already`): nothing more is sent, and it is never said to be. `minutes`: the
 // review's arrival time, `blockSeconds` the chain's block interval. -> { text, sent }
+// The text is "Sending" (`made: false`) until the library says the payment is made: "Sent" is never
+// shown for a payment that is not (offboardStage).
 export function offboardOutcome (v, amount, ticker, minutes, blockSeconds) {
   const mins = arrivalMinutes(v && v.round_within_seconds, blockSeconds) || minutes
-  if (v && v.already) return { text: DEFAULT_WORDS.sentAlready(amount, ticker, minutes), sent: false }
-  return { text: DEFAULT_WORDS.sentLater(amount, ticker, mins), sent: true }
+  if (v && v.already) return { text: DEFAULT_WORDS.sentAlready(amount, ticker, minutes), sent: false, minutes: mins }
+  return { text: DEFAULT_WORDS.sendingLater(amount, ticker), sent: true, minutes: mins }
+}
+
+// Where a payment to an address out of the tree stands, from its state in the library's `offboards`
+// (arca bark/src/arca/offboard.rs): `waiting` for the operator's settlement and `in_round` until the
+// paying wallet hands over its part are 'pending' (a wallet closed now makes nothing); `unlocking`
+// and `paid` are 'made'; `not_made` (it ended without a settlement: its coins are the wallet's
+// again) and `reclaimed` (made, and taken back by the operator before it reached the address) are
+// ends the person is told of. Anything else the library may say is 'pending', never 'made'.
+export function offboardStage (state) {
+  if (state === 'unlocking' || state === 'paid') return 'made'
+  if (state === 'not_made') return 'not_made'
+  if (state === 'reclaimed') return 'reclaimed'
+  return 'pending'
+}
+
+// The payments to an address out of the tree this wallet asked for, read against the library's
+// `offboards` (`offboards`: its answer). `asked`: the wallet's records, each `{ offboard, stage? }`
+// with the stage it last knew. -> { stages: Map(id -> stage now), news: [the library's entry, with
+// `stage`, for each record that has just reached 'not_made' or 'reclaimed'] }. A record the library
+// does not list keeps its stage. A record already at an end is never news again.
+export function offboardEnds (asked, offboards) {
+  const byId = new Map((Array.isArray(offboards) ? offboards : []).filter((o) => o && o.offboard).map((o) => [String(o.offboard), o]))
+  const stages = new Map(); const news = []
+  for (const r of Array.isArray(asked) ? asked : []) {
+    if (!r || !r.offboard) continue
+    const was = r.stage || 'pending'
+    const o = byId.get(String(r.offboard))
+    if (!o || was === 'not_made' || was === 'reclaimed') { stages.set(String(r.offboard), was); continue }
+    let now = offboardStage(o.state)
+    // Made is never unsaid by a reading that has not caught up.
+    if (was === 'made' && now === 'pending') now = 'made'
+    stages.set(String(r.offboard), now)
+    if (now !== was && (now === 'not_made' || now === 'reclaimed')) news.push({ ...o, stage: now })
+  }
+  return { stages, news }
+}
+
+// How a payment's address is named in what the wallet says of it: its start and its end.
+export function shortAddress (address) {
+  const a = String(address || '')
+  return a.length > 22 ? a.slice(0, 14) + '\u2026' + a.slice(-4) : a
+}
+
+// The one sentence for a payment to an address that reached an end other than made.
+export function offboardNewsText (n, amount, ticker) {
+  const to = shortAddress(n && n.address)
+  return n && n.stage === 'reclaimed' ? DEFAULT_WORDS.notArrived(amount, ticker, to) : DEFAULT_WORDS.notMade(amount, ticker, to)
 }
 
 // When Receive asks again for a receive code the operator did not give (#521), after `failures`
@@ -353,11 +420,15 @@ export function receiveCodeRetry (failures) {
 // coins cover it, else on the chain when its coins there cover the amount alone (the fee may
 // still fit), else not at all. Coins on the chain a few atoms short of amount and fee never
 // refuse a payment the tree could make.
-export function addressRoute (amount, onchain, treeSpendable, feeMargin = 0n) {
+// `treeArriving`: what the tree holds of the asset that is not spendable yet (the change of a
+// payment just made, a coin just received); when the tree would cover the amount with it, the
+// payment is 'arriving': refused as still arriving, never as not enough.
+export function addressRoute (amount, onchain, treeSpendable, feeMargin = 0n, treeArriving = 0n) {
   const a = big(amount)
   if (a + big(feeMargin) <= big(onchain)) return 'chain'
   if (a <= big(treeSpendable)) return 'tree'
   if (a <= big(onchain)) return 'chain'
+  if (big(treeArriving) > 0n && a <= big(treeSpendable) + big(treeArriving)) return 'arriving'
   return null
 }
 
