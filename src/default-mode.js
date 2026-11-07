@@ -597,7 +597,9 @@ async function chainReview({ address, amtS, asset, amt, request = null }) {
   const lines = [];
   if (prep.review.feeEst) lines.push(DEFAULT_WORDS.fee(fmtAtoms(big(prep.review.feeEst), meta(prep.review.feeAssetHex).precision || 0), meta(prep.review.feeAssetHex).ticker));
   if (request) lines.unshift(DEFAULT_WORDS.byAddress(DEFAULT_WORDS.arrivesNextBlock));
-  else lines.push(DEFAULT_WORDS.arrivesWithin(1));
+  else lines.push(DEFAULT_WORDS.arrivesNextBlock);
+  // The contract's review of a payment on the chain: to whom, its fee, when it arrives.
+  lines.unshift(BTC_WORDS.to + ' ' + address.slice(0, 14) + '\u2026');
   return { id: stash({ kind: 'engine', prepId: prep.id, chain: 'sequentia', amt, ticker: m.ticker }), title: DEFAULT_WORDS.sendTitle(amt, m.ticker), lines, button: DEFAULT_WORDS.send };
 }
 
@@ -825,7 +827,7 @@ export async function confirmSend({ id }) {
     if (p.kind === 'engine') {
       const r = await engine.confirmSend(p.prepId);
       noteOwnPayment(r.chain);
-      return { text: p.chain === 'bitcoin' ? BTC_WORDS.sentBlock(p.amt) : DEFAULT_WORDS.sentLater(p.amt, p.ticker, 1), ms: Date.now() - t0 };
+      return { text: p.chain === 'bitcoin' ? BTC_WORDS.sentBlock(p.amt) : DEFAULT_WORDS.sentBlock(p.amt, p.ticker), ms: Date.now() - t0 };
     }
     if (p.kind === 'ark') {
       const r = fromWire(await arkHost('send', { to: p.to, sats: String(p.sats) }));

@@ -105,6 +105,8 @@ export const DEFAULT_WORDS = Object.freeze({
   send: 'Send',
   sending: 'Sending\u2026',
   sent: (amount, ticker, seconds) => `Sent ${amount} ${ticker} (${seconds} s).`,
+  // A payment of an asset on the chain from the wallet's own coins there, once broadcast.
+  sentBlock: (amount, ticker) => `Sent ${amount} ${ticker}. It arrives after the next block, in about a minute.`,
   stillArriving: (ticker) => `Part of this ${ticker} is still arriving: try again in a moment.`,
   // A payment to an address whose coins are held but not spendable yet (the change of a payment
   // just made, a coin just received): when it can go, as long as a payment to an address takes.

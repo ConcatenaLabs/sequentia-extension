@@ -55,3 +55,10 @@ test('the arriving, moving, redone and kept-safe lines are developer mode\'s (#1
   assert.ok(gate > 0 && gate > before.lastIndexOf("if (!(OV.mode === 'developer'))"), 'the lines sit under if (dev)');
   assert.ok(!pop.includes("if (!(OV.mode === 'developer')) {\n      // What has vested"), 'no default-mode arriving block');
 });
+
+test('a payment on the chain reads as the contract\'s, and "Sent" says when it arrives', () => {
+  const js = read('src/default-mode.js');
+  assert.match(js, /else lines\.push\(DEFAULT_WORDS\.arrivesNextBlock\);/);
+  assert.match(js, /DEFAULT_WORDS\.sentBlock\(p\.amt, p\.ticker\), ms/);
+  assert.equal(DEFAULT_WORDS.sentBlock('1', 'OILX'), 'Sent 1 OILX. It arrives after the next block, in about a minute.');
+});
