@@ -101,3 +101,9 @@ test('a read the trade composer asks while nobody waits is the wallet’s own wo
   const run = host.slice(host.indexOf("case 'run': {"), host.indexOf("case 'sync':"));
   assert.ok(run.indexOf('if (args.paying && !person)') < run.indexOf('if (args.paying) S.lastAsked = Date.now();'));
 });
+
+test('the mailbox is read no oftener than twice what the last read took', () => {
+  assert.match(host, /const mailboxGapMs = \(\) => Math\.max\(MAILBOX_POLL_MS, 2 \* \(S\.mailCostMs \|\| 0\)\);/);
+  assert.match(host, /if \(mailboxDue\(\)\) await readMailboxNow\(\);/);
+  assert.match(host, /if \(!ticking && mailboxDue\(\)\) await readMailboxNow\(\);/);
+});
