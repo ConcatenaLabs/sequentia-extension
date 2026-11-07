@@ -655,7 +655,7 @@ const uiMethods = {
   'default.leafInfo': async () => await leaves.runAny('info'),
   // The composer asks for this when an asset is held but not payable yet: the leaf host syncs,
   // which boards what is on the chain.
-  'default.prepare': async () => { leaves.hostOp('sync').catch(() => {}); return { ok: true }; },
+  'default.prepare': async () => { leaves.hostOp('syncSoon').catch(() => {}); return { ok: true }; },
   // Hide an asset from the balance list and the pickers' first rows, or show it again.
   'setHidden': async ({ hex, on }) => ({ hidden: await setHidden(String(hex || ''), !!on) }),
   'default.assetMeta': async ({ hexes }) => {

@@ -93,6 +93,7 @@ import { frozenAtoms } from './src/leaf-profiles.js';
 import { redoingAtoms } from './vendor/default-arca.js';
 import { boardCandidates, boardAll, boardSpent, CLAIMS_EVERY_MS, vestingLots, vestedOpen } from './vendor/default-arca.js';
 import { homeCoins, unreachableOf, homeQuote, homeTake, homeUnderWay } from './vendor/default-arca.js';
+import { createQueue, PERSON, PROMPT, UPKEEP } from './src/leaf-queue.js';
 
 const TICK_MS = 60_000;
 let worker = null;
@@ -115,6 +116,35 @@ function errorOf(e) {
   return { kind: 'error', message: String(e) };
 }
 
+// The commands, one in the worker at a time, the person's first (src/leaf-queue.js). A command
+// that has not answered in HUNG_MS is taken for a hung library: the worker is ended and every
+// command waiting fails at once, so a hung call costs one refusal instead of the session; the wallet
+// opens again at the next request (the service worker's ensureRunning).
+const HUNG_MS = 10 * 60_000;
+const Q = createQueue({
+  send: (op, args) => post(op, args),
+  hungAfter: () => HUNG_MS,
+  onHung: ({ op, args, ms }) => {
+    console.warn(`[leaves] the library did not answer ${op === 'run' ? args.command : op} in ${Math.round(ms / 1000)} s: the leaf wallet is started again`);
+    restartWorker({ kind: 'worker', message: 'the leaf wallet did not answer' });
+  },
+  // Every command over ten seconds is named, with what it waited behind: the one long command that
+  // holds every other can then be told.
+  onSlow: ({ op, args, prio, ms, waited }) => console.info(`[leaves] slow ${op === 'run' ? args.command : op} ${ms} ms${prio >= PROMPT ? ' (asked by a person)' : ''}${waited > 1000 ? `, after waiting ${waited} ms` : ''}`),
+});
+
+function restartWorker(e) {
+  try { worker && worker.terminate(); } catch {}
+  worker = null;
+  for (const p of pending.values()) p.no(e);
+  pending.clear();
+  Q.failAll(e);
+  S.open = false; S.fp = null;
+  clearTimeout(S.timer); clearTimeout(S.mailTimer); clearTimeout(S.chanTimer);
+  ticking = false;
+  emit('leafStopped', { why: e.message });
+}
+
 function ensureWorker() {
   if (worker && !failed) return;
   worker = new Worker(new URL('./leaves/worker.js', import.meta.url), { type: 'module' });
@@ -133,7 +163,10 @@ function ensureWorker() {
   };
 }
 
-function call(op, args = {}) {
+function call(op, args = {}, prio = UPKEEP) {
+  return Q.call(op, args, prio);
+}
+function post(op, args) {
   ensureWorker();
   if (failed) return Promise.reject(failed);
   const id = next++;
@@ -251,9 +284,23 @@ function arrivals(mailbox) {
   }
 }
 
-async function sync(by) {
-  const v = await call('run', { command: 'sync', args: {} });
+async function sync(by, prio = UPKEEP) {
+  if (S.syncing) return await S.syncing;
+  const p = S.syncing = syncOnce(by, prio);
+  try { return await p; } finally { if (S.syncing === p) S.syncing = null; }
+}
+async function syncOnce(by, prio) {
+  const t0 = Date.now();
+  const v = await call('run', { command: 'sync', args: {} }, prio);
+  S.lastSyncValue = v;
+  S.mailReadAt = Date.now();   // a sync reads the mailbox
   const r = (v && v.result) || {};
+  // A slow sync names its slowest steps (the library's cost_by_step): what to make faster.
+  if (Date.now() - t0 > 10_000) {
+    const steps = Object.entries(r.cost_by_step || {}).map(([k, c]) => [k, Number((c && c.ms) ?? c) || 0]).filter(([, ms]) => ms >= 500)
+      .sort((a, b) => b[1] - a[1]).slice(0, 5).map(([k, ms]) => `${k} ${ms} ms`).join(', ');
+    console.info(`[leaves] sync (${by}) took ${Date.now() - t0} ms${steps ? ': ' + steps : ''}`);
+  }
   S.heldFor = null;
   S.lastSync = { at: Date.now(), by };
   console.info(`[leaves] sync (${by}): mailbox accepted ${((r.mailbox && r.mailbox.accepted) || []).length}`);
@@ -277,6 +324,17 @@ async function sync(by) {
   return v;
 }
 
+// One sync answers every caller asking within SYNC_SHARED_MS of its end, and those asking while it
+// runs; a caller asking while a person waits on a quote or a confirmation waits until they are done
+// (at most the hold's own bound).
+const SYNC_SHARED_MS = 10_000;
+async function syncForCaller(paying) {
+  while (upkeepHeld() || Q.personWaits()) await new Promise((r) => setTimeout(r, 500));
+  if (S.syncing) return await S.syncing;
+  if (S.lastSyncValue && S.lastSync && Date.now() - S.lastSync.at < SYNC_SHARED_MS) return S.lastSyncValue;
+  return await sync(paying ? 'asked by a trade' : 'asked');
+}
+
 // The wallet's channels as the library holds them (asking nothing of the operator). When those a
 // payer can pay change, `channelsChanged` is sent: the receive code is made again, to name them.
 async function readChannels() {
@@ -298,25 +356,30 @@ function watchChannels() {
   if (!S.open || !S.defaultMode) return;
   const usedAt = Math.max(S.lastAsked || 0, S.inUseAt || 0, S.channelIn || 0);
   S.chanTimer = setTimeout(async () => {
-    const live = (S.channels || []).some((c) => c && c.coin_state === 'live');
-    if (live && S.open && S.defaultMode && !ticking && !S.running && !(Date.now() < (S.holdUntil || 0)) && !upkeepHeld()) {
-      try {
-        const before = S.channels || [];
-        const after = (await call('run', { command: 'channel_sync', args: {} })).result;
-        if (Array.isArray(after)) S.channels = after.map((c) => ({ ...(before.find((x) => x.leaf_id === c.leaf_id) || {}), ...c }));
-        const came = channelArrivals(before, S.channels);
-        if (came.length) {
-          S.channelIn = Date.now();
-          await reportBalance();
-          for (const a of came) {
-            console.info(`[leaves] channel ${String(a.leaf_id).slice(0, 12)} paid ${a.atoms} of ${String(a.asset).slice(0, 8)}`);
-            emit('leafArrived', { leaf_id: a.leaf_id, asset: a.asset, value: String(a.atoms), kind: 'channel' });
-          }
-        }
-      } catch { /* the next read tries again */ }
-    }
+    if (!ticking && !S.running) await readChannelsNow();
     watchChannels();
   }, channelPollMs({ visible: S.visible, usedAt, now: Date.now() }));
+}
+// One read of the channels, when the wallet holds a live one and nobody is reviewing a payment or
+// waiting on the library; also between two commands of the scheduled pass (readsBetween).
+async function readChannelsNow() {
+  const live = (S.channels || []).some((c) => c && c.coin_state === 'live');
+  if (!(live && S.open && S.defaultMode && !(Date.now() < (S.holdUntil || 0)) && !upkeepHeld() && !Q.personWaits())) return;
+  S.chanReadAt = Date.now();
+  try {
+    const before = S.channels || [];
+    const after = (await call('run', { command: 'channel_sync', args: {} })).result;
+    if (Array.isArray(after)) S.channels = after.map((c) => ({ ...(before.find((x) => x.leaf_id === c.leaf_id) || {}), ...c }));
+    const came = channelArrivals(before, S.channels);
+    if (came.length) {
+      S.channelIn = Date.now();
+      await reportBalance();
+      for (const a of came) {
+        console.info(`[leaves] channel ${String(a.leaf_id).slice(0, 12)} paid ${a.atoms} of ${String(a.asset).slice(0, 8)}`);
+        emit('leafArrived', { leaf_id: a.leaf_id, asset: a.asset, value: String(a.atoms), kind: 'channel' });
+      }
+    }
+  } catch { /* the next read tries again */ }
 }
 
 // `care`, when it is due (or `force`d): the wallet's own upkeep, with no prompt.
@@ -351,6 +414,10 @@ async function careIfDue(force = false) {
     console.warn('[leaves] care failed:', S.lastCare.error.message);
   }
   emit('leafCared', S.lastCare);
+  // The bond's watch reads the chain for a while: a person waiting goes first, and it runs at a
+  // later pass.
+  await readsBetween();
+  if (yieldNow()) { S.bondLater = true; return S.lastCare; }
   await claimsIfDue(true);
   await watchBond();
   return S.lastCare;
@@ -412,7 +479,7 @@ async function takeIn({ asset, since = 0, ms = TAKE_IN_MS } = {}) {
   const arrived = await readUntil({ came, ms: Number(ms || TAKE_IN_MS), every: TAKE_IN_EVERY_MS, read: async () => {
     S.lastAsked = Date.now();
     const t0 = Date.now();
-    try { arrivals((await call('run', { command: 'mailbox' })).result); } catch (e) { console.warn('[leaves] mailbox read:', e && e.message); }
+    try { arrivals((await call('run', { command: 'mailbox' }, PROMPT)).result); } catch (e) { console.warn('[leaves] mailbox read:', e && e.message); }
     if (Date.now() - t0 > 2000) console.info(`[leaves] mailbox read: ${Date.now() - t0} ms`);
   } });
   if (arrived) await reportBalance();
@@ -502,17 +569,31 @@ function watchMailbox() {
   clearTimeout(S.mailTimer);
   if (!S.open || !S.defaultMode) return;
   S.mailTimer = setTimeout(async () => {
-    if (S.open && S.defaultMode && !ticking && !upkeepHeld() && Date.now() - S.lastAsked > MAILBOX_QUIET_MS) {
-      try {
-        const mb = (await call('run', { command: 'mailbox' })).result;
-        if (mb && ((mb.accepted || []).length || (mb.pending || []).length)) {
-          arrivals(mb);
-          await reportBalance();
-        }
-      } catch { /* the next read tries again */ }
-    }
+    if (!ticking) await readMailboxNow();
     watchMailbox();
   }, MAILBOX_POLL_MS);
+}
+// One read of the mailbox in default mode, when nobody waits on the library; also between two
+// commands of the scheduled pass (readsBetween), so a payment to the receive code is not held up
+// behind the whole pass.
+async function readMailboxNow() {
+  if (!(S.open && S.defaultMode && !upkeepHeld() && !Q.personWaits() && Date.now() - S.lastAsked > MAILBOX_QUIET_MS)) return;
+  S.mailReadAt = Date.now();
+  try {
+    const mb = (await call('run', { command: 'mailbox' })).result;
+    if (mb && ((mb.accepted || []).length || (mb.pending || []).length)) {
+      arrivals(mb);
+      await reportBalance();
+    }
+  } catch { /* the next read tries again */ }
+}
+// Between two commands of the scheduled pass: the reads that show a payment to this wallet, when
+// they are due. A pass is several commands, some of them long, and the watchers above wait for it.
+async function readsBetween() {
+  if (!S.defaultMode) return;
+  if (Date.now() - (S.mailReadAt || 0) >= MAILBOX_POLL_MS) await readMailboxNow();
+  const usedAt = Math.max(S.lastAsked || 0, S.inUseAt || 0, S.channelIn || 0);
+  if (Date.now() - (S.chanReadAt || 0) >= channelPollMs({ visible: S.visible, usedAt, now: Date.now() })) await readChannelsNow();
 }
 
 // While a person waits on the wallet (a trade's price, its confirmation: the popup's `holdUpkeep`),
@@ -521,10 +602,27 @@ function watchMailbox() {
 // The pass runs once the hold ends; a hold lapses by itself after the time it was given.
 const upkeepHeld = () => Date.now() < (S.upkeepHoldUntil || 0);
 
+// A person waits on the library (a command of theirs queued or running, or the popup's hold): the
+// pass gives way between two of its commands, and takes up the rest at its next tick. One long
+// command already running cannot be cut short, so a pass does not start within PERSON_QUIET_MS of
+// a person's last command either (a trade's quote asks the library several times, with the
+// network between), unless it has been put off for PASS_DEFER_MOST_MS already or a take waits on it.
+const PERSON_QUIET_MS = 15_000;
+const PASS_DEFER_MOST_MS = 90_000;
+const HELD = Symbol('held');
+const yieldNow = () => upkeepHeld() || Q.personWaits();
+const giveWay = async () => { if (yieldNow()) throw HELD; await readsBetween(); if (yieldNow()) throw HELD; };
+
 let ticking = false;
 async function tick() {
   if (!S.open || ticking) return;
   if (upkeepHeld()) { plan(Math.min(S.upkeepHoldUntil - Date.now(), 5000)); return; }
+  const quiet = PERSON_QUIET_MS - (Date.now() - (S.lastAsked || 0));
+  if ((quiet > 0 || Q.personWaits()) && !S.watchPending && !takeWaits()) {
+    S.deferredSince = S.deferredSince || Date.now();
+    if (Date.now() - S.deferredSince < PASS_DEFER_MOST_MS) { plan(Math.max(1000, Math.min(quiet, 5000))); return; }
+  }
+  S.deferredSince = 0;
   ticking = true;
   let wait = S.tickMs;
   try {
@@ -541,15 +639,27 @@ async function tick() {
     // planned coin only at its plan's sync_by, and a wallet back after an expiry must
     // take up the coin the plan's step made before it shows its balance.
     if (!d.sync && S.syncOnOpen) d = { sync: true, why: 'open' };
+    // Asked for by a quote that found coins not ready yet (`syncSoon`).
+    if (!d.sync && S.syncAsked) d = { sync: true, why: 'asked' };
+    await giveWay();
     if (d.sync) {
-      S.watchPending = false;
+      S.watchPending = false; S.syncAsked = false;
       await sync(d.why);
       S.syncOnOpen = false;
+      await giveWay();
       await careIfDue();
+      await giveWay();
       S.schedule = (await call('run', { command: 'schedule' })).result;
     } else if (careDue(S.careAt, Date.now(), S.careMs)) {
       await careIfDue();
+      await giveWay();
       S.schedule = (await call('run', { command: 'schedule' })).result;
+    } else if (S.bondLater) {
+      // The bond's watch a pass gave way before.
+      S.bondLater = false;
+      await claimsIfDue(true);
+      await giveWay();
+      await watchBond();
     } else if (freshRequestWaits(s)) {
       // A request just handed out: read the mailbox, not the whole sync.
       const mb = (await call('run', { command: 'mailbox' })).result;
@@ -560,19 +670,27 @@ async function tick() {
     }
     // A freeze or a lift is read from the node at each coin's landing by `coins`: while
     // the wallet holds a leaf of a supervised asset, read them on every tick.
+    await giveWay();
     if (!d.sync) await claimsIfDue();
     if (!d.sync && holdsSupervised()) {
+      await giveWay();
       S.coins = (await call('run', { command: 'coins' })).result || [];
       await reportBalance();
     }
+    await giveWay();
     if (S.defaultMode) await boardArrivals();
+    await giveWay();
     if (S.defaultMode) await refreshReceived();
     S.lastError = null;
     wait = inFlight(S.coins, S.participations) ? Math.min(S.tickMs, 30_000) : nextAskMs(S.schedule, S.tickMs);
     if (takeWaits()) wait = Math.min(wait, S.watchMs);
   } catch (e) {
-    S.lastError = errorOf(e);
-    console.warn('[leaves] the scheduled pass failed:', S.lastError.message);
+    // Given way to a person: the rest of the pass at the next tick, soon.
+    if (e === HELD) wait = 5000;
+    else {
+      S.lastError = errorOf(e);
+      console.warn('[leaves] the scheduled pass failed:', S.lastError.message);
+    }
   }
   ticking = false;
   plan(Math.max(wait, 1000));
@@ -581,11 +699,11 @@ async function tick() {
 // One command of the library. The node runs one UTXO-set scan at a time, and every wallet
 // sharing it scans: a read refused for that alone is asked again, a little later. A
 // command that signs or moves anything is never repeated here; the caller sees the refusal.
-async function runCommand(command, cargs) {
+async function runCommand(command, cargs, prio = UPKEEP) {
   S.running++;
   try {
     for (let i = 0; ; i++) {
-      try { return await call('run', { command, args: cargs }); }
+      try { return await call('run', { command, args: cargs }, prio); }
       catch (e) {
         if (!(READS.has(command) || command === 'sync') || i >= 8 || !SCAN_BUSY.test(String((e && e.message) || e))) throw e;
         await new Promise((r) => setTimeout(r, 750 * (i + 1)));
@@ -596,13 +714,17 @@ async function runCommand(command, cargs) {
     if (!READS.has(command)) {
       // A command that moves coins (a take, an order, a board, a send) changes what
       // the schedule follows: read the coins and participations again now, so the
-      // next tick syncs for what moves instead of waiting for the next sync to see it.
-      try {
-        S.coins = (await call('run', { command: 'coins' })).result || [];
-        S.participations = (await call('run', { command: 'participations' })).result || [];
-      } catch { /* the next sync reads them */ }
-      await reportBalance();
-      if (inFlight(S.coins, S.participations)) plan(1000);
+      // next tick syncs for what moves instead of waiting for the next sync to see it. A command
+      // a person waits on is answered first, and read after: its next step goes before the read.
+      const after = async () => {
+        try {
+          S.coins = (await call('run', { command: 'coins' })).result || [];
+          S.participations = (await call('run', { command: 'participations' })).result || [];
+        } catch { /* the next sync reads them */ }
+        await reportBalance();
+        if (inFlight(S.coins, S.participations)) plan(1000);
+      };
+      if (prio >= PROMPT) after().catch(() => {}); else await after();
     }
   }
 }
@@ -691,11 +813,16 @@ async function handle(op, args) {
     case 'run': {
       if (!S.open) throw { kind: 'refused', message: 'the leaf wallet is not open' };
       const command = String(args.command);
+      // A sync asked by the trade composer, which follows open trades with one: while a person
+      // waits on a quote or a confirmation it waits for them, and one asked within SYNC_SHARED_MS
+      // of the last sync's end (whoever asked it) is answered by that sync instead of another.
+      if (command === 'sync') return await syncForCaller(!!args.paying);
       if (args.paying) S.lastAsked = Date.now();
       if (!args.paying) return await runCommand(command, args.args || {});
-      return await payThrough(command, args.args || {}, {
-        run: runCommand,
-        sync: () => sync('release'),
+      try {
+        return await payThrough(command, args.args || {}, {
+        run: (c, a) => runCommand(c, a, PERSON),
+        sync: () => sync('release', PERSON),
         coins: async () => (await call('run', { command: 'coins' })).result || [],
         waiting: (st) => {
           const first = !!st && !S.releasing;
@@ -703,11 +830,18 @@ async function handle(op, args) {
           if (first) console.info(`[leaves] ${st.command}: the unplanned leaves fall short; ${st.coins.length} planned leaf(s) given up in the next round, the payment asked again once it is final`);
           emit('leafReleasing', S.releasing);
         },
-      });
+        });
+      } finally { S.lastAsked = Date.now(); }
     }
     case 'sync':
       if (!S.open) throw { kind: 'refused', message: 'the leaf wallet is not open' };
       return await sync('asked');
+    case 'syncSoon':
+      // A sync at the pass's next moment no person waits (a quote that found coins not ready asks
+      // for one, then reads the coins at once: a sync started now would hold that read).
+      if (!S.open) throw { kind: 'refused', message: 'the leaf wallet is not open' };
+      S.syncAsked = true; plan(PERSON_QUIET_MS);
+      return { soon: true };
     case 'takeIn':
       if (!S.open) throw { kind: 'refused', message: 'the leaf wallet is not open' };
       return await takeIn(args);

@@ -97,7 +97,7 @@ async function siteOrders() {
       const f = await figures(await engineBalances(), false).catch(() => ({ total: {} }));
       return BigInt((f.total || {})[a] || 0);
     },
-    prepare: () => { leaves.hostOp('sync').catch(() => {}); },
+    prepare: () => { leaves.hostOp('syncSoon').catch(() => {}); },
     store: st, tag: () => tag || 'default',
     log: (...a) => console.log(...a),
   });

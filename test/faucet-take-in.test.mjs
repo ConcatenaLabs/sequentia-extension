@@ -48,7 +48,7 @@ test('the service worker: the code shown before at once, the coin taken in, neve
   assert.match(f, /e\.status = r\.status; e\.reason = j\.reason \|\| null;/);
   const host = read('offscreen-leaves.js');
   assert.match(host, /case 'takeIn':[\s\S]{0,140}return await takeIn\(args\);/);
-  assert.match(host, /arrivals\(\(await call\('run', \{ command: 'mailbox' \}\)\)\.result\)/);
+  assert.match(host, /arrivals\(\(await call\('run', \{ command: 'mailbox' \}, PROMPT\)\)\.result\)/);
   const popup = read('popup/popup.js');
   assert.match(popup, /faucetWaiting = r\.arriving && r\.arriving\.asset \? r\.arriving : null;/);
   assert.match(popup, /msg\.event === 'leafArrived' && faucetWaiting/);
