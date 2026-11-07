@@ -308,7 +308,7 @@ export function homeUnderWay (coins, kept, unreachable) {
 // block is in, the operator's payment to the address and its block, and the wallets' own passes
 // and reads of the chain: ADDRESS_PATH_BLOCKS blocks and ADDRESS_PATH_SLACK_S seconds beside the
 // settlement, rounded up to five minutes. On the testnet (a settlement a minute, a block a
-// minute) that is ten minutes; payments measured there took four to seven. A time stated is one
+// minute) that is ten minutes; payments measured there took three to six. A time stated is one
 // the wallet keeps. -> minutes, or null when the operator publishes no interval.
 export const ADDRESS_PATH_BLOCKS = 4
 export const ADDRESS_PATH_SLACK_S = 240
