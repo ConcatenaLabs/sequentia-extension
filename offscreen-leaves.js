@@ -293,7 +293,7 @@ async function syncOnce(by, prio) {
   const t0 = Date.now();
   const v = await call('run', { command: 'sync', args: {} }, prio);
   S.lastSyncValue = v;
-  S.mailReadAt = Date.now();   // a sync reads the mailbox
+  S.mailReadAt = S.mailReadEnd = Date.now();   // a sync reads the mailbox
   const r = (v && v.result) || {};
   // A slow sync names its slowest steps (the library's cost_by_step): what to make faster.
   if (Date.now() - t0 > 10_000) {
@@ -565,13 +565,18 @@ async function refreshReceived() {
   }
 }
 
+// The gap between two mailbox reads: MAILBOX_POLL_MS, or twice what the last read took when that
+// is longer. A read the operator answers slowly (10 s and more were seen) otherwise kept the
+// library busy most of the time with reads that find nothing, and every other command waited.
+const mailboxGapMs = () => Math.max(MAILBOX_POLL_MS, 2 * (S.mailCostMs || 0));
+const mailboxDue = () => Date.now() - (S.mailReadEnd || 0) >= mailboxGapMs();
 function watchMailbox() {
   clearTimeout(S.mailTimer);
   if (!S.open || !S.defaultMode) return;
   S.mailTimer = setTimeout(async () => {
-    if (!ticking) await readMailboxNow();
+    if (!ticking && mailboxDue()) await readMailboxNow();
     watchMailbox();
-  }, MAILBOX_POLL_MS);
+  }, Math.max(1000, mailboxGapMs() - (Date.now() - (S.mailReadEnd || 0))));
 }
 // One read of the mailbox in default mode, when nobody waits on the library; also between two
 // commands of the scheduled pass (readsBetween), so a payment to the receive code is not held up
@@ -580,18 +585,20 @@ async function readMailboxNow() {
   if (!(S.open && S.defaultMode && !upkeepHeld() && !Q.personWaits() && Date.now() - S.lastAsked > MAILBOX_QUIET_MS)) return;
   S.mailReadAt = Date.now();
   try {
+    const t0 = Date.now();
     const mb = (await call('run', { command: 'mailbox' })).result;
+    S.mailCostMs = Date.now() - t0;
     if (mb && ((mb.accepted || []).length || (mb.pending || []).length)) {
       arrivals(mb);
       await reportBalance();
     }
-  } catch { /* the next read tries again */ }
+  } catch { /* the next read tries again */ } finally { S.mailReadEnd = Date.now(); }
 }
 // Between two commands of the scheduled pass: the reads that show a payment to this wallet, when
 // they are due. A pass is several commands, some of them long, and the watchers above wait for it.
 async function readsBetween() {
   if (!S.defaultMode) return;
-  if (Date.now() - (S.mailReadAt || 0) >= MAILBOX_POLL_MS) await readMailboxNow();
+  if (mailboxDue()) await readMailboxNow();
   const usedAt = Math.max(S.lastAsked || 0, S.inUseAt || 0, S.channelIn || 0);
   if (Date.now() - (S.chanReadAt || 0) >= channelPollMs({ visible: S.visible, usedAt, now: Date.now() })) await readChannelsNow();
 }

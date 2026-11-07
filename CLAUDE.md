@@ -75,7 +75,8 @@ wasm. Read this before changing anything.
   hidden beside a blinded output to the wallet's own confidential address, a round amount first
   moved out of the tree while the popup says so and asks again, `vendor/confidential-pay.js` and
   `src/confidential-send.js`). The leaf host boards on-chain assets
-  and reads the mailbox every 10 s in default mode (`defaults`). The payment name's link with the name service
+  and reads the mailbox every 10 s in default mode (`defaults`), or twice as long as its last
+  read took when that is longer, so a slow operator never keeps the library busy with reads. The payment name's link with the name service
   (`vendor/lnaddr.js` `mountLnAddress`) lives in `offscreen-ark.js` beside the ark that makes
   its invoices; it leaves the name's stock of signed receive codes with the service and tops it
   up (`vendor/name-stock.js`), each code made by the service worker at the index the stock picks
