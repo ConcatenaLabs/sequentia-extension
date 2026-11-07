@@ -596,6 +596,13 @@ export function hasSeqTx(txid) {
   try { return wollet.transactions().some((t) => t.txid().toString() === txid); } catch { return false; }
 }
 
+// Whether this wallet's reading of the Sequentia chain holds transaction `txid` (a board the leaf
+// wallet made): undefined while there is no reading to ask.
+export function seqTxHeld(txid) {
+  if (!wollet) return undefined;
+  try { return wollet.transactions().some((t) => t.txid().toString() === txid); } catch { return undefined; }
+}
+
 // ---- speeding up what waits (child pays for parent; vendor/speed-up.js) ----
 // A transaction of the wallet's that waits for a block is sped up by a child spending its
 // output to the wallet and paying for both. Sequentia: the kit's `cpfpOf`, its fee in the

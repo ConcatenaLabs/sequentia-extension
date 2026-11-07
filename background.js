@@ -371,7 +371,7 @@ async function overview({ withLn = false } = {}) {
   push('BTC', bal.btc, true);
   // A board the leaf wallet just made spent these coins, and its leaf counts as arriving already:
   // until this reading of the chain shows them spent, they come off the chain's part.
-  for (const h of Object.keys(bal.seq)) push(h, await leaves.onchainLess(h, bal.seq[h]), false);
+  for (const h of Object.keys(bal.seq)) push(h, await leaves.onchainLess(h, bal.seq[h], engine.seqTxHeld), false);
   // LN-only balances: an asset can live ENTIRELY in Lightning channels (bought
   // on the LNDEX, zero on-chain trace) — it must show like any other holding.
   for (const k of Object.keys(lnSum.perKind)) {

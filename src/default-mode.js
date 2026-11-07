@@ -32,7 +32,7 @@ import { fromWire } from './wire.js';
 import { codeNamesChannels } from './leaf-schedule.js';
 import { boardCap, moveDown, direct, lnFits } from './ark-band.js';
 import {
-  pinnedOperator, defaultWatchtowers, checkPinned, treeRoute, parseReceiveCode, arrivingAtoms, addressRoute, arrivalMinutes,
+  pinnedOperator, defaultWatchtowers, checkPinned, treeRoute, parseReceiveCode, arrivingAtoms, addressRoute, arrivalMinutes, offboardOutcome,
   DEFAULT_WORDS, JOIN_RETRY_MS, BOARD_QUIET_MS, vestingShort,
 } from '../vendor/default-arca.js';
 import { buildPayCode, readPayCode, expandRequest, nameLnurlUrl } from '../vendor/pay-code.js';
@@ -549,7 +549,11 @@ export async function prepareSend({ to, amtS, asset }) {
   if (engine.isConfidentialAddress(address)) return await confidentialSend({ address, asset, atoms, amt });
   // An address: from the chain when the wallet's coins there cover it, else out of the tree.
   const { held, arriving } = await treeHeld(asset);
-  const route = addressRoute(atoms, engine.availableFor(asset), held - arriving);
+  // What a board just spent is not the chain's to pay from, though the wallet's reading may still
+  // list it: the chain is only tried with what is left beside the board (leaves.onchainLess), so
+  // a payment right after a board never signs a spent coin.
+  const onchain = await leaves.onchainLess(asset, engine.availableFor(asset), engine.seqTxHeld).catch(() => engine.availableFor(asset));
+  const route = addressRoute(atoms, onchain, held - arriving);
   if (route === 'chain') {
     const plan = await chainReview({ address, amtS, asset, amt, request });
     if (plan) return plan;
@@ -560,12 +564,12 @@ export async function prepareSend({ to, amtS, asset }) {
     catch (e) { console.warn('[default] offboard quote:', e.message); throw new Error(DEFAULT_WORDS.addressShort); }
     const info = await leafInfo().catch(() => null);
     const f = info && info.server_info && info.server_info.fills;
-    const minutes = arrivalMinutes(f && f.round_interval_seconds);
+    const minutes = arrivalMinutes(f && f.round_interval_seconds, f && f.block_seconds);
     const fee = q && q.fee ? big(q.fee.amount) : 0n;
     const lines = [];
     if (fee > 0n) lines.push(DEFAULT_WORDS.fee(fmtAtoms(fee, m.precision || 0), m.ticker));
     lines.push(DEFAULT_WORDS.arrivesWithin(minutes));
-    return { id: stash({ kind: 'offboard', asset, atoms, address, q, minutes, amt, ticker: m.ticker }), title: DEFAULT_WORDS.sendTitle(amt, m.ticker), lines, button: DEFAULT_WORDS.send };
+    return { id: stash({ kind: 'offboard', asset, atoms, address, q, minutes, block: f && f.block_seconds, amt, ticker: m.ticker }), title: DEFAULT_WORDS.sendTitle(amt, m.ticker), lines, button: DEFAULT_WORDS.send };
   }
   throw new Error(DEFAULT_WORDS.addressShort);
 }
@@ -626,7 +630,8 @@ async function confidentialSend({ address, asset, atoms, amt }) {
     leaves.hostOp('sync').catch(() => {});
   }
   const { atoms: coming, open } = movesComing(asset, records, offboards, (t) => engine.hasSeqTx(t));
-  const minutesOf = (info) => arrivalMinutes(info && info.server_info && info.server_info.fills && info.server_info.fills.round_interval_seconds);
+  const fillsOf = (info) => (info && info.server_info && info.server_info.fills) || {};
+  const minutesOf = (info) => arrivalMinutes(fillsOf(info).round_interval_seconds, fillsOf(info).block_seconds);
   if (open.length) {
     // Coins on their way: waited for, never asked twice.
     const w = moveWaits(open);
@@ -693,7 +698,7 @@ async function confidentialSend({ address, asset, atoms, amt }) {
     catch (e) { console.warn('[default] moving out:', e.message); throw new Error(DEFAULT_WORDS.notMoved); }
     if (v && v.offboard) await keepMove({ id: String(v.offboard), asset, atoms: String(plan.move), at: Date.now() });
     console.info(`[default] moving ${plan.move} of ${asset.slice(0, 8)} to the wallet's address, for a confidential payment of ${atoms}`);
-    return { moving: true, text: DEFAULT_WORDS.movingOut(words(plan.move), DEFAULT_WORDS.confidentialPurpose, arrivalMinutes(v && v.round_within_seconds) || minutesOf(info)) };
+    return { moving: true, text: DEFAULT_WORDS.movingOut(words(plan.move), DEFAULT_WORDS.confidentialPurpose, arrivalMinutes(v && v.round_within_seconds, fillsOf(info).block_seconds) || minutesOf(info)) };
   }
   return await confidentialReview({ address, asset, atoms, amt, margin, onchain, m, prec });
 }
@@ -794,8 +799,9 @@ export async function confirmSend({ id }) {
     }
     if (p.kind === 'offboard') {
       const v = await leaves.runUser('offboard', { asset: p.asset, amount: String(p.atoms), address: p.address, shown: p.q });
-      const mins = arrivalMinutes(v && v.round_within_seconds) || p.minutes;
-      return { text: DEFAULT_WORDS.sentLater(p.amt, p.ticker, mins), ms: Date.now() - t0 };
+      // The same payment asked again while the first is on its way is that first one: nothing more
+      // is sent, and the person is told so (vendor/default-arca.js offboardOutcome).
+      return { text: offboardOutcome(v, p.amt, p.ticker, p.minutes, p.block).text, ms: Date.now() - t0 };
     }
     if (p.kind === 'engine') {
       const r = await engine.confirmSend(p.prepId);

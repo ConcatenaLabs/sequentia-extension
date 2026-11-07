@@ -104,15 +104,17 @@ export async function rememberLeafSum(balance, frozen, redoing, boards, vesting)
 }
 
 // `atoms` of `asset` as the wallet's own reading of the chain shows them, less what a board the
-// leaf wallet just made spent that the reading does not show spent yet: the board's leaf counts
-// as arriving from the moment it is made, so the coins would count twice. A board seen spent, or
-// half an hour old, is forgotten.
-export async function onchainLess(asset, atoms) {
+// leaf wallet just made spent that the reading does not hold yet: the board's leaf counts as
+// arriving from the moment it is made, so the coins would count twice. `holds(txid)` says whether
+// that reading holds a transaction (undefined when it cannot tell): the board is seen once the
+// reading holds it, and a coin that reached the address meanwhile is never taken off for it
+// (vendor/default-arca.js onchainLessBoards). A board seen, or half an hour old, is forgotten.
+export async function onchainLess(asset, atoms, holds) {
   const tag = await walletTag();
   const all = (await stGet('local', SUM_KEY)) || {};
   const rec = tag && all[tag] && all[tag].boards && all[tag].boards[asset];
   if (!rec) return BigInt(atoms || 0);
-  const r = onchainLessBoards(rec, atoms, Date.now());
+  const r = onchainLessBoards(rec, atoms, Date.now(), holds);
   if (r.seen) { delete all[tag].boards[asset]; await stSet('local', SUM_KEY, all); }
   return r.atoms;
 }
