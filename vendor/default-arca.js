@@ -108,6 +108,10 @@ export const DEFAULT_WORDS = Object.freeze({
   // A payment of an asset on the chain from the wallet's own coins there, once broadcast.
   sentBlock: (amount, ticker) => `Sent ${amount} ${ticker}. It arrives after the next block, in about a minute.`,
   stillArriving: (ticker) => `Part of this ${ticker} is still arriving: try again in a moment.`,
+  // A payment the library refused for want of what it can spend now: the most it can send, which
+  // leaves a little of the asset for the fees of the transactions the payment keeps ready.
+  sendUpTo: (amount, ticker) => `You can send up to ${amount} ${ticker} this way now: a payment keeps a little back for its fees.`,
+  sendNoneNow: (ticker) => `None of your ${ticker} can be sent this way right now: try again in a moment.`,
   // A payment to an address whose coins are held but not spendable yet (the change of a payment
   // just made, a coin just received): when it can go, as long as a payment to an address takes.
   stillArrivingWithin: (ticker, minutes) => minutes
@@ -509,6 +513,25 @@ export function treeRoute (text, info) {
   if (!info.operator || !info.genesis_hash) return null
   if (r.operator !== info.operator || r.genesis_hash !== info.genesis_hash) return null
   return r
+}
+
+// The most a payment of `paid` atoms the library refused for want of funds could send instead, in
+// atoms: what its live coins hold less the margins the payment leaves for its transactions' fees
+// ("the wallet holds H of asset A in live coins, and paying P takes N with the margins …": H less
+// N - P), or that much less than `paid` when the change would fall below the operator's smallest
+// leaf. 0n when nothing can be sent; null for any other refusal.
+export function sendableNow (paid, message) {
+  const m = String(message || '')
+  const p = BigInt(paid)
+  const s = m.match(/holds (\d+) of asset \S+ in live coins, and paying (\d+) takes (\d+)/)
+  if (s) {
+    const held = BigInt(s[1]), margins = BigInt(s[3]) - BigInt(s[2])
+    const most = held - (margins > 0n ? margins : 0n)
+    return most > 0n ? (most < p ? most : p) : 0n
+  }
+  const d = m.match(/change would be below the operator's smallest leaf in asset \S+ \((\d+) atoms\)/)
+  if (d) { const most = p - BigInt(d[1]); return most > 0n ? most : 0n }
+  return null
 }
 
 // What of an asset is arriving: the leaf states counted as such in the library's balance.

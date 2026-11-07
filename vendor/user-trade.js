@@ -618,86 +618,98 @@ export function createEngine (deps) {
       return null
     }
     if (entry.source === 'leaf-maker') {
-      // Ask the maker for a firm offer of what the size gives, then read it with the library: what
-      // the wallet gets, gives and pays, and the dates of the coin it gets.
-      const lim = pay < have ? pay : have
-      const guess = marginsSeen.get(payAsset) || 0n
-      const fitted = guess > 0n && lim > guess ? sizeEntry(entry, lim - guess) : null
-      let give = fitted ? fitted.receive : size.receive
-      for (let i = 0; i < 4; i++) {
-        let o
-        // A maker that does not answer a firm offer by the quote's deadline is left out of it; an
-        // offer asked again for less, after the wallet's check, is given the makers' time again,
-        // never past `hard`. Acceptances and releases, which must complete, are never cut short.
-        const askBy = i === 0 ? until : Math.min(Date.now() + firmMs, hard)
-        try { o = await deps.fetchJson(entry.maker + '/v1/firm', { method: 'POST', body: JSON.stringify({ give_asset: receiveAsset, want_asset: payAsset, give: String(give) }), signal: AbortSignal.timeout(Math.max(1000, askBy - Date.now())) }) }
-        catch (e) {
-          log('[user trade] maker firm:', e.message)
-          // The maker holds less than its quote now (its last trade spent some): ask for half.
-          if (/does not hold that much|after its next round/.test(String(e.message))) {
-            give = give / 2n
-            if (give < entry.minReceive) return null
-            continue
-          }
-          return null
+      // A maker's firm offer stays counted as in hand while the wallet's library reads it: a quote
+      // that ends with nothing in hand while one is still being read says the wallet was busy,
+      // never that nobody gave a price (a maker answered in 2 s while the library was held for
+      // five minutes by another source's command).
+      const reads = makerReads, mark = {}
+      try { return await firmMaker(entry, payAsset, receiveAsset, pay, have, size, until, hard, () => reads.add(mark)) } finally { reads.delete(mark) }
+    }
+    return null
+  }
+
+  // Firm terms of a maker's offer: asked of the maker, then read with the library. `answered` is
+  // called once the maker has given an offer and its reading begins.
+  async function firmMaker (entry, payAsset, receiveAsset, pay, have, size, until, hard, answered) {
+    // Ask the maker for a firm offer of what the size gives, then read it with the library: what
+    // the wallet gets, gives and pays, and the dates of the coin it gets.
+    const lim = pay < have ? pay : have
+    const guess = marginsSeen.get(payAsset) || 0n
+    const fitted = guess > 0n && lim > guess ? sizeEntry(entry, lim - guess) : null
+    let give = fitted ? fitted.receive : size.receive
+    for (let i = 0; i < 4; i++) {
+      let o
+      // A maker that does not answer a firm offer by the quote's deadline is left out of it; an
+      // offer asked again for less, after the wallet's check, is given the makers' time again,
+      // never past `hard`. Acceptances and releases, which must complete, are never cut short.
+      const askBy = i === 0 ? until : Math.min(Date.now() + firmMs, hard)
+      try { o = await deps.fetchJson(entry.maker + '/v1/firm', { method: 'POST', body: JSON.stringify({ give_asset: receiveAsset, want_asset: payAsset, give: String(give) }), signal: AbortSignal.timeout(Math.max(1000, askBy - Date.now())) }) }
+      catch (e) {
+        log('[user trade] maker firm:', e.message)
+        // The maker holds less than its quote now (its last trade spent some): ask for half.
+        if (/does not hold that much|after its next round/.test(String(e.message))) {
+          give = give / 2n
+          if (give < entry.minReceive) return null
+          continue
         }
-        let t
-        try { t = await run('swap_read', { offer: o.offer }) } catch (e) {
-          log('[user trade] swap_read:', e.message)
-          noteLiveShort(e)
-          // Paying that much would take all the wallet holds, with the margins its transactions leave
-          // for their fees, or leave change below the operator's smallest leaf: ask again for less, by
-          // what is missing (a site's probe sizes on all the wallet can pay).
-          const over = shortBy(e.message)
-          if (over > 0n && i < 3) {
-            await releaseNow(entry.maker, o.swap)
-            give = give - (over * entry.rateDen + entry.rateNum - 1n) / entry.rateNum - 1n
-            if (give < entry.minReceive) return null
-            continue
-          }
-          release(entry.maker, o.swap); return null
-        }
-        if (t.gets.asset !== receiveAsset || t.gives.asset !== payAsset || big(t.gets.value) !== give) { release(entry.maker, o.swap); return null }
-        const spend = big(t.gives.value) + big(t.pays.margins)
-        marginsSeen.set(payAsset, big(t.pays.margins))
-        const limit = pay < have ? pay : have
-        if (spend > limit) {
+        return null
+      }
+      answered()
+      let t
+      try { t = await run('swap_read', { offer: o.offer }) } catch (e) {
+        log('[user trade] swap_read:', e.message)
+        noteLiveShort(e)
+        // Paying that much would take all the wallet holds, with the margins its transactions leave
+        // for their fees, or leave change below the operator's smallest leaf: ask again for less, by
+        // what is missing (a site's probe sizes on all the wallet can pay).
+        const over = shortBy(e.message)
+        if (over > 0n && i < 3) {
           await releaseNow(entry.maker, o.swap)
-          const over = spend - limit
           give = give - (over * entry.rateDen + entry.rateNum - 1n) / entry.rateNum - 1n
           if (give < entry.minReceive) return null
           continue
         }
-        // The coins the swap makes (what the wallet gets, and its change) are settled in a round
-        // only when they would sit one reassignment short of the operator's limit: otherwise they
-        // are the wallet's to use the moment the maker completes, and nothing waits for a round.
-        // What settling costs, when it is needed, comes from the library.
-        const most = await depthLimit()
-        const settles = t.hops == null || most == null || Number(t.hops) >= most - 1
-        let s = { asset: receiveAsset, value: String(give), fee: '0', after: String(give) }, sc = null
-        const change = big(t.change && t.change.value)
-        if (settles) {
-          try {
-            s = await run('settle_quote', { asset: receiveAsset, value: String(give), expiry: t.dates && t.dates.expiry })
-            if (change > 0n) sc = await run('settle_quote', { asset: payAsset, value: String(change), expiry: t.dates && t.dates.expiry })
-          } catch (e) { log('[user trade] settle_quote:', e.message); release(entry.maker, o.swap); return null }
-        }
-        const total = spend + (sc ? big(sc.fee) : 0n)
-        marginsSeen.set(payAsset, total - big(t.gives.value))
-        if (total > limit) {
-          // Settling the change costs too: what the trade takes in all must fit what is paid.
-          await releaseNow(entry.maker, o.swap)
-          give = give - ((total - limit) * entry.rateDen + entry.rateNum - 1n) / entry.rateNum - 1n
-          if (give < entry.minReceive) return null
-          continue
-        }
-        const fees = [{ asset: payAsset, atoms: big(t.pays.margins) }]
-        if (settles) fees.push({ asset: receiveAsset, atoms: big(s.fee) })
-        if (sc) fees.push({ asset: payAsset, atoms: big(sc.fee) })
-        return { source: entry.source, id: entry.id, entry, receive: big(s.after), give: total, offer: o, terms: t,
-          settle: settles ? { received: s, change: sc } : null, fees }
+        release(entry.maker, o.swap); return null
       }
-      return null
+      if (t.gets.asset !== receiveAsset || t.gives.asset !== payAsset || big(t.gets.value) !== give) { release(entry.maker, o.swap); return null }
+      const spend = big(t.gives.value) + big(t.pays.margins)
+      marginsSeen.set(payAsset, big(t.pays.margins))
+      const limit = pay < have ? pay : have
+      if (spend > limit) {
+        await releaseNow(entry.maker, o.swap)
+        const over = spend - limit
+        give = give - (over * entry.rateDen + entry.rateNum - 1n) / entry.rateNum - 1n
+        if (give < entry.minReceive) return null
+        continue
+      }
+      // The coins the swap makes (what the wallet gets, and its change) are settled in a round
+      // only when they would sit one reassignment short of the operator's limit: otherwise they
+      // are the wallet's to use the moment the maker completes, and nothing waits for a round.
+      // What settling costs, when it is needed, comes from the library.
+      const most = await depthLimit()
+      const settles = t.hops == null || most == null || Number(t.hops) >= most - 1
+      let s = { asset: receiveAsset, value: String(give), fee: '0', after: String(give) }, sc = null
+      const change = big(t.change && t.change.value)
+      if (settles) {
+        try {
+          s = await run('settle_quote', { asset: receiveAsset, value: String(give), expiry: t.dates && t.dates.expiry })
+          if (change > 0n) sc = await run('settle_quote', { asset: payAsset, value: String(change), expiry: t.dates && t.dates.expiry })
+        } catch (e) { log('[user trade] settle_quote:', e.message); release(entry.maker, o.swap); return null }
+      }
+      const total = spend + (sc ? big(sc.fee) : 0n)
+      marginsSeen.set(payAsset, total - big(t.gives.value))
+      if (total > limit) {
+        // Settling the change costs too: what the trade takes in all must fit what is paid.
+        await releaseNow(entry.maker, o.swap)
+        give = give - ((total - limit) * entry.rateDen + entry.rateNum - 1n) / entry.rateNum - 1n
+        if (give < entry.minReceive) return null
+        continue
+      }
+      const fees = [{ asset: payAsset, atoms: big(t.pays.margins) }]
+      if (settles) fees.push({ asset: receiveAsset, atoms: big(s.fee) })
+      if (sc) fees.push({ asset: payAsset, atoms: big(sc.fee) })
+      return { source: entry.source, id: entry.id, entry, receive: big(s.after), give: total, offer: o, terms: t,
+        settle: settles ? { received: s, change: sc } : null, fees }
     }
     return null
   }
@@ -918,6 +930,9 @@ export function createEngine (deps) {
   // now (held in a refresh, received and not yet settled): the trade waits on them, and is said to.
   let liveShort = false
   const noteLiveShort = (e) => { if (/ in live coins/.test(String(e && e.message))) liveShort = true }
+  // The makers' firm offers of this quote that came in and are still being read by the wallet's
+  // library (one mark each): a new set every quote, so a reading a past quote let go of never counts.
+  let makerReads = new Set()
   // When the wallet last asked a refresh of an asset's coins for a resting order (ms), so a quote
   // asked again while that round runs says so rather than asking again.
   const readyingSince = new Map()
@@ -993,6 +1008,8 @@ export function createEngine (deps) {
     quoteStep = onStep
     tooOldFrom = null
     liveShort = false
+    makerReads = new Set()
+    const reads = makerReads
     const A = big(amount)
     if (A <= 0n) return { ok: false, why: 'too-small' }
     // More than the wallet holds to spend, the rest vesting later: refused with the date from
@@ -1107,6 +1124,9 @@ export function createEngine (deps) {
     // Nobody gave firm terms because what the wallet holds of the asset is not live now (given up in
     // a refresh, received and not yet settled): it is being made ready, never "nobody could confirm".
     if (!best && liveShort && payAsset !== 'BTC') return { ok: false, why: 'freeing', held: String(haveLeaf), soon: soonNow }
+    // A maker gave firm terms in time and the wallet's library was still reading them when the
+    // quote's time ran out (held by a long command of its own): the wallet was busy, nobody refused.
+    if (!best && reads.size > 0) return { ok: false, why: 'wallet-busy' }
     if (!best) return { ok: false, why: !es.length ? 'not-offered' : ind.length ? 'no-firm-offer' : 'too-small' }
     const ticket = { payAsset, receiveAsset, amountIn: String(best.give), amountOut: String(best.receive),
       fees: best.fees.map((f) => ({ asset: f.asset, atoms: String(f.atoms) })), source: best.source }
