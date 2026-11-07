@@ -83,5 +83,5 @@ test('Send pays a confidential address with its amount hidden, never out of the 
   // The popup asks again while the coins move, and shows the review once they are there.
   assert.match(read('popup/popup.js'), /while \(plan && plan\.moving\) \{/);
   // Removing the wallet forgets its moves.
-  assert.match(js, /for \(const k of \[CODE_KEY, ARK_SUM_KEY, MOVES_KEY\]\)/);
+  assert.match(js, /for \(const k of \[CODE_KEY, ARK_SUM_KEY, MOVES_KEY, PAID_KEY\]\)/);
 });

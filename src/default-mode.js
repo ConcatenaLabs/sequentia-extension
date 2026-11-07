@@ -33,7 +33,7 @@ import { codeNamesChannels } from './leaf-schedule.js';
 import { boardCap, moveDown, direct, lnFits } from './ark-band.js';
 import {
   pinnedOperator, defaultWatchtowers, checkPinned, treeRoute, parseReceiveCode, arrivingAtoms, addressRoute, arrivalMinutes, offboardOutcome,
-  DEFAULT_WORDS, JOIN_RETRY_MS, BOARD_QUIET_MS, vestingShort,
+  offboardEnds, offboardNewsText, DEFAULT_WORDS, JOIN_RETRY_MS, BOARD_QUIET_MS, vestingShort,
 } from '../vendor/default-arca.js';
 import { buildPayCode, readPayCode, expandRequest, nameLnurlUrl } from '../vendor/pay-code.js';
 import { receivableAssets, receiveState } from '../vendor/asset-lightning.js';
@@ -47,6 +47,10 @@ import { confidentialPlan, ownShare, feeMarginAtoms, liveFromRefusal } from '../
 const CODE_KEY = 'ext.default.code';     // { [walletTag]: { text, owner, until, channels } }
 const MOVES_KEY = 'ext.default.moves';   // { [walletTag]: [{ id, asset, atoms, at }] }: moves out for a confidential payment
 const ARK_SUM_KEY = 'ext.ark.sum';       // { [walletTag]: { total, spendable, arriving } }
+// { [walletTag]: [{ offboard, asset, atoms, fee, address, at, stage, told? }] }: payments to an address
+// out of the tree, followed until the library says they are made, unmade or taken back.
+const PAID_KEY = 'ext.default.addressPayments';
+const PAID_KEEP = 100;
 const CODE_MARGIN_S = 86_400;
 const BTC_BOARD_QUIET_MS = 120_000;
 const big = (v) => { try { return BigInt(v ?? 0); } catch { return 0n; } };
@@ -553,7 +557,16 @@ export async function prepareSend({ to, amtS, asset }) {
   // list it: the chain is only tried with what is left beside the board (leaves.onchainLess), so
   // a payment right after a board never signs a spent coin.
   const onchain = await leaves.onchainLess(asset, engine.availableFor(asset), engine.seqTxHeld).catch(() => engine.availableFor(asset));
-  const route = addressRoute(atoms, onchain, held - arriving);
+  // What is arriving, less what this wallet's payments still on their way give up (that comes back
+  // only as their change): a payment it would cover is refused as still arriving, with when.
+  const out = (await addressPaymentRecords()).filter((r) => r.stage === 'pending' && r.asset === asset).reduce((n, r) => n + big(r.atoms) + big(r.fee), 0n);
+  const comingBack = arriving - out > 0n ? arriving - out : 0n;
+  const route = addressRoute(atoms, onchain, held - arriving, 0n, comingBack);
+  if (route === 'arriving') {
+    const info = await leafInfo().catch(() => null);
+    const f = info && info.server_info && info.server_info.fills;
+    throw new Error(DEFAULT_WORDS.stillArrivingWithin(m.ticker, arrivalMinutes(f && f.round_interval_seconds, f && f.block_seconds)));
+  }
   if (route === 'chain') {
     const plan = await chainReview({ address, amtS, asset, amt, request });
     if (plan) return plan;
@@ -569,7 +582,7 @@ export async function prepareSend({ to, amtS, asset }) {
     const lines = [];
     if (fee > 0n) lines.push(DEFAULT_WORDS.fee(fmtAtoms(fee, m.precision || 0), m.ticker));
     lines.push(DEFAULT_WORDS.arrivesWithin(minutes));
-    return { id: stash({ kind: 'offboard', asset, atoms, address, q, minutes, block: f && f.block_seconds, amt, ticker: m.ticker }), title: DEFAULT_WORDS.sendTitle(amt, m.ticker), lines, button: DEFAULT_WORDS.send };
+    return { id: stash({ kind: 'offboard', asset, atoms, fee: String(fee), address, q, minutes, block: f && f.block_seconds, amt, ticker: m.ticker }), title: DEFAULT_WORDS.sendTitle(amt, m.ticker), lines, button: DEFAULT_WORDS.send };
   }
   throw new Error(DEFAULT_WORDS.addressShort);
 }
@@ -584,7 +597,9 @@ async function chainReview({ address, amtS, asset, amt, request = null }) {
   const lines = [];
   if (prep.review.feeEst) lines.push(DEFAULT_WORDS.fee(fmtAtoms(big(prep.review.feeEst), meta(prep.review.feeAssetHex).precision || 0), meta(prep.review.feeAssetHex).ticker));
   if (request) lines.unshift(DEFAULT_WORDS.byAddress(DEFAULT_WORDS.arrivesNextBlock));
-  else lines.push(DEFAULT_WORDS.arrivesWithin(1));
+  else lines.push(DEFAULT_WORDS.arrivesNextBlock);
+  // The contract's review of a payment on the chain: to whom, its fee, when it arrives.
+  lines.unshift(BTC_WORDS.to + ' ' + address.slice(0, 14) + '\u2026');
   return { id: stash({ kind: 'engine', prepId: prep.id, chain: 'sequentia', amt, ticker: m.ticker }), title: DEFAULT_WORDS.sendTitle(amt, m.ticker), lines, button: DEFAULT_WORDS.send };
 }
 
@@ -800,13 +815,19 @@ export async function confirmSend({ id }) {
     if (p.kind === 'offboard') {
       const v = await leaves.runUser('offboard', { asset: p.asset, amount: String(p.atoms), address: p.address, shown: p.q });
       // The same payment asked again while the first is on its way is that first one: nothing more
-      // is sent, and the person is told so (vendor/default-arca.js offboardOutcome).
-      return { text: offboardOutcome(v, p.amt, p.ticker, p.minutes, p.block).text, ms: Date.now() - t0 };
+      // is sent, and the person is told so (vendor/default-arca.js offboardOutcome). A new one reads
+      // "Sending" until the library says it is made: the popup follows it (`follow`,
+      // addressPayment), and "Sent" is said only then (`sent`).
+      const o = offboardOutcome(v, p.amt, p.ticker, p.minutes, p.block);
+      const id = v && v.offboard ? String(v.offboard) : null;
+      if (!o.sent || !id) return { text: o.text, ms: Date.now() - t0 };
+      await keepAddressPayment({ offboard: id, asset: p.asset, atoms: String(p.atoms), fee: String(p.fee || '0'), address: p.address, at: Date.now(), stage: 'pending' });
+      return { text: o.text, ms: Date.now() - t0, follow: id, sent: DEFAULT_WORDS.sentLater(p.amt, p.ticker, o.minutes) };
     }
     if (p.kind === 'engine') {
       const r = await engine.confirmSend(p.prepId);
       noteOwnPayment(r.chain);
-      return { text: p.chain === 'bitcoin' ? BTC_WORDS.sentBlock(p.amt) : DEFAULT_WORDS.sentLater(p.amt, p.ticker, 1), ms: Date.now() - t0 };
+      return { text: p.chain === 'bitcoin' ? BTC_WORDS.sentBlock(p.amt) : DEFAULT_WORDS.sentBlock(p.amt, p.ticker), ms: Date.now() - t0 };
     }
     if (p.kind === 'ark') {
       const r = fromWire(await arkHost('send', { to: p.to, sats: String(p.sats) }));
@@ -839,8 +860,74 @@ export async function closeWallets() {
   arkAddress = null;
 }
 export async function forgetWallet(tag) {
-  for (const k of [CODE_KEY, ARK_SUM_KEY, MOVES_KEY]) {
+  for (const k of [CODE_KEY, ARK_SUM_KEY, MOVES_KEY, PAID_KEY]) {
     const all = (await stGet('local', k)) || {};
     if (tag && all[tag]) { delete all[tag]; await stSet('local', k, all); }
   }
+}
+
+// ---- payments to an address out of the tree, followed to their end (#604 of the web wallet) ----
+async function addressPaymentRecords() {
+  const tag = await walletTag();
+  if (!tag) return [];
+  const all = (await stGet('local', PAID_KEY)) || {};
+  return Array.isArray(all[tag]) ? all[tag] : [];
+}
+async function saveAddressPayments(list) {
+  const tag = await walletTag();
+  if (!tag) return;
+  const all = (await stGet('local', PAID_KEY)) || {};
+  all[tag] = list.slice(-PAID_KEEP);
+  await stSet('local', PAID_KEY, all);
+}
+async function keepAddressPayment(rec) {
+  const list = (await addressPaymentRecords()).filter((r) => r && r.offboard !== rec.offboard);
+  list.push(rec);
+  await saveAddressPayments(list);
+}
+// Reads the library's `offboards` against the records and writes down where each payment stands
+// (vendor/default-arca.js offboardEnds); `sync` lets the library move them on first, as the popup
+// does while it shows one. Only while one is still pending. -> the records.
+let following = null;
+async function followAddressPayments({ sync = false } = {}) {
+  let list = await addressPaymentRecords();
+  if (!list.some((r) => r.stage === 'pending' || !r.stage) || !(await leafOpen())) return list;
+  if (following) { await following.catch(() => {}); return await addressPaymentRecords(); }
+  following = (async () => {
+    if (sync) await leaves.runAny('sync').catch(() => {});
+    let got; try { got = await leaves.runAny('offboards'); } catch (e) { console.warn('[default] payments to an address:', e.message); return; }
+    list = await addressPaymentRecords();
+    const { stages, news } = offboardEnds(list, got);
+    for (const n of news) console.info('[default] payment to an address', n.offboard, n.state);
+    let changed = false;
+    for (const r of list) { const st = stages.get(r.offboard); if (st && st !== r.stage) { r.stage = st; changed = true; } }
+    if (changed) await saveAddressPayments(list);
+  })();
+  try { await following; } finally { following = null; }
+  return await addressPaymentRecords();
+}
+// Where payment `id` stands now ('pending', 'made', 'not_made', 'reclaimed'), and, for an end other
+// than made, its one sentence. -> { stage, text }
+export async function addressPayment({ id }) {
+  const list = await followAddressPayments({ sync: true });
+  const r = list.find((x) => x.offboard === id);
+  if (!r) return { stage: null, text: '' };
+  const m = meta(r.asset);
+  const text = r.stage === 'not_made' || r.stage === 'reclaimed' ? offboardNewsText(r, fmtAtoms(big(r.atoms), m.precision || 0), m.ticker) : '';
+  return { stage: r.stage, text };
+}
+// The payments to an address that ended without reaching it and that the person has not
+// acknowledged: one sentence each, for Balance's card (OK: addressPaymentTold).
+export async function addressNews() {
+  const list = await followAddressPayments();
+  return list.filter((r) => (r.stage === 'not_made' || r.stage === 'reclaimed') && !r.told).map((r) => {
+    const m = meta(r.asset);
+    return { id: r.offboard, text: offboardNewsText(r, fmtAtoms(big(r.atoms), m.precision || 0), m.ticker) };
+  });
+}
+export async function addressPaymentTold({ id }) {
+  const list = await addressPaymentRecords();
+  const r = list.find((x) => x.offboard === id);
+  if (r && !r.told) { r.told = true; await saveAddressPayments(list); }
+  return { ok: true };
 }

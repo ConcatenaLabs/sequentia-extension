@@ -26,10 +26,11 @@ test('the board names its transaction, and the figure asks the wallet\'s own rea
 });
 
 test('the same payment to an address asked again while the first is on its way is never said to be sent twice', () => {
-  assert.match(src('src/default-mode.js'), /offboardOutcome\(v, p\.amt, p\.ticker, p\.minutes, p\.block\)\.text/);
+  assert.match(src('src/default-mode.js'), /const o = offboardOutcome\(v, p\.amt, p\.ticker, p\.minutes, p\.block\);/);
+  assert.match(src('src/default-mode.js'), /if \(!o\.sent \|\| !id\) return \{ text: o\.text/);
 });
 
 test('a payment to an address right after a board is routed with what the board left on the chain', () => {
   assert.match(src('src/default-mode.js'), /leaves\.onchainLess\(asset, engine\.availableFor\(asset\), engine\.seqTxHeld\)/);
-  assert.match(src('src/default-mode.js'), /addressRoute\(atoms, onchain, held - arriving\)/);
+  assert.match(src('src/default-mode.js'), /addressRoute\(atoms, onchain, held - arriving, 0n, comingBack\)/);
 });

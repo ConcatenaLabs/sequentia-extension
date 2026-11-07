@@ -645,6 +645,9 @@ const uiMethods = {
   'default.faucetReceived': async () => ({ claimed: await dm.faucetReceived() }),
   'default.prepareSend': async (p) => await dm.prepareSend(p || {}),
   'default.confirmSend': async (p) => { const r = await dm.confirmSend(p || {}); engine.sync().catch(() => {}); return r; },
+  'default.addressPayment': async (p) => await dm.addressPayment(p || {}),
+  'default.addressNews': async () => ({ news: await dm.addressNews() }),
+  'default.addressPaymentTold': async (p) => await dm.addressPaymentTold(p || {}),
   'default.joined': async () => ({ joined: !!(await leaves.config()), open: !!((await leaves.status().catch(() => ({}))).open), ark: await dm.arkIsOpen(),
     boardConfirmations: Number(((await dm.arkInfo()) || {}).required_board_confirmations) || null }),
   // The trade composer (popup) asks the leaf library and the ark through these.
