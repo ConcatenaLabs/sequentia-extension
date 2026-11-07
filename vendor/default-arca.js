@@ -30,6 +30,8 @@ function arrivesWords (minutes) {
   return `It arrives within ${minutes} minute${minutes === 1 ? '' : 's'}.`
 }
 
+const KEEP_OPEN = 'Keep this page open meanwhile.'
+
 // When coins moved out of the Ark are ready, from the operator's interval in minutes.
 function readyWords (minutes) {
   if (!minutes) return 'They are ready shortly.'
@@ -107,12 +109,15 @@ export const DEFAULT_WORDS = Object.freeze({
   codeBtc: 'A receive code takes Sequentia assets. For BTC, use an address or an invoice.',
   codeMixed: 'A receive code is paid on its own: send it without other recipients.',
   addressShort: 'This amount can\u2019t be sent to an address right now. Send it to a receive code, or pay an invoice.',
-  arrivesWithin: (minutes) => arrivesWords(minutes),
+  // A payment to an address out of the tree is made in the operator's next settlement, which the
+  // paying wallet signs its part of as it is made: a page closed before then makes nothing (the
+  // coins stay the wallet's), so the review and "Sent" both ask for the page to stay open.
+  arrivesWithin: (minutes) => `${arrivesWords(minutes)} ${KEEP_OPEN}`,
   fee: (amount, ticker) => `Fee ${amount} ${ticker}`,
-  sentLater: (amount, ticker, minutes) => `Sent ${amount} ${ticker}. ${arrivesWords(minutes)}`,
+  sentLater: (amount, ticker, minutes) => `Sent ${amount} ${ticker}. ${arrivesWords(minutes)} ${KEEP_OPEN}`,
   // The same amount of the same asset to the same address, asked while the first is still on its
   // way: the library goes on with the first (`already`) and sends nothing more.
-  sentAlready: (amount, ticker, minutes) => `${amount} ${ticker} to this address is already on its way, so nothing more was sent. ${arrivesWords(minutes)} To pay the same again, send once it has arrived.`,
+  sentAlready: (amount, ticker, minutes) => `${amount} ${ticker} to this address is already on its way, so nothing more was sent. ${arrivesWords(minutes)} ${KEEP_OPEN} To pay the same again, send once it has arrived.`,
   faucetReceived: (what) => `Received ${what}.`,
   // The faucet has paid and the wallet has not taken the coin in yet (it was busy with an update).
   faucetOnItsWay: (what) => `The faucet sent ${what}. It shows in your balance as soon as your wallet has taken it in, usually within a few minutes.`,
