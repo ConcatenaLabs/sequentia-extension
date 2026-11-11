@@ -82,3 +82,16 @@ test('an ordinary application tag mentioning sequentia is still fine', () => {
   const r = checkSigningRequest({ tag: 'sequentia-app-v1', statement: 'hello' });
   assert.equal(r.kind, 'statement');
 });
+
+// The policy server's own authorisations are never a site's to ask for:
+// one "sign this hash" approval would otherwise hand a site the holder's
+// request for a co-sign of a trade it let expire.
+for (const tag of ['openamp-cosign-v1', 'openamp-dvp-v1', 'OpenAMP-Cosign-v1', 'openamp-rotation-v1', 'openamp-next-v2']) {
+  test(`refuses the OpenAMP protocol tag ${tag}`, () => {
+    assert.throws(() => checkSigningRequest({ tag, hash: hex32 }), /OpenAMP protocol tag/);
+  });
+}
+test('a site still has the challenge and document tags', () => {
+  assert.equal(checkSigningRequest({ tag: 'openamp-challenge-v1', statement: 'x' }).kind, 'statement');
+  assert.equal(checkSigningRequest({ tag: 'openamp-document-v1', hash: hex32 }).kind, 'hash');
+});

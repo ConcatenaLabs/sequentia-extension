@@ -436,7 +436,10 @@ Give exactly one of:
 The tag is the domain separator, and the wallet enforces what it may be: 1–64
 printable non-space characters, and never one that names a digest a consensus
 rule already computes (anything beginning `tap`, `bip0340`, `bip340`, `bip322`
-or `elements`, or containing `sighash`). A statement carrying control characters
+or `elements`, or containing `sighash`), nor an OpenAMP protocol tag other than
+`openamp-challenge-v1` and `openamp-document-v1`: the policy server acts on its
+other `openamp-` tags (a holder's request for a co-sign, a trade's expiry), and
+the wallet makes those only in its own flows. A statement carrying control characters
 is refused too — the approval window has to be able to show the user exactly
 what they are signing, because reading it is their defence against a statement
 that means more than they assumed.

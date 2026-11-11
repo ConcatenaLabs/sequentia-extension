@@ -30,6 +30,16 @@
 // which rebuilds the message from fields it can show the user. A site cannot
 // reach them through the generic signer.
 const RESERVED_PREFIXES = ['tap', 'bip0340', 'bip340', 'bip322', 'elements', 'sequentia/'];
+
+// The OpenAMP policy server acts on statements under its own "openamp-" tags:
+// "openamp-cosign-v1" is a holder's request for a co-sign, "openamp-dvp-v1" a
+// trade's expiry, and later ones will follow. One such signature obtained by a
+// site would let it act as the holder towards the policy server (reopening a
+// trade the holder let expire), so a site may have only the two statements the
+// integration spec gives it: a login challenge and a document hash. The wallet
+// makes the others in its own flows, never because a site asked.
+const OPENAMP_PREFIX = 'openamp-';
+const OPENAMP_FOR_SITES = ['openamp-challenge-v1', 'openamp-document-v1'];
 const RESERVED_SUBSTRINGS = ['sighash'];
 
 const MAX_TAG = 64;
@@ -81,6 +91,10 @@ export function checkSigningRequest({ tag, statement, hash } = {}) {
   for (const sub of RESERVED_SUBSTRINGS) {
     if (lower.includes(sub)) throw new Error('refusing to sign under the reserved tag "' + tag + '"');
   }
+  if (lower.startsWith(OPENAMP_PREFIX) && !OPENAMP_FOR_SITES.includes(tag)) {
+    throw new Error('refusing to sign under the OpenAMP protocol tag "' + tag +
+      '": a site may ask only for ' + OPENAMP_FOR_SITES.join(' or '));
+  }
 
   const hasStatement = statement !== undefined && statement !== null;
   const hasHash = hash !== undefined && hash !== null;
@@ -104,4 +118,4 @@ export function checkSigningRequest({ tag, statement, hash } = {}) {
   return { tag, messageHex: toHex(new TextEncoder().encode(s)), kind: 'statement' };
 }
 
-export const _policy = { RESERVED_PREFIXES, RESERVED_SUBSTRINGS, MAX_TAG, MAX_STATEMENT };
+export const _policy = { RESERVED_PREFIXES, RESERVED_SUBSTRINGS, OPENAMP_FOR_SITES, MAX_TAG, MAX_STATEMENT };
