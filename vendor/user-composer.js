@@ -26,9 +26,12 @@
 // step now (engine.offered), then the admitted rest, then every other asset known; it starts on
 // the first one offered.
 
-import { USER_WORDS, QUOTE_FIRM_MS, pickerOrder, costLine, tradeStateWord, tradeSteps } from './user-trade.js'
+import { USER_WORDS, QUOTE_FIRM_MS, OFFERED_AGAIN_EVERY_MS, pickerOrder, costLine, tradeStateWord, tradeSteps } from './user-trade.js'
+import { settleWords } from './default-arca.js'
 import { mountMarketView } from './market-view.js'
 import { openPicker, PICKER_WORDS } from './asset-picker.js'
+import { RESTRICTED_WORDS } from './restricted-trade.js'
+import { isStep } from './restricted-composed.js'
 
 const big = (v) => { try { return BigInt(v ?? 0) } catch { return 0n } }
 // The chooser button's marks (no words): what nothing chosen shows, and the arrow.
@@ -52,8 +55,11 @@ export function payAssets (known, held, current, name) {
 }
 
 export function mountUserComposer (ctx) {
+  // `card`: the open trade's card over the page ({ id, m }); `answer`: a restricted asset's card in
+  // place of Trade (whom to ask, what to pay with). Two things: resetting the ticket after Trade
+  // must not orphan the trade's card.
   const S = { pay: null, get: null, amount: '', recv: '', fixed: 'pay', ticket: null, choice: null, busy: false, note: '', error: '', timer: null,
-    estTimer: null, estSeq: 0, card: null, ended: null, progress: null, openedAt: Date.now(),
+    estTimer: null, estSeq: 0, card: null, answer: null, ended: null, progress: null, openedAt: Date.now(),
     offered: { pay: null, list: [], at: 0, loading: false } }
   const OFFERS_MS = ctx.offersMs || 60000
   // The pair and the amount typed are kept for the browser tab's session (ctx.session, a
@@ -73,11 +79,12 @@ export function mountUserComposer (ctx) {
 
   // What can be paid: BTC always, and an asset only while the wallet holds some (a fresh wallet
   // pays from BTC alone); what can be got is every asset the book knows.
-  // An asset held only as what vests later is listed too, so a trade of it says from when it can be.
-  const listed = (a) => big(ctx.held(a)) + (ctx.vestingAtoms ? big(ctx.vestingAtoms(a)) : 0n)
+  // An asset held only as what vests later is listed too, so a trade of it says from when it can be;
+  // and one with a payment on its way (ctx.onItsWay), which a trade settles first and then pays.
+  const listed = (a) => big(ctx.held(a)) + (ctx.vestingAtoms ? big(ctx.vestingAtoms(a)) : 0n) + (ctx.onItsWay ? big(ctx.onItsWay(a) || 0n) : 0n)
   function payList () { return payAssets(ctx.knownAssets(), listed, S.pay, name) }
   // What is paid starts as the first asset held, in the pickers' order (BTC first when held).
-  function defaultPay () { const l = payList(); return l.find((a) => big(ctx.held(a)) > 0n) || l[0] }
+  function defaultPay () { const l = payList(); return l.find((a) => big(ctx.held(a)) > 0n) || l.find((a) => ctx.onItsWay && big(ctx.onItsWay(a) || 0n) > 0n) || l[0] }
   function offeredNow () { return S.offered.pay === S.pay ? S.offered.list.filter((a) => a !== S.pay) : [] }
   function getList () {
     const admitted = (ctx.admittedReceives ? ctx.admittedReceives(S.pay) : []).filter((a) => a !== S.pay)
@@ -130,10 +137,15 @@ export function mountUserComposer (ctx) {
     const seq = ++S.estSeq
     const e = await ctx.engine.estimate({ payAsset: S.pay, receiveAsset: S.get, ...(S.fixed === 'pay' ? { pay: String(atoms) } : { receive: String(atoms) }) })
     if (seq !== S.estSeq || S.ticket) return
+    if (!e.ok && e.why === 'restricted') { S.note = ''; paintNote(); return }
     if (!e.ok) {
       S.note = e.why === 'not-listed' ? USER_WORDS.notListed(name(S.get), name(S.pay)) : e.why === 'too-small' ? USER_WORDS.tooSmall
-        : e.why === 'soon' ? USER_WORDS.notOfferedSoon(name(S.get), name(S.pay)) : USER_WORDS.notOffered(name(S.get), name(S.pay))
+        : e.why === 'btc-ahead' ? USER_WORDS.btcAhead
+        : e.why === 'soon' ? USER_WORDS.notOfferedSoon(name(S.get), name(S.pay))
+        : e.again ? USER_WORDS.offeredAgain(name(S.get), name(S.pay)) : USER_WORDS.notOffered(name(S.get), name(S.pay))
       if (other && doc.activeElement !== other) other.value = ''
+      // Offered a moment ago: estimated again shortly, by itself (#698).
+      if (e.again) schedule(OFFERED_AGAIN_EVERY_MS)
       paintNote(); return
     }
     const fill = S.fixed === 'pay' ? ctx.fmtAtoms(big(e.receive), prec(S.get)) : ctx.fmtAtoms(big(e.pay), prec(S.pay))
@@ -167,7 +179,7 @@ export function mountUserComposer (ctx) {
     return b
   }
 
-  function reset () { S.ticket = null; S.choice = null; S.note = ''; S.error = ''; S.moving = false }
+  function reset () { S.ticket = null; S.choice = null; S.note = ''; S.error = ''; S.moving = false; S.answer = null; S.stays = 0n }
 
   // "about" beside the amount that follows the price, while it is an estimate.
   function paintAbout () {
@@ -202,18 +214,24 @@ export function mountUserComposer (ctx) {
     // You pay
     const row1 = el('div', 'uc-row')
     row1.appendChild(el('label', 'lbl', USER_WORDS.pay))
-    row1.appendChild(chooser('ucPay', payList(), S.pay, (v) => { S.pay = v; S.payChosen = true; S.getChosen = false; S.get = null; reset(); render() }))
+    row1.appendChild(chooser('ucPay', payList(), S.pay, (v) => { S.pay = v; S.maxed = false; S.payChosen = true; S.getChosen = false; S.get = null; reset(); render() }))
     const inp = el('input', 'uc-amount'); inp.id = 'ucAmount'; inp.inputMode = 'decimal'; inp.placeholder = USER_WORDS.amount; inp.value = S.amount
     const payAbout = el('span', 'sub uc-about'); payAbout.id = 'ucPayAbout'
-    inp.oninput = () => { S.amount = inp.value; S.fixed = 'pay'; S.error = ''; keep(); if (S.ticket) { reset(); paintTicket() } paintValues(); schedule() }
+    inp.oninput = () => { S.amount = inp.value; S.fixed = 'pay'; S.maxed = false; S.error = ''; keep(); if (S.ticket) { reset(); paintTicket() } paintValues(); schedule() }
     row1.appendChild(payAbout)
     row1.appendChild(inp)
     const payValue = el('div', 'sub uc-value'); payValue.id = 'ucPayValue'
     row1.appendChild(payValue)
     const have = el('div', 'sub uc-have'); have.id = 'ucHave'
-    have.appendChild(el('span', null, USER_WORDS.balance(amt(S.pay, ctx.held(S.pay) || 0n))))
+    const haveLine = el('span', null, haveWords()); haveLine.id = 'ucHaveLine'
+    have.appendChild(haveLine)
     const max = el('button', 'ghost uc-max', USER_WORDS.max); max.type = 'button'; max.id = 'ucMax'
-    max.onclick = () => { const a = big(ctx.held(S.pay) || 0n); if (a <= 0n) return; S.amount = ctx.fmtAtoms(a, prec(S.pay)); inp.value = S.amount; S.fixed = 'pay'; if (S.ticket) { reset(); paintTicket() } schedule(0) }
+    // What can be traded: the balance, and a payment on its way, which the trade settles first.
+    // Max asks for all of it, the fees in (the person's figure is all-in): the trade empties the
+    // coins, and the ticket's You pay is that same figure. When one trade cannot take all of it, the
+    // amount becomes what goes, and the ticket names what stays (S.maxed and S.maxOf, cleared by
+    // anything typed or chosen).
+    max.onclick = () => { const a = big(ctx.held(S.pay) || 0n) + onWay(S.pay); if (a <= 0n) return; S.amount = ctx.fmtAtoms(a, prec(S.pay)); inp.value = S.amount; S.fixed = 'pay'; S.maxed = true; S.maxOf = a; S.maxAgain = false; if (S.ticket) { reset(); paintTicket() } schedule(0) }
     have.appendChild(max)
     row1.appendChild(have)
     box.appendChild(row1)
@@ -224,7 +242,7 @@ export function mountUserComposer (ctx) {
     flip.onclick = () => {
       if (!S.get) return
       ;[S.pay, S.get] = [S.get, S.pay]; [S.amount, S.recv] = [S.recv, S.amount]
-      S.fixed = S.fixed === 'pay' ? 'receive' : 'pay'; S.payChosen = true; S.getChosen = true
+      S.fixed = S.fixed === 'pay' ? 'receive' : 'pay'; S.payChosen = true; S.getChosen = true; S.maxed = false
       reset(); render(); schedule(0)
     }
     flipRow.appendChild(flip)
@@ -240,7 +258,7 @@ export function mountUserComposer (ctx) {
     // one ("about"); Review's ticket gives the exact amounts.
     const recvAbout = el('span', 'sub uc-about'); recvAbout.id = 'ucRecvAbout'
     row2.appendChild(recvAbout)
-    rin.oninput = () => { S.recv = rin.value; S.fixed = 'receive'; S.error = ''; keep(); if (S.ticket) { reset(); paintTicket() } paintValues(); schedule() }
+    rin.oninput = () => { S.recv = rin.value; S.fixed = 'receive'; S.maxed = false; S.error = ''; keep(); if (S.ticket) { reset(); paintTicket() } paintValues(); schedule() }
     row2.appendChild(rin)
     const recvValue = el('div', 'sub uc-value'); recvValue.id = 'ucRecvValue'
     row2.appendChild(recvValue)
@@ -267,7 +285,44 @@ export function mountUserComposer (ctx) {
     }
   }
 
+  // The card a restricted asset's trade shows in place of Confirm: the approval card (whom to
+  // ask, the approval code to give them) or the assets to pay or be paid with.
+  function paintAnswerCard (t, act, btn) {
+    const c = S.answer
+    const box = el('div', 'uc-card'); box.id = 'ucCard'
+    box.appendChild(el('div', '', c.text))
+    if (c.reason) box.appendChild(el('div', 'sub', c.reason))
+    t.appendChild(box)
+    if (c.code) {
+      act.appendChild(btn(RESTRICTED_WORDS.copyCode, 'ucCopyCode', () => { try { navigator.clipboard.writeText(c.code) } catch {} }, 'primary'))
+    }
+    if (c.link) {
+      const a = el('a', 'btn ghost', c.link.text); a.id = 'ucOpenPage'; a.href = c.link.url; a.target = '_blank'; a.rel = 'noopener noreferrer'
+      act.appendChild(a)
+    }
+    for (const x of c.choices || []) {
+      act.appendChild(btn((c.side === 'get' ? RESTRICTED_WORDS.getIn : RESTRICTED_WORDS.payWith)(name(x)), 'ucVia-' + x.slice(0, 8), () => {
+        if (c.side === 'get') { S.get = x; S.getChosen = true } else { S.pay = x; S.payChosen = true }
+        reset(); render()
+      }, (c.choices || []).length === 1 ? 'primary' : 'ghost'))
+    }
+  }
+
+  // The balance line under You pay, read again from the wallet's figure (what Balance shows): after
+  // every trade that settles or returns, and whenever the ticket is painted (#674).
+  function paintHave () {
+    const h = ctx.root.querySelector('#ucHaveLine')
+    if (h && S.pay) h.textContent = haveWords()
+  }
+  const onWay = (a) => (ctx.onItsWay && a ? big(ctx.onItsWay(a) || 0n) : 0n)
+  // "balance 0 USDX · 500000 USDX arriving, in about a minute" while a payment is on its way.
+  function haveWords () {
+    const w = USER_WORDS.balance(amt(S.pay, ctx.held(S.pay) || 0n)), o = onWay(S.pay)
+    return o > 0n ? w + ' \u00b7 ' + USER_WORDS.arriving(amt(S.pay, o)) : w
+  }
+
   function paintTicket () {
+    paintHave()
     const t = ctx.root.querySelector('#ucTicket'), note = ctx.root.querySelector('#ucNote'), act = ctx.root.querySelector('#ucAct')
     if (!t) return
     t.innerHTML = ''; act.innerHTML = ''
@@ -275,6 +330,7 @@ export function mountUserComposer (ctx) {
     note.classList.toggle('err', !!S.error)
     paintAbout()
     const btn = (text, id, f, cls) => { const b = el('button', cls || '', text); b.type = 'button'; b.id = id; b.disabled = S.busy; b.onclick = f; return b }
+    if (!S.ticket && S.answer) { paintAnswerCard(t, act, btn); return }
     if (!S.ticket) {
       act.appendChild(btn(S.busy ? (S.pricingLong ? USER_WORDS.pricingLong : USER_WORDS.pricing) : USER_WORDS.review, 'ucReview', review, 'primary'))
       return
@@ -282,12 +338,25 @@ export function mountUserComposer (ctx) {
     const k = S.ticket
     const line = (label, value, id) => { const d = el('div', 'kv'); d.id = id; d.appendChild(el('span', 'k', label)); d.appendChild(el('span', 'v', value)); t.appendChild(d) }
     line(USER_WORDS.amountIn, amt(k.payAsset, k.amountIn), 'ucIn')
-    line(USER_WORDS.amountOut, amt(k.receiveAsset, k.amountOut), 'ucOut')
+    // What is paid waits for a round first (the engine's ticket to wait and go): the book's price
+    // now, the least it goes for with its fees, and how long it waits. Trade accepts that; the
+    // trade then goes by itself, or comes back with nothing traded.
+    line(USER_WORDS.amountOut, k.indicative ? USER_WORDS.about + ' ' + amt(k.receiveAsset, k.about) : amt(k.receiveAsset, k.amountOut), 'ucOut')
     const cost = el('div', 'sub uc-cost'); cost.id = 'ucCost'
-    const costText = costLine(k.fees, amt, k.payAsset)
+    const costText = k.indicative ? USER_WORDS.atLeast(amt(k.receiveAsset, k.amountOut)) : costLine(k.fees, amt, k.payAsset)
     cost.textContent = costText
     t.appendChild(cost)
+    // A refresh the operator charges for is paid out of what is paid: its fee, on its own line.
+    if (k.indicative && (k.fees || []).length) { const f = el('div', 'sub', costLine(k.fees, amt, k.payAsset)); f.id = 'ucFees'; t.appendChild(f) }
+    // The wait, only as the wallet gave it; with none given, no time is promised.
+    if (k.indicative) { const w = el('div', 'sub', k.finalBy == null ? USER_WORDS.settling : settleWords(k.finalBy, 1, Date.now(), USER_WORDS)); w.id = 'ucWait'; t.appendChild(w) }
     if (k.upTo) t.appendChild(el('div', 'sub', USER_WORDS.upTo(amt(k.payAsset, k.upTo))))
+    // After Max, what one trade could not take: named, never left unsaid.
+    if (S.stays > 0n) { const st = el('div', 'sub', USER_WORDS.stays(amt(k.payAsset, S.stays))); st.id = 'ucStays'; t.appendChild(st) }
+    // Paid with money the wallet moves in first: how long it takes, said before it is confirmed.
+    if (k.bringIn) { const w = el('div', 'sub', USER_WORDS.bringIn(k.bringIn)); w.id = 'ucBringIn'; t.appendChild(w) }
+    if (k.minutes) { const w = el('div', 'sub', RESTRICTED_WORDS.takes(k.minutes)); w.id = 'ucTakes'; t.appendChild(w) }
+    if (k.keep && k.via) { const kp = el('div', 'sub', RESTRICTED_WORDS.viaKeep(amt(k.via, k.keep))); kp.id = 'ucKeep'; t.appendChild(kp) }
     if (S.moving) { const mv = el('div', 'sub', USER_WORDS.btcMore(ctx.btcMoveBlocks ? ctx.btcMoveBlocks() : 2)); mv.id = 'ucMoving'; t.appendChild(mv) }
     act.appendChild(btn(S.busy ? USER_WORDS.sending : USER_WORDS.confirm, 'ucConfirm', confirm, 'primary'))
     act.appendChild(btn(USER_WORDS.cancel, 'ucCancel', () => { ctx.engine.drop(S.choice); reset(); paintTicket() }, 'ghost'))
@@ -299,7 +368,18 @@ export function mountUserComposer (ctx) {
     try { atoms = ctx.parseAtoms(String(S.amount || '').trim(), prec(S.pay)) } catch { atoms = 0n }
     if (!(big(atoms) > 0n)) { S.error = USER_WORDS.enter; paintTicket(); return }
     if (!S.get) { S.error = USER_WORDS.nothingOffered(name(S.pay)); paintTicket(); return }
+    // A wallet still opening (a restore finding what it holds) is waited for, saying so, as a
+    // payment waits for it (ctx.opening(say), the page's one wait): the trade is priced once it has
+    // opened. One that cannot open says why, in the page's words.
+    if (ctx.opening) {
+      S.busy = true; paintTicket()
+      let why = null
+      try { why = await ctx.opening((t) => { S.note = t; paintTicket() }) } catch (e) { console.warn('[user composer] opening:', e && e.message) }
+      S.note = ''
+      if (why) { S.busy = false; S.error = why; paintTicket(); return }
+    }
     S.busy = true; S.pricingLong = false; paintTicket()
+    let allOf = null
     // Past the makers' window the wallet may still be checking the price it was given: said so.
     const longTimer = setTimeout(() => { if (S.busy && !S.ticket) { S.pricingLong = true; paintTicket() } }, QUOTE_FIRM_MS + 1000)
     const withBtc = S.pay === 'BTC' || S.get === 'BTC'
@@ -308,19 +388,51 @@ export function mountUserComposer (ctx) {
       const q = await ctx.engine.quote({ payAsset: S.pay, receiveAsset: S.get, amount: String(atoms),
         onStep: withBtc ? (k) => paintProgress(k) : null })
       if (withBtc && q.ok) paintProgress('priced')
-      if (q.ok) { S.ticket = q.ticket; S.choice = q.choice; S.moving = !!q.moving }
-      else S.error = q.why === 'vesting' ? USER_WORDS.notVested(show(big(q.atoms), prec(S.pay)), name(S.pay), q.vests) : q.why === 'no-funds' ? USER_WORDS.noFunds(name(S.pay)) : q.why === 'not-ready' ? USER_WORDS.notReady(name(S.pay), q.soon) : q.why === 'redoing' ? USER_WORDS.redoing(name(S.pay)) : q.why === 'busy' ? USER_WORDS.busy(name(S.pay)) : q.why === 'freeing' ? USER_WORDS.freeing(name(S.pay), q.soon) : q.why === 'readying' ? USER_WORDS.readying(name(S.pay), q.soon) : q.why === 'part-ready' ? USER_WORDS.partReady(amt(S.pay, q.ready), name(S.pay), q.soon) : q.why === 'too-small' ? USER_WORDS.tooSmall
+      if (q.ok) {
+        S.ticket = q.ticket; S.choice = q.choice; S.moving = !!q.moving
+        // After Max: the amount is what the trade pays in all, and what it could not take stays,
+        // named on the ticket.
+        if (S.maxed && S.fixed === 'pay' && S.maxOf != null && q.ticket.payAsset === S.pay) {
+          const paid = big(q.ticket.amountIn)
+          if (paid < S.maxOf) {
+            S.stays = S.maxOf - paid
+            S.amount = ctx.fmtAtoms(paid, prec(S.pay))
+            const i = ctx.root.querySelector('#ucAmount'); if (i) i.value = S.amount
+          }
+        }
+      }
+      // A restricted asset: whom to ask for approval, or what to pay with; never an error.
+      else if (q.card) S.answer = q.card
+      // Max asked for all of it and no trade takes that much: what emptying the coins the wallet
+      // can pay from pays in all (the engine's `all`, the fees in) is priced, once.
+      else if (q.why === 'own-short' && q.all && S.maxed && !S.maxAgain && S.fixed === 'pay' && big(q.all) < big(atoms)) { S.maxAgain = true; allOf = big(q.all) }
+      else S.error = q.why === 'vesting' ? USER_WORDS.notVested(show(big(q.atoms), prec(S.pay)), name(S.pay), q.vests) : q.why === 'no-funds' ? USER_WORDS.noFunds(name(S.pay)) : q.why === 'not-ready' ? USER_WORDS.notReady(name(S.pay), q.soon) : q.why === 'redoing' ? USER_WORDS.redoing(name(S.pay)) : q.why === 'busy' ? USER_WORDS.busy(name(S.pay)) : q.why === 'freeing' ? USER_WORDS.freeing(name(S.pay), q.soon) : q.why === 'readying' ? USER_WORDS.readying(name(S.pay), q.soon) : q.why === 'restoring' ? USER_WORDS.restoring : q.why === 'part-ready' ? USER_WORDS.moreThanHeld(amt(S.pay, q.ready)) : q.why === 'too-small' ? USER_WORDS.tooSmall
+        : q.why === 'own-short' ? USER_WORDS.ownShort(amt(S.pay, q.most))
         : q.why === 'no-firm-offer' ? USER_WORDS.noFirmOffer
         : q.why === 'wallet-busy' ? USER_WORDS.walletBusy
+        : q.why === 'btc-ahead' ? USER_WORDS.btcAhead
         : q.why === 'btc-moving' ? USER_WORDS.btcMoving(ctx.btcMoveBlocks ? ctx.btcMoveBlocks() : 2)
-        : q.why === 'not-listed' ? USER_WORDS.notListed(name(S.get), name(S.pay)) : USER_WORDS.notOffered(name(S.get), name(S.pay))
+        : q.why === 'chain-stays' ? (q.stays === 'frozen' ? USER_WORDS.chainFrozen(amt(S.pay, q.frozen), big(q.most) > 0n ? amt(S.pay, q.most) : '') : q.stays === 'dust' ? USER_WORDS.chainDust(name(S.pay)) : USER_WORDS.chainStays(name(S.pay)))
+        : q.why === 'not-listed' ? USER_WORDS.notListed(name(S.get), name(S.pay))
+        : q.again ? USER_WORDS.offeredAgain(name(S.get), name(S.pay)) : USER_WORDS.notOffered(name(S.get), name(S.pay))
       // Coins being made ready for this trade: priced again by itself while the person waits,
-      // every READY_RETRY_MS, as long as nothing they typed changed.
-      if (!q.ok && (q.why === 'readying' || q.why === 'btc-moving')) readyAgain()
+      // every READY_RETRY_MS, as long as nothing they typed changed. A pair offered a moment ago
+      // that nobody offers now (a maker reading its coins again after a trade, #698): every
+      // OFFERED_AGAIN_EVERY_MS, while it was offered within OFFERED_AGAIN_MS: the engine's window
+      // bounds it, not a count of tries, so the last answer, once past it, is the words shown.
+      // Behind a purchase paid with BTC that is still to pay: priced again by itself, so the ticket
+      // comes once that one is paid.
+      if (!q.ok && (q.why === 'readying' || q.why === 'btc-moving' || q.why === 'btc-ahead')) readyAgain()
+      else if (!q.ok && q.again) readyAgain(OFFERED_AGAIN_EVERY_MS, false)
     } catch (e) {
       console.warn('[user composer] quote:', e && e.message)
       S.error = USER_WORDS.notOffered(name(S.get), name(S.pay))
     } finally { clearTimeout(longTimer); S.busy = false; S.pricingLong = false; closeProgress(); paintTicket() }
+    if (allOf != null) {
+      S.amount = ctx.fmtAtoms(allOf, prec(S.pay))
+      const i = ctx.root.querySelector('#ucAmount'); if (i) i.value = S.amount
+      return review()
+    }
   }
 
   // ---- The price's progress ----
@@ -374,14 +486,14 @@ export function mountUserComposer (ctx) {
   }
 
   let readyTimer = null, readyTries = 0
-  function readyAgain () {
+  function readyAgain (ms = READY_RETRY_MS, counted = true) {
     const asked = `${S.pay}|${S.get}|${S.amount}`
     clearTimeout(readyTimer)
-    if (++readyTries > READY_TRIES) { readyTries = 0; return }
+    if (counted && ++readyTries > READY_TRIES) { readyTries = 0; return }
     readyTimer = setTimeout(() => {
       if (`${S.pay}|${S.get}|${S.amount}` !== asked || S.busy || S.ticket) { readyTries = 0; return }
       review()
-    }, READY_RETRY_MS)
+    }, ms)
   }
 
   // Trade: the step is taken in the background. If it is not done within CONFIRM_SHOWN_MS, the
@@ -408,29 +520,53 @@ export function mountUserComposer (ctx) {
       seenEnds()
       // A price no longer held is priced again, and shown before anything is signed.
       if (e && e.code === 'lapsed') { reset(); S.note = USER_WORDS.priceMoved; S.busy = false; await review(); S.note = S.ticket ? USER_WORDS.priceMoved : S.note; paintTicket(); return }
-      reset(); S.error = USER_WORDS.failed
+      // A record the browser has no room to keep refuses the trade before anything is signed: said as it is.
+      reset(); S.error = e && e.code === 'storage-full' ? e.message : /require-checkpoint-exit/.test(String((e && e.message) || '')) ? USER_WORDS.notYet : USER_WORDS.failed
     } finally { S.busy = false; paintTicket(); paintTrades(); follow() }
   }
 
   function stateWord (r) {
+    // A purchase with bitcoin whose second step has not gone: what the person now holds.
+    // A restricted trade moving what it pays from to the chain: what the move says, with its wait.
+    if (r.source === 'restricted' && r.state === 'confirming' && r.note) return r.note
+    // Not approved now: says so, and the card shows how to get approved.
+    if (r.source === 'composed' && r.viaHeld && r.via) {
+      if (r.state === 'settled') return RESTRICTED_WORDS.viaHeld(name(r.via))
+      return (r.card ? RESTRICTED_WORDS.viaApproval : RESTRICTED_WORDS.viaWaiting)(name(r.via), name(r.ticket.receiveAsset))
+    }
     if (r.state === 'returned' && (r.feesPaid || []).length) return USER_WORDS.returnedFees(r.feesPaid.map((f) => amt(f.asset, f.atoms)).join(' and '))
     return tradeStateWord(r, Date.now())
   }
 
-  const ENDED = ['settled', 'returned', 'failed']
-  const what = (r) => `${amt(r.ticket.payAsset, r.ticket.amountIn)} → ${amt(r.ticket.receiveAsset, r.ticket.amountOut)}`
+  const ENDED = ['settled', 'returned', 'failed', 'undone']
+  // A trade's transactions on a chain: a composed trade's are its steps'.
+  function linksOf (r) {
+    if (!ctx.links) return []
+    const all = ctx.engine.records()
+    const recs = r.source === 'composed' ? [r.first, r.second].map((id) => all.find((x) => x.id === id)).filter(Boolean) : [r]
+    return recs.flatMap((x) => ctx.links(x))
+  }
+  // What a trade brought: a composed purchase that ended at its first step brought that step's asset.
+  // What it holds of that asset: what the move put on the chain once it has, else the coin itself.
+  const got = (r) => (r.source === 'composed' && r.ended === 'via' ? amt(r.via, r.viaOut ? r.viaOut.value : r.viaAtoms) : amt(r.ticket.receiveAsset, r.ticket.amountOut))
+  // The fees a trade paid: a composed purchase that ended holding its first step's asset, that
+  // step's and, once made, the move's.
+  const feesOf = (r) => (r.ended !== 'via' ? r.ticket.fees : [...(r.firstFees || []), ...(r.viaOut && r.move ? [{ asset: r.via, atoms: r.move.fee }] : [])])
+  const what = (r) => `${amt(r.ticket.payAsset, r.ticket.amountIn)} → ${got(r)}`
 
   function paintTrades () {
     noteEnds()
     paintCard()
+    paintHave()
     const list = ctx.root.querySelector('#ucTrades'); if (!list) return
     list.innerHTML = ''
     // A trade whose step did not answer is shown while it is looked for.
     // A trade being sent shows at once, as "Sending…".
     // An ended trade stays here only while the page that saw it end is open; after a reload it is
     // in History alone, so trades never push the market down the page.
-    const endedAt = (r) => r.settledAt || r.returnedAt || r.failedAt || r.at || 0
-    const recs = ctx.engine.records().filter((r) => (r.state !== 'confirming' || r.uncertain || Date.now() - (r.at || 0) < 10 * 60_000) && r.ticket)
+    const endedAt = (r) => r.settledAt || r.returnedAt || r.failedAt || r.endedAt || r.at || 0
+    // A step of a composed trade is shown as the trade it is part of.
+    const recs = ctx.engine.records().filter((r) => !isStep(r) && (r.state !== 'confirming' || r.uncertain || Date.now() - (r.at || 0) < 10 * 60_000) && r.ticket)
       .filter((r) => !ENDED.includes(r.state) || endedAt(r) >= S.openedAt).slice(-12).reverse()
     list.classList.toggle('uc-has-open', recs.some((r) => !ENDED.includes(r.state)))
     if (!recs.length) return
@@ -481,14 +617,28 @@ export function mountUserComposer (ctx) {
     head.appendChild(ht); c.appendChild(head)
     const line = (label, value, cls) => { const d = el('div', 'kv'); d.appendChild(el('span', 'k', label)); const v = el('span', 'v' + (cls ? ' ' + cls : '')); if (typeof value === 'string') v.textContent = value; else v.appendChild(value); d.appendChild(v); c.appendChild(d); return d }
     line(USER_WORDS.amountIn, amt(r.ticket.payAsset, r.ticket.amountIn))
-    line(USER_WORDS.amountOut, amt(r.ticket.receiveAsset, r.ticket.amountOut))
-    c.appendChild(el('div', 'sub uc-cost', costLine(r.ticket.fees, amt, r.ticket.payAsset)))
+    line(USER_WORDS.amountOut, got(r))
+    // A composed purchase that ended at its first step paid that step's fees alone.
+    c.appendChild(el('div', 'sub uc-cost', costLine(feesOf(r), amt, r.ticket.payAsset)))
     line(USER_WORDS.cardState, stateWord(r), 'uc-card-state').dataset.state = r.state
+    // A composed purchase waiting on the issuer's approval: whom to ask, as before a purchase.
+    let cardAct = null
+    if (r.source === 'composed' && r.card && !ended) {
+      const k = r.card
+      const box = el('div', 'uc-card'); box.id = 'ucCardApproval'
+      box.appendChild(el('div', '', k.text))
+      if (k.reason) box.appendChild(el('div', 'sub', k.reason))
+      c.appendChild(box)
+      cardAct = el('div', 'row')
+      if (k.code) { const b = el('button', 'ghost', RESTRICTED_WORDS.copyCode); b.type = 'button'; b.id = 'ucCopyCodeCard'; b.onclick = () => { try { navigator.clipboard.writeText(k.code) } catch {} }; cardAct.appendChild(b) }
+      if (k.link) { const a = el('a', 'btn ghost', k.link.text); a.id = 'ucOpenPageCard'; a.href = k.link.url; a.target = '_blank'; a.rel = 'noopener noreferrer'; cardAct.appendChild(a) }
+      c.appendChild(cardAct)
+    }
     if (r.source === 'btc-gateway') {
       const steps = tradeSteps({ r, name })
       if (steps) { c.appendChild(el('div', 'lbl uc-steps-title', USER_WORDS.stepsTitle)); stepList(c, steps) }
     }
-    for (const k of (ctx.links ? ctx.links(r) : [])) {
+    for (const k of linksOf(r)) {
       const a = el('a', null, k.text); a.href = k.href; a.target = '_blank'; a.rel = 'noopener'
       line(USER_WORDS.txOn(k.chain), a, 'mono')
     }
@@ -500,15 +650,15 @@ export function mountUserComposer (ctx) {
 
   // A trade that ends while its card is closed is said wherever the person is (ctx.notify), once.
   // The trades ended before the page looked are not said again.
-  function endedIds () { return ctx.engine.records().filter((r) => r.ticket && ENDED.includes(r.state)).map((r) => r.id) }
+  function endedIds () { return ctx.engine.records().filter((r) => r.ticket && !isStep(r) && ENDED.includes(r.state)).map((r) => r.id) }
   function seenEnds () { S.ended = new Set(endedIds()) }
   function noteEnds () {
     if (!S.ended) { seenEnds(); return }
     for (const r of ctx.engine.records()) {
-      if (!r.ticket || !ENDED.includes(r.state) || S.ended.has(r.id)) continue
+      if (!r.ticket || isStep(r) || !ENDED.includes(r.state) || S.ended.has(r.id)) continue
       S.ended.add(r.id)
       if ((S.card && S.card.id === r.id) || !ctx.notify) continue
-      ctx.notify(USER_WORDS.ended(what(r), stateWord(r)), { sticky: r.state !== 'settled', link: (ctx.links ? ctx.links(r) : [])[0] || null })
+      ctx.notify(USER_WORDS.ended(what(r), stateWord(r)), { sticky: r.state !== 'settled', link: linksOf(r)[0] || null })
     }
   }
 
@@ -517,11 +667,24 @@ export function mountUserComposer (ctx) {
   // a person is pricing or confirming one, and every half minute for a trade older than two
   // minutes (one still waiting for the other side excepted), so an open trade does not hold up
   // the next.
-  async function follow () {
+  // One follow at a time: one asked while another runs (the page opening, a change of mode, the
+  // follow after a confirmation) runs once that one has ended, never beside it.
+  function follow () {
+    if (S.following) { S.followAgain = true; return S.following }
+    S.following = followOnce().finally(() => {
+      S.following = null
+      if (S.followAgain) { S.followAgain = false; follow() }
+    })
+    return S.following
+  }
+  async function followOnce () {
     clearTimeout(S.timer)
-    const openRecs = ctx.engine.records().filter((r) => !['settled', 'returned', 'failed'].includes(r.state))
+    const openRecs = ctx.engine.records().filter((r) => !['settled', 'returned', 'failed', 'undone'].includes(r.state))
     if (!openRecs.length) return
     if (S.busy) { S.timer = setTimeout(follow, ctx.followMs || 4000); return }
+    // A trade written since the last paint (a site's, accepted as waiting) has its row before the
+    // pass over the trades, which waits on the wallet.
+    paintTrades()
     try { await ctx.engine.resume() } catch (e) { console.warn('[user composer] resume:', e && e.message) }
     // Painted whether the tab is shown or not: an ending is said wherever the person is.
     paintTrades()
@@ -531,5 +694,5 @@ export function mountUserComposer (ctx) {
     S.timer = setTimeout(follow, young ? (ctx.followMs || 4000) : (ctx.followSlowMs || FOLLOW_SLOW_MS))
   }
 
-  return { render, follow, state: S }
+  return { render, follow, state: S, paintHave }
 }

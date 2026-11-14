@@ -39,6 +39,34 @@ export function computeRate(sellAtoms, recvAtoms){
   return { rateNum: recv / g, rateDen: sell / g };
 }
 
+// The partial-fill dust floor for a placed order: the smallest lot a taker may fill AND the
+// smallest remainder that may re-rest (planFill rejects a fill leaving a smaller remainder as
+// dust-griefing). ~0.1% of the order (min 1 atom) — fine-grained enough that a market order fills
+// almost all of the available book, coarse enough that no dust remainder is ever left.
+// FUND-SAFETY: this divisor is CONSENSUS-FROZEN and must NOT read CONFIG.minLotBps. The value is baked
+// into the covenant's fill leaf (→ merkle root → tweaked key) at placement and re-derived at fill and refund;
+// the resting record does not store it. If it tracked a mutable /status value, a min-lot change between
+// place and fill would compute a different leaf and strand the order. CONFIG.minLotBps is display-only.
+export function covenantMinLot(sellAtoms){ const s = BigInt(sellAtoms); const f = s / 1000n; return f > 0n ? f : 1n; }
+
+// BYTE ORDER — the one covenant conversion boundary. The wallet/UI/registry/relay-pair domain
+// speaks DISPLAY hex asset ids (reversed, like txids); the covenant leaf + CovenantTerms speak
+// INTERNAL byte order (as on-chain introspection returns them — the relay convention: pair =
+// display, terms = internal; see seqdex watcher.go reverseHex / covfill.go displayHex).
+export function revHex(h){ return (String(h || '').match(/../g) || []).reverse().join(''); }
+
+// The asset ids a covenant's taptree is derived from, for a given record generation.
+//   idsInternal true  (every NEW record) -> flip the DISPLAY ids to INTERNAL byte order, so the
+//     leaf bakes the ids consensus introspection actually compares — the seeder-proven derivation.
+//   idsInternal false (LEGACY records, no marker) -> keep the DISPLAY ids: those covenants were
+//     funded against a display-order-derived spk (the old bug), and their cancel/REFUND must
+//     re-derive the SAME bug-compatible taptree or the locked funds become unreclaimable.
+// Records persist DISPLAY ids (rec.pay/rec.receive) in both generations; only the derivation flips.
+export function covenantDerivationIds(payDisplay, receiveDisplay, idsInternal){
+  return idsInternal ? { assetA: revHex(payDisplay), assetB: revHex(receiveDisplay) }
+                     : { assetA: payDisplay, assetB: receiveDisplay };
+}
+
 // The FILL leaf evaluates locked*rateNum + rateDen-1 in SIGNED 64-bit arithmetic
 // (daemon/pkg/covenant/order.go: CheckArithmetic, MaxLeafProduct = MaxInt64).
 // computeRate only divides out the gcd, so two NEAR-COPRIME atom counts leave

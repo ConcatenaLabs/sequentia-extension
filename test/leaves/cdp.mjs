@@ -23,7 +23,8 @@ export class Browser {
       `--disable-extensions-except=${this.ext}`, `--load-extension=${this.ext}`, '--window-size=1200,900',
       ...this.extraArgs, 'about:blank',
     ];
-    if (this.headless) args.unshift('--headless=new');
+    // Headless without the GPU, on software GL: a headless browser never touches the graphics driver.
+    if (this.headless) args.unshift('--headless=new', '--disable-gpu', '--use-angle=swiftshader');
     this.proc = spawn(this.chromeBin, args, { stdio: ['ignore', 'ignore', 'pipe'] });
     const wsUrl = await new Promise((ok, no) => {
       let buf = '';
@@ -176,7 +177,8 @@ export class Page {
   async waitFor(expression, ms = 30000) {
     const t0 = Date.now();
     for (;;) {
-      try { if (await this.eval(expression)) return; } catch {}
+      // The truthy value it waited for is returned (a status line, a ticket).
+      try { const v = await this.eval(expression); if (v) return v; } catch {}
       if (Date.now() - t0 > ms) throw new Error('timed out waiting for ' + expression);
       await sleep(250);
     }

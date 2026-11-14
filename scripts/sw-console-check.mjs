@@ -29,7 +29,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function session(label) {
   const chrome = spawn(CHROME, [
-    '--headless=new', `--user-data-dir=${profile}`, '--remote-debugging-port=0', '--no-first-run',
+    '--headless=new', '--disable-gpu', '--use-angle=swiftshader', `--user-data-dir=${profile}`, '--remote-debugging-port=0', '--no-first-run',
     '--no-default-browser-check', `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
     '--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1', 'about:blank',
   ], { stdio: ['ignore', 'ignore', 'pipe'] });

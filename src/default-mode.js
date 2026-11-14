@@ -32,7 +32,7 @@ import { fromWire } from './wire.js';
 import { codeNamesChannels } from './leaf-schedule.js';
 import { boardCap, moveDown, direct, lnFits } from './ark-band.js';
 import {
-  pinnedOperator, defaultWatchtowers, checkPinned, treeRoute, parseReceiveCode, arrivingAtoms, addressRoute, arrivalMinutes, offboardOutcome,
+  pinnedOperator, defaultWatchtowers, checkPinned, treeRoute, parseReceiveCode, arrivingAtoms, addressRoute, arrivalMinutes, moveOutMinutes, offboardOutcome,
   offboardEnds, offboardNewsText, DEFAULT_WORDS, JOIN_RETRY_MS, BOARD_QUIET_MS, vestingShort,
 } from '../vendor/default-arca.js';
 import { buildPayCode, readPayCode, expandRequest, nameLnurlUrl } from '../vendor/pay-code.js';
@@ -497,6 +497,10 @@ export async function refuseIfVesting(asset, atoms) {
 }
 
 // -> { id, title, lines: [text], button }
+// How long the operator says a payment out of the tree waits, after its block, before it can be
+// spent (its `offboards.unlock_within_seconds`), or null when it does not say.
+const unlockSecondsOf = (info) => { const o = info && info.server_info && info.server_info.offboards; return (o && o.unlock_within_seconds) || null; };
+
 export async function prepareSend({ to, amtS, asset }) {
   const text = String(to || '').trim();
   if (!text) throw new Error('Enter a receive code, a payment name, an address or an invoice.');
@@ -565,7 +569,7 @@ export async function prepareSend({ to, amtS, asset }) {
   if (route === 'arriving') {
     const info = await leafInfo().catch(() => null);
     const f = info && info.server_info && info.server_info.fills;
-    throw new Error(DEFAULT_WORDS.stillArrivingWithin(m.ticker, arrivalMinutes(f && f.round_interval_seconds, f && f.block_seconds)));
+    throw new Error(DEFAULT_WORDS.stillArrivingWithin(m.ticker, arrivalMinutes(f && f.round_interval_seconds, f && f.block_seconds, unlockSecondsOf(info))));
   }
   if (route === 'chain') {
     const plan = await chainReview({ address, amtS, asset, amt, request });
@@ -577,12 +581,12 @@ export async function prepareSend({ to, amtS, asset }) {
     catch (e) { console.warn('[default] offboard quote:', e.message); throw new Error(DEFAULT_WORDS.addressShort); }
     const info = await leafInfo().catch(() => null);
     const f = info && info.server_info && info.server_info.fills;
-    const minutes = arrivalMinutes(f && f.round_interval_seconds, f && f.block_seconds);
+    const minutes = arrivalMinutes(f && f.round_interval_seconds, f && f.block_seconds, unlockSecondsOf(info));
     const fee = q && q.fee ? big(q.fee.amount) : 0n;
     const lines = [];
     if (fee > 0n) lines.push(DEFAULT_WORDS.fee(fmtAtoms(fee, m.precision || 0), m.ticker));
     lines.push(DEFAULT_WORDS.arrivesWithin(minutes));
-    return { id: stash({ kind: 'offboard', asset, atoms, fee: String(fee), address, q, minutes, block: f && f.block_seconds, amt, ticker: m.ticker }), title: DEFAULT_WORDS.sendTitle(amt, m.ticker), lines, button: DEFAULT_WORDS.send };
+    return { id: stash({ kind: 'offboard', asset, atoms, fee: String(fee), address, q, minutes, block: f && f.block_seconds, unlock: unlockSecondsOf(info), amt, ticker: m.ticker }), title: DEFAULT_WORDS.sendTitle(amt, m.ticker), lines, button: DEFAULT_WORDS.send };
   }
   throw new Error(DEFAULT_WORDS.addressShort);
 }
@@ -646,7 +650,8 @@ async function confidentialSend({ address, asset, atoms, amt }) {
   }
   const { atoms: coming, open } = movesComing(asset, records, offboards, (t) => engine.hasSeqTx(t));
   const fillsOf = (info) => (info && info.server_info && info.server_info.fills) || {};
-  const minutesOf = (info) => arrivalMinutes(fillsOf(info).round_interval_seconds, fillsOf(info).block_seconds);
+  // A move out to the wallet's own address waits on nobody else (the web wallet's moveOutMinutes).
+  const minutesOf = (info) => moveOutMinutes(fillsOf(info).round_interval_seconds, fillsOf(info).block_seconds, unlockSecondsOf(info));
   if (open.length) {
     // Coins on their way: waited for, never asked twice.
     const w = moveWaits(open);
@@ -713,7 +718,7 @@ async function confidentialSend({ address, asset, atoms, amt }) {
     catch (e) { console.warn('[default] moving out:', e.message); throw new Error(DEFAULT_WORDS.notMoved); }
     if (v && v.offboard) await keepMove({ id: String(v.offboard), asset, atoms: String(plan.move), at: Date.now() });
     console.info(`[default] moving ${plan.move} of ${asset.slice(0, 8)} to the wallet's address, for a confidential payment of ${atoms}`);
-    return { moving: true, text: DEFAULT_WORDS.movingOut(words(plan.move), DEFAULT_WORDS.confidentialPurpose, arrivalMinutes(v && v.round_within_seconds, fillsOf(info).block_seconds) || minutesOf(info)) };
+    return { moving: true, text: DEFAULT_WORDS.movingOut(words(plan.move), DEFAULT_WORDS.confidentialPurpose, moveOutMinutes(v && v.round_within_seconds, fillsOf(info).block_seconds, unlockSecondsOf(info)) || minutesOf(info)) };
   }
   return await confidentialReview({ address, asset, atoms, amt, margin, onchain, m, prec });
 }
@@ -818,7 +823,7 @@ export async function confirmSend({ id }) {
       // is sent, and the person is told so (vendor/default-arca.js offboardOutcome). A new one reads
       // "Sending" until the library says it is made: the popup follows it (`follow`,
       // addressPayment), and "Sent" is said only then (`sent`).
-      const o = offboardOutcome(v, p.amt, p.ticker, p.minutes, p.block);
+      const o = offboardOutcome(v, p.amt, p.ticker, p.minutes, p.block, p.unlock);
       const id = v && v.offboard ? String(v.offboard) : null;
       if (!o.sent || !id) return { text: o.text, ms: Date.now() - t0 };
       await keepAddressPayment({ offboard: id, asset: p.asset, atoms: String(p.atoms), fee: String(p.fee || '0'), address: p.address, at: Date.now(), stage: 'pending' });

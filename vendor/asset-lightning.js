@@ -183,4 +183,54 @@ export function receiveState (rec, nowSeconds) {
   return 'paid'
 }
 
+// A payment of one of the wallet's invoices in an asset reaches it only through `sync`: the library
+// asks the operator how the receive stands, follows the participation that wants its leaf in the
+// operator's next round, and claims the leaf, which the operator releases to no one but this
+// wallet. On the library's own schedule that sync comes a quarter of the operator's receive window
+// after the invoice was asked (90 minutes on a six-hour window), while the payer reads "paying".
+//
+// So the page follows every such receive itself, whatever the Receive card shows and with the tab
+// in front or behind (the payer is most often another tab). While nothing is paid it asks the
+// operator only how the receive stands (`lightning_receive_status`, one small request): every
+// RECEIVE_STATUS_MS while the invoice is fresh, every RECEIVE_STATUS_IDLE_MS once it is older. It
+// syncs once the operator holds a payment for it, and then every RECEIVE_SYNC_MS until the leaf is
+// the wallet's: the leaf comes in a round, about a minute, and the sync is what takes it.
+export const RECEIVE_STATUS_MS = 3_000
+export const RECEIVE_STATUS_IDLE_MS = 30_000
+export const RECEIVE_SYNC_MS = 10_000
+// How long an invoice counts as fresh, measured from its lapse back by the operator's invoice
+// expiry (RECEIVE_INVOICE_EXPIRY_S when the operator's info does not say).
+export const RECEIVE_FRESH_S = 10 * 60
+export const RECEIVE_INVOICE_EXPIRY_S = 3600
+
+// Whether a receive the library lists (`lightning_receives` under its hash) still waits on a sync to
+// move on: asked and not lapsed (`requested`, `waiting`: the operator may hold a payment for it),
+// or held and its leaf on the way (`issuing`, `claiming`). `received` and `failed` are done.
+export function receiveMovesOnSync (rec, nowSeconds) {
+  if (!rec) return false
+  const s = String(rec.state || '')
+  if (s === 'issuing' || s === 'claiming') return true
+  return receiveState(rec, nowSeconds) === 'open'
+}
+
+// What the page does next for one receive, and how often: { action: 'status' | 'sync', everyMs },
+// or null when it waits on nothing. `waiting` is asked about (`status`); `requested` (the operator
+// never answered the request) and a payment held (`issuing`, `claiming`) are synced.
+export function receivePlan (rec, nowSeconds, expiryS = RECEIVE_INVOICE_EXPIRY_S) {
+  if (!receiveMovesOnSync(rec, nowSeconds)) return null
+  const s = String(rec.state || '')
+  if (s === 'issuing' || s === 'claiming') return { action: 'sync', everyMs: RECEIVE_SYNC_MS }
+  if (s === 'requested') return { action: 'sync', everyMs: RECEIVE_STATUS_IDLE_MS }
+  const age = rec.expires_at == null ? Infinity : Number(expiryS) - (Number(rec.expires_at) - Number(nowSeconds))
+  return { action: 'status', everyMs: age < RECEIVE_FRESH_S ? RECEIVE_STATUS_MS : RECEIVE_STATUS_IDLE_MS }
+}
+
+// Whether the operator's answer to `lightning_receive_status` means the wallet should sync now: a
+// payment is held for the receive (`accepted`), its leaf claimed already (`claimed`), or it was
+// failed back (`cancelled`), which the library records only in a sync.
+export function statusMovesOn (status) {
+  const s = String((status && status.state) || '')
+  return s === 'accepted' || s === 'claimed' || s === 'cancelled'
+}
+
 export const __test__ = { big }

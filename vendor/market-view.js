@@ -13,6 +13,7 @@
 // no `ticker` keeps each direction's trades apart: both directions are read and put together.
 
 import { createPriceChart, CHART_NOTICE } from './chart.js'
+import { verifyOffer, normRelayOffer } from './seqob.js'
 
 const big = (v) => { try { return BigInt(v ?? 0) } catch { return 0n } }
 
@@ -54,13 +55,14 @@ export const RANGES = Object.freeze([
 export const RAIL_NAMES = Object.freeze({
   'onchain-fill': 'on-chain covenant', 'covenant-round': 'covenant in a round', 'clearing-round': 'clearing round',
   'leaf-resting': 'resting leaf', interactive: 'interactive', cross: 'cross-chain', lightning: 'Lightning',
-  'leaf-maker': 'in-tree maker', 'btc-gateway': 'BTC desk',
+  'leaf-maker': 'in-tree maker', 'btc-gateway': 'BTC desk', restricted: 'restricted asset',
 })
 
 // The rail an offer of the book settles on.
 export function offerRail (o) {
   if (!o) return 'other'
   if (o.resting_leaf || o.restingLeaf) return 'leaf-resting'
+  if (o.restricted || o.gated_order || o.gatedOrder) return 'restricted'
   if (o.covenant) return 'onchain-fill'
   if (o.lightning) return 'lightning'
   if (o.cross_chain || o.crossChain) return 'cross'
@@ -163,15 +165,26 @@ export async function readMarket (relay, base, quote, rangeKey, fetchImpl = fetc
   return { trades, candles, ticker, offers: [...((b1 && b1.offers) || []), ...((b2 && b2.offers) || [])], range }
 }
 
+// An offer counts in the price and depth only when this wallet can check it and take it: its
+// maker's signature verifies, and it settles on a rail the wallet takes (#670). A round order is
+// filled only by its clearer, and an offer of a kind the wallet does not know is not counted.
+export function takeableOffer (o) {
+  if (!o || offerRail(o) === 'other') return false
+  if (o._verified === true || o._verified === false) return o._verified
+  try { const c = normRelayOffer(JSON.parse(JSON.stringify(o))); return verifyOffer(c) } catch { return false }
+}
+
 // The book's best bid and ask (unit prices) and its depth on each side (base units), from the
-// offers of both orientations; by rail too, for developer mode.
-export function bookOf (offers, base, quote, bp, qp, nowSec) {
+// offers of both orientations that the wallet can take (takeableOffer); by rail too, for
+// developer mode.
+export function bookOf (offers, base, quote, bp, qp, nowSec, takeable = takeableOffer) {
   let bid = null, ask = null, bidDepth = 0, askDepth = 0
   const byRail = {}
   const seen = new Set()
   for (const o of offers || []) {
     const exp = Number(o.expires_at_unix || o.expiresAtUnix || 0); if (exp && exp <= nowSec) continue
     const id = (o.maker_pubkey || o.makerPubkey) + ':' + (o.offer_id || o.offerId); if (seen.has(id)) continue; seen.add(id)
+    if (!takeable(o)) continue
     const oa = o.offer_asset || o.offerAsset, wa = o.want_asset || o.wantAsset
     const oA = Number(o.offer_amount || o.offerAmount || 0), wA = Number(o.want_amount || o.wantAmount || 0)
     let baseU, quoteU, isAsk

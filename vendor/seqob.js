@@ -309,6 +309,52 @@ function encodeRestingLeafTerms(c){
   return w.bytes();
 }
 
+// Bytes as the relay serves them (base64) or as normRelayOffer leaves them (hex): proto3 omits
+// an empty value.
+function anyBytes(v){
+  if (v == null || v === '') return null;
+  if (v instanceof Uint8Array) return v.length ? v : null;
+  const s = String(v);
+  const b = /^[0-9a-fA-F]*$/.test(s) && s.length % 2 === 0 ? hexToBytes(s) : b64decode(s);
+  return b.length ? b : null;
+}
+function optBytes(w, field, v){ const b = anyBytes(v); if (b) w.lenbytes(field, b); }
+
+// seqob.v1.RestrictedTerms (offer settlement oneof field 29).
+function encodeRestrictedTerms(c){
+  if (!c) return null;
+  const w = new PW();
+  w.str(1, O(c,'policy_server','policyServer'));
+  optBytes(w, 2, O(c,'policy_x','policyX'));
+  w.str(3, O(c,'maker_aid','makerAid'));
+  w.str(4, O(c,'pot_asset','potAsset'));
+  w.uint(5, O(c,'pot_amount','potAmount'));
+  w.str(6, O(c,'maker_recv_address','makerRecvAddress'));
+  return w.bytes();
+}
+
+// seqob.v1.GatedOrderTerms (offer settlement oneof field 30).
+function encodeGatedOrderTerms(c){
+  if (!c) return null;
+  const w = new PW();
+  // covenant_txid (1) and covenant_vout (2): the order re-rests at every part fill, so its
+  // outpoint is outside the signed bytes (seqdex offer.CanonicalOfferBytes).
+  w.str(3, O(c,'asset_a','assetA'));
+  w.str(4, O(c,'asset_b','assetB'));
+  w.uint(5, O(c,'rate_num','rateNum'));
+  w.uint(6, O(c,'rate_den','rateDen'));
+  optBytes(w, 7, O(c,'maker_prog','makerProg'));
+  w.uint(8, O(c,'maker_prog_ver','makerProgVer'));
+  w.uint(9, O(c,'min_lot','minLot'));
+  w.uint(10, O(c,'expiry'));
+  optBytes(w, 11, O(c,'policy_x','policyX'));
+  optBytes(w, 12, O(c,'issuer_x','issuerX'));
+  optBytes(w, 13, O(c,'maker_enclave_prog','makerEnclaveProg'));
+  w.str(14, O(c,'policy_server','policyServer'));
+  w.str(15, O(c,'maker_aid','makerAid'));
+  return w.bytes();
+}
+
 // seqob.v1.CrossChainTerms (offer settlement oneof field 21). Field numbers and
 // proto3 omit-zero semantics match the Go relay's deterministic marshal exactly,
 // so a maker-signed CROSS offer verifies here byte-for-byte (direction 0 =
@@ -375,6 +421,10 @@ export function canonicalOfferBytes(o){
   w.msg(25, encodeSimplicityCovenantTerms(O(o,'simplicity_covenant','simplicityCovenant')));
   // resting_leaf = 26: an order resting as a leaf in an operator's tree.
   w.msg(26, encodeRestingLeafTerms(O(o,'resting_leaf','restingLeaf')));
+  // restricted = 29: an online maker's quote for a restricted asset; gated_order = 30: a
+  // restricted asset's resting sell order. Neither is filled here unverified.
+  w.msg(29, encodeRestrictedTerms(O(o,'restricted')));
+  w.msg(30, encodeGatedOrderTerms(O(o,'gated_order','gatedOrder')));
   // maker_sig (31) is deliberately omitted.
   return w.bytes();
 }
@@ -513,6 +563,14 @@ export function normRelayOffer(o){
   if (sim){
     for (const k of ['maker_script', 'makerScript', 'refund_key', 'refundKey']){
       if (sim[k] != null) sim[k] = b64ToHex(sim[k]);
+    }
+  }
+  const rt = o && o.restricted;
+  if (rt && rt.policy_x != null) rt.policy_x = b64ToHex(rt.policy_x);
+  const go = o && (o.gated_order || o.gatedOrder);
+  if (go){
+    for (const k of ['maker_prog', 'policy_x', 'issuer_x', 'maker_enclave_prog']){
+      if (go[k] != null) go[k] = b64ToHex(go[k]);
     }
   }
   const rest = o && (o.resting_leaf || o.restingLeaf);

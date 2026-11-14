@@ -234,6 +234,30 @@ export function installStore(directory) {
     const ret = wasm.installStore(ptr0, len0);
     return ret;
 }
+
+/**
+ * Waits `ms` milliseconds as the library does between two tries: through
+ * the host's wait ([`set_pause`]), never less than `ms`. For a host to check
+ * its wait.
+ * @param {number} ms
+ */
+export function pause(ms) {
+    wasm.pause(ms);
+}
+
+/**
+ * Gives the library the host's wait, `wait(ms)`: a function that blocks the
+ * calling thread for up to `ms` milliseconds without using the processor,
+ * and returns. It may return early or throw; the library then waits out the
+ * rest on the clock, which keeps a core busy, so a host that can wait
+ * without one should give it. `null` takes it back. How the host waits is
+ * its own: a synchronous request its server holds, `Atomics.wait` on a
+ * shared buffer where the page is cross-origin isolated or under Node.
+ * @param {Function | null} [wait]
+ */
+export function setPause(wait) {
+    wasm.setPause(isLikeNone(wait) ? 0 : addToExternrefTable0(wait));
+}
 function __wbg_get_imports() {
     const import0 = {
         __proto__: null,
@@ -454,7 +478,7 @@ function __wbg_get_imports() {
                     const a = state0.a;
                     state0.a = 0;
                     try {
-                        return wasm_bindgen_b19ca315ae9c045d___convert__closures_____invoke___js_sys_6877b6322c26ad48___Function_fn_wasm_bindgen_b19ca315ae9c045d___JsValue_____wasm_bindgen_b19ca315ae9c045d___sys__Undefined___js_sys_6877b6322c26ad48___Function_fn_wasm_bindgen_b19ca315ae9c045d___JsValue_____wasm_bindgen_b19ca315ae9c045d___sys__Undefined_______true_(a, state0.b, arg0, arg1);
+                        return wasm_bindgen_6c31107e48cb2cdf___convert__closures_____invoke___js_sys_88ba868c340644c5___Function_fn_wasm_bindgen_6c31107e48cb2cdf___JsValue_____wasm_bindgen_6c31107e48cb2cdf___sys__Undefined___js_sys_88ba868c340644c5___Function_fn_wasm_bindgen_6c31107e48cb2cdf___JsValue_____wasm_bindgen_6c31107e48cb2cdf___sys__Undefined_______true_(a, state0.b, arg0, arg1);
                     } finally {
                         state0.a = a;
                     }
@@ -637,8 +661,8 @@ function __wbg_get_imports() {
             return ret;
         }, arguments); },
         __wbindgen_generic_0000000000000001: function(arg0, arg1) {
-            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 1121, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
-            const ret = makeMutClosure(arg0, arg1, wasm_bindgen_b19ca315ae9c045d___convert__closures_____invoke___wasm_bindgen_b19ca315ae9c045d___JsValue__core_37ee0ce0c4cd57d5___result__Result_____wasm_bindgen_b19ca315ae9c045d___JsError___true_);
+            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 1138, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
+            const ret = makeMutClosure(arg0, arg1, wasm_bindgen_6c31107e48cb2cdf___convert__closures_____invoke___wasm_bindgen_6c31107e48cb2cdf___JsValue__core_d941ad8722425d2e___result__Result_____wasm_bindgen_6c31107e48cb2cdf___JsError___true_);
             return ret;
         },
         __wbindgen_generic_0000000000000002: function(arg0) {
@@ -672,15 +696,15 @@ function __wbg_get_imports() {
     };
 }
 
-function wasm_bindgen_b19ca315ae9c045d___convert__closures_____invoke___wasm_bindgen_b19ca315ae9c045d___JsValue__core_37ee0ce0c4cd57d5___result__Result_____wasm_bindgen_b19ca315ae9c045d___JsError___true_(arg0, arg1, arg2) {
-    const ret = wasm.wasm_bindgen_b19ca315ae9c045d___convert__closures_____invoke___wasm_bindgen_b19ca315ae9c045d___JsValue__core_37ee0ce0c4cd57d5___result__Result_____wasm_bindgen_b19ca315ae9c045d___JsError___true_(arg0, arg1, arg2);
+function wasm_bindgen_6c31107e48cb2cdf___convert__closures_____invoke___wasm_bindgen_6c31107e48cb2cdf___JsValue__core_d941ad8722425d2e___result__Result_____wasm_bindgen_6c31107e48cb2cdf___JsError___true_(arg0, arg1, arg2) {
+    const ret = wasm.wasm_bindgen_6c31107e48cb2cdf___convert__closures_____invoke___wasm_bindgen_6c31107e48cb2cdf___JsValue__core_d941ad8722425d2e___result__Result_____wasm_bindgen_6c31107e48cb2cdf___JsError___true_(arg0, arg1, arg2);
     if (ret[1]) {
         throw takeFromExternrefTable0(ret[0]);
     }
 }
 
-function wasm_bindgen_b19ca315ae9c045d___convert__closures_____invoke___js_sys_6877b6322c26ad48___Function_fn_wasm_bindgen_b19ca315ae9c045d___JsValue_____wasm_bindgen_b19ca315ae9c045d___sys__Undefined___js_sys_6877b6322c26ad48___Function_fn_wasm_bindgen_b19ca315ae9c045d___JsValue_____wasm_bindgen_b19ca315ae9c045d___sys__Undefined_______true_(arg0, arg1, arg2, arg3) {
-    wasm.wasm_bindgen_b19ca315ae9c045d___convert__closures_____invoke___js_sys_6877b6322c26ad48___Function_fn_wasm_bindgen_b19ca315ae9c045d___JsValue_____wasm_bindgen_b19ca315ae9c045d___sys__Undefined___js_sys_6877b6322c26ad48___Function_fn_wasm_bindgen_b19ca315ae9c045d___JsValue_____wasm_bindgen_b19ca315ae9c045d___sys__Undefined_______true_(arg0, arg1, arg2, arg3);
+function wasm_bindgen_6c31107e48cb2cdf___convert__closures_____invoke___js_sys_88ba868c340644c5___Function_fn_wasm_bindgen_6c31107e48cb2cdf___JsValue_____wasm_bindgen_6c31107e48cb2cdf___sys__Undefined___js_sys_88ba868c340644c5___Function_fn_wasm_bindgen_6c31107e48cb2cdf___JsValue_____wasm_bindgen_6c31107e48cb2cdf___sys__Undefined_______true_(arg0, arg1, arg2, arg3) {
+    wasm.wasm_bindgen_6c31107e48cb2cdf___convert__closures_____invoke___js_sys_88ba868c340644c5___Function_fn_wasm_bindgen_6c31107e48cb2cdf___JsValue_____wasm_bindgen_6c31107e48cb2cdf___sys__Undefined___js_sys_88ba868c340644c5___Function_fn_wasm_bindgen_6c31107e48cb2cdf___JsValue_____wasm_bindgen_6c31107e48cb2cdf___sys__Undefined_______true_(arg0, arg1, arg2, arg3);
 }
 
 

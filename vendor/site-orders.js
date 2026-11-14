@@ -32,14 +32,22 @@
 //   list(order, rec)  -> posts an order placed here on the book once it rests; optional
 //   busy(on)          told while a review is being priced or settled, so a page's own follow of
 //                     its trades waits (the wallet answers one command at a time); optional
-//   followTrades      false where the page's own composer already follows every trade it made
-//                     (the web wallet's Trade tab); `follow` then lists orders only
+//   followTrades      where the page's own follow of the engine's trades moves every trade on (the
+//                     web wallet's Trade tab): a function that wakes that follow, asked the moment
+//                     a site's trade is written and at every `follow` while one is open, so a trade
+//                     accepted while that follow rested has its row and its end; `follow` then
+//                     moves no trade itself. `false` leaves the trades to that follow alone;
+//                     absent, `follow` moves them on itself
 //   now()             -> milliseconds; optional
+//   note(text)        tells the person something while a review is being priced (a price asked
+//                     again, "Getting a price for …"); optional
+//   wait(ms)          -> a promise resolved after `ms` (setTimeout's); optional
 //   answerMs          how long a trade's step is waited on before the site is answered with the
 //                     trade under way (SITE_ANSWER_MS); optional
 //   log(...)          optional
 
-import { USER_WORDS, costLine, heldAlready, tradeStateWord } from './user-trade.js'
+import { USER_WORDS, costLine, heldAlready, tradeStateWord, OFFERED_AGAIN_MS, OFFERED_AGAIN_EVERY_MS } from './user-trade.js'
+import { settleWords } from './default-arca.js'
 
 const HEX64 = /^[0-9a-f]{64}$/
 const big = (v) => { try { return BigInt(v ?? 0) } catch { return 0n } }
@@ -180,17 +188,21 @@ export function makeSiteOrders (d) {
   function refusal (q, pay, get) {
     const W = USER_WORDS
     if (q.why === 'not-listed') return W.notListed(tick(get), tick(pay))
-    if (q.why === 'not-offered') return W.notOffered(tick(get), tick(pay))
+    if (q.why === 'not-offered') return q.again ? W.offeredAgain(tick(get), tick(pay)) : W.notOffered(tick(get), tick(pay))
     if (q.why === 'no-funds') return W.noFunds(tick(pay))
     if (q.why === 'not-ready') return W.notReady(tick(pay), q.soon)
     if (q.why === 'redoing') return W.redoing(tick(pay))
     if (q.why === 'busy') return W.busy(tick(pay))
     if (q.why === 'freeing') return W.freeing(tick(pay), q.soon)
     if (q.why === 'readying') return W.readying(tick(pay), q.soon)
-    if (q.why === 'part-ready') return W.partReady(fmt(pay, q.ready), tick(pay), q.soon)
+    // More than the wallet holds, nothing of it on its way: the whole of it, named.
+    if (q.why === 'part-ready') return W.moreThanHeld(fmt(pay, q.ready))
+    if (q.why === 'restoring') return W.restoring
     if (q.why === 'too-small') return W.tooSmall
+    if (q.why === 'own-short') return W.ownShort(fmt(pay, q.most))
     if (q.why === 'no-firm-offer') return W.noFirmOffer
     if (q.why === 'wallet-busy') return W.walletBusy
+    if (q.why === 'btc-ahead') return W.btcAhead
     // A reason this list does not know is never told as the amount's fault.
     return W.failed
   }
@@ -214,7 +226,7 @@ export function makeSiteOrders (d) {
         const want = ceilDiv(o.amount * big(q.ticket.amountIn), big(q.ticket.amountOut))
         return { pay, get, q: await d.engine.quote({ payAsset: pay, receiveAsset: get, amount: want }) }
       }
-      if (est && !est.ok && (est.why === 'not-listed' || est.why === 'not-offered')) return { pay, get, q: est }
+      if (est && !est.ok && ['not-listed', 'not-offered', 'btc-ahead'].includes(est.why)) return { pay, get, q: est }
     }
     const probeAmount = o.price != null ? ceilDiv(o.amount * o.price, unitOf(o.base)) : 10n ** 18n
     const probe = await d.engine.quote({ payAsset: pay, receiveAsset: get, amount: probeAmount })
@@ -237,17 +249,40 @@ export function makeSiteOrders (d) {
     let tq = null
     const t0 = now()
     try { tq = await tradeQuote(o) } catch (e) { log('[site orders] no price:', e && e.message); tq = null }
+    // A pair offered a moment ago that nobody offers now (a maker reading its coins again after a
+    // trade): asked again every OFFERED_AGAIN_EVERY_MS, as the Trade tab does, while the engine says
+    // so (`again`, within OFFERED_AGAIN_MS of the last offer), and the person told meanwhile, never
+    // "Not offered right now" for a pair offered seconds ago (web #659).
+    for (let i = 0; tq && tq.q && !tq.q.ok && tq.q.why === 'not-offered' && tq.q.again && now() - t0 < OFFERED_AGAIN_MS; i++) {
+      if (i === 0) { try { d.note && d.note(USER_WORDS.offeredAgain(tick(tq.get), tick(tq.pay))) } catch {} }
+      await (d.wait ? d.wait(OFFERED_AGAIN_EVERY_MS) : new Promise((r) => setTimeout(r, OFFERED_AGAIN_EVERY_MS)))
+      try { tq = await tradeQuote(o) } catch (e) { log('[site orders] no price:', e && e.message); tq = null }
+    }
     log(`[site orders] ${o.type} ${o.side}: priced in ${now() - t0} ms:`, tq && tq.q ? (tq.q.ok ? `${tq.q.ticket.amountIn} -> ${tq.q.ticket.amountOut}` : tq.q.why) : 'no price')
     const unit = unitOf(o.base)
     const opts = o.opts || {}
-    const takes = tq && tq.q && tq.q.ok && (o.type === 'market' || meetsLimit(o, tq.q.ticket, unit))
+    // A ticket whose coins settle first (the engine's ticket to wait and go) meets a limit at the
+    // book's price now, and then goes only at the limit or better: its least is raised to it.
+    const ind = tq && tq.q && tq.q.ok && tq.q.ticket.indicative ? tq.q.ticket : null
+    const takes = tq && tq.q && tq.q.ok && (o.type === 'market' || meetsLimit(o, ind ? { ...ind, amountOut: ind.about } : tq.q.ticket, unit))
+    if (takes && ind && o.type === 'limit') {
+      const need = o.side === 'sell' ? ceilDiv(o.price * big(ind.amountIn), unit) : ceilDiv(big(ind.amountIn) * unit, o.price)
+      if (need > big(ind.amountOut)) tq.q.ticket = { ...ind, amountOut: String(need) }
+    }
     if (takes && opts.postOnly) { try { d.engine.drop(tq.q.choice) } catch {} throw new Error(SITE_WORDS.wouldTrade) }
     if (takes) {
       const t = tq.q.ticket
       const id = nid()
       pending.set(id, { kind: 'take', o, origin, choice: tq.q.choice, ticket: t, at: now() })
-      const rows = [[USER_WORDS.amountIn, fmt(t.payAsset, t.amountIn)], [USER_WORDS.amountOut, fmt(t.receiveAsset, t.amountOut)],
-        feeRow(t.fees, t.payAsset)]
+      // What it pays waits for a round first: the book's price now, the least it goes for after its
+      // fees, and how long it waits; the trade then goes by itself, or comes back.
+      const rows = t.indicative
+        ? [[USER_WORDS.amountIn, fmt(t.payAsset, t.amountIn)], [USER_WORDS.amountOut, USER_WORDS.about + ' ' + fmt(t.receiveAsset, t.about)],
+            ['', USER_WORDS.atLeast(fmt(t.receiveAsset, t.amountOut))], ...((t.fees || []).length ? [feeRow(t.fees, t.payAsset)] : []),
+            // The wait, only as the wallet gave it; with none given, no time is promised.
+            ['', t.finalBy == null ? USER_WORDS.settling : settleWords(t.finalBy, 1, now(), USER_WORDS)]]
+        : [[USER_WORDS.amountIn, fmt(t.payAsset, t.amountIn)], [USER_WORDS.amountOut, fmt(t.receiveAsset, t.amountOut)],
+            feeRow(t.fees, t.payAsset)]
       if (t.upTo) rows.push(['', USER_WORDS.upTo(fmt(t.payAsset, t.upTo))])
       rows.push(asked)
       return { id, kind: 'take', display: { title: SITE_WORDS.tradeTitle, text: SITE_WORDS.tradeText, rows } }
@@ -312,8 +347,10 @@ export function makeSiteOrders (d) {
       // answered meanwhile.
       try { d.busy && d.busy(true) } catch {}
       const done = d.engine.confirm(p.choice, p.ticket)
+      // Once the step is taken (or the trade is written to wait for its coins), the page's follow is
+      // woken: the trade has its row from then, and moves on by itself (#770).
       done.then((rec) => { if (rec && rec.id && rec.state !== 'failed') mark(rec.id) }, (e) => log('[site orders] confirm:', e && e.message))
-        .finally(() => { try { d.busy && d.busy(false) } catch {} })
+        .finally(() => { try { d.busy && d.busy(false) } catch {} wake() })
       const later = Symbol('later')
       let rec
       // The price no longer held (the offer lapsed, or what it spends changed since it was shown):
@@ -329,6 +366,14 @@ export function makeSiteOrders (d) {
       }
       if (rec.state === 'failed') throw new Error(USER_WORDS.failed)
       mark(rec.id)
+      // Accepted to go once what it pays is settled: under way, never a fill yet.
+      if (rec.state === 'settling') return { trade: rec.id, filled: 0, under_way: 1, state: tradeState(rec), failed: [], order: null, order_error: null, gave: '0', got: '0' }
+      // A purchase with BTC is traded only once its BTC is paid and what it buys is collected, minutes
+      // after the confirmation, and only while the page stays open until its BTC is paid: under way
+      // until then, with what the wallet says of it (`note`), never "traded".
+      if (rec.source === 'btc-gateway' && !heldAlready(rec)) {
+        return { trade: rec.id, filled: 0, under_way: 1, state: tradeState(rec), note: tradeStateWord(rec, now()), failed: [], order: null, order_error: null, gave: '0', got: '0' }
+      }
       return { trade: rec.id, filled: 1, failed: [], order: null, order_error: null, gave, got }
     }
     return await busy(placeRest)(p, market)
@@ -352,11 +397,22 @@ export function makeSiteOrders (d) {
     return { trade: null, filled: 0, failed: [], order: r.order, order_error: null, gave: '0', got: '0' }
   }
 
-  // Moves this wallet's site trades on, and lists the orders placed here that rest now.
+  // The page's own follow of every trade, woken (followTrades as a function); never thrown from.
+  function wake () {
+    if (typeof d.followTrades !== 'function') return
+    try { Promise.resolve(d.followTrades()).catch((e) => log('[site orders] follow of trades:', e && e.message)) } catch (e) { log('[site orders] follow of trades:', e && e.message) }
+  }
+
+  // Moves this wallet's site trades on (or wakes the page's follow of them), and lists the orders
+  // placed here that rest now.
   async function follow () {
     const v = db()
-    const recs = d.followTrades === false ? [] : (d.engine.records ? d.engine.records() : []).filter((r) => v.trades[r.id] && !['settled', 'returned', 'failed'].includes(r.state))
-    for (const r of recs) { try { await d.engine.advance(r) } catch (e) { log('[site orders] follow:', e && e.message) } }
+    const open = (d.engine.records ? d.engine.records() : []).filter((r) => v.trades[r.id] && !['settled', 'returned', 'failed', 'undone'].includes(r.state))
+    if (open.length) wake()
+    const recs = d.followTrades === false || typeof d.followTrades === 'function' ? [] : open
+    for (const r of recs) {
+      try { if (keepEnded(v, await d.engine.advance(r))) write(v) } catch (e) { log('[site orders] follow:', e && e.message) }
+    }
     const mine = Object.keys(v.orders)
     if (!mine.length || !d.list) return
     let lib = []
@@ -378,6 +434,8 @@ export function makeSiteOrders (d) {
     if (!r) return 'sent'
     // The wallet has not paid or signed its side yet: the step is being taken.
     if (r.state === 'confirming' && !r.uncertain) return 'sending'
+    // Waiting for what it pays to settle, then priced again and sent by itself.
+    if (r.state === 'settling') return 'sending'
     if (r.state === 'settled') return 'settled'
     if (r.state === 'failed' || r.state === 'returned') return 'failed'
     return heldAlready(r) ? 'received' : 'sent'
@@ -390,16 +448,33 @@ export function makeSiteOrders (d) {
     return big(o.holds) < big(rec.sold) ? 'filling' : 'open'
   }
 
+  // A site trade whose record has ended keeps how it ended here, in `swk.siteorders`: the wallet
+  // keeps the records of ended trades only up to a bound (user-trade.js KEEP_ENDED), and getOrders
+  // answers for a trade after its record is gone. Returns whether it changed `v`.
+  function keepEnded (v, r) {
+    const t = r && r.id && v.trades[r.id]
+    if (!t || !['settled', 'returned', 'failed', 'undone'].includes(r.state)) return false
+    const state = tradeState(r), note = tradeStateWord(r, now())
+    if (t.ended === state && t.endedNote === note) return false
+    t.ended = state; t.endedNote = note
+    return true
+  }
+
   // getOrders' answer: the trades and orders this site made through this wallet.
   async function orders (origin) {
     const v = db()
     const recs = d.engine.records ? d.engine.records() : []
     const byId = new Map(recs.map((r) => [r.id, r]))
+    let kept = false
+    for (const r of recs) kept = keepEnded(v, r) || kept
+    if (kept) write(v)
     const trades = Object.entries(v.trades).filter(([, t]) => t.origin === origin).map(([id, t]) => {
       const r = byId.get(id)
-      const state = tradeState(r)
+      // A record no longer kept is that of an ended trade (an unfinished one is never dropped): how
+      // it ended, as kept when it ended, or `ended` when the wallet never saw it end.
+      const state = r ? tradeState(r) : (t.ended || 'ended')
       // The trade's own words, as the wallet's list says them (with the minutes it has waited).
-      const note = r ? tradeStateWord(r, now()) : null
+      const note = r ? tradeStateWord(r, now()) : (t.endedNote || null)
       return { trade: id, at: t.at, market: t.market, side: t.side, type: t.type, kind: 'take', order: null, state, note,
         fills: t.base != null ? [{ txid: id, base: t.base, quote: t.quote, state }] : [] }
     })
