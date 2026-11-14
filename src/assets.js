@@ -143,6 +143,11 @@ function priceOf(ref) { return ref === 'USD' ? 1 : priceFor(ref); }
 
 // Value of `atoms` of asset `hex` in reference currency `ref`; falls back to
 // USD when the chosen reference is unpriced. Returns {v, ref} or null.
+// The price feed's price of one whole unit of an asset (or 'BTC') in USD, or null when unpriced.
+export function unitPrice(hex) {
+  const p = priceFor(hex === 'BTC' ? 'BTC' : priceTicker(hex));
+  return p > 0 ? p : null;
+}
 export function refValue(hex, atoms, ref) {
   const pu = priceFor(priceTicker(hex));
   if (!(pu > 0)) return null;

@@ -245,6 +245,27 @@ function tweakOutputKey(internalX, root){
   return { outKey: bigToBytesBE(x, 32), negated: (y & 1n) ? 1 : 0 };
 }
 
+// spkMatcher tests many candidate taptrees against one output: the wallet looking for its own
+// order whose record is gone (covenant-recovery.js). The output's point less the internal key is
+// computed once; each candidate then costs its root and one multiplication of the base point,
+// against two of deriveTaptree's lifts, multiplications and conversions.
+//   matches(fillLeafHash, refundLeafHash) -> true when that taptree pays this output
+export function spkMatcher(spkHex, internalKey = NUMS){
+  const spk = hexToBytes(spkHex);
+  if (spk.length !== 34 || spk[0] !== OP_1 || spk[1] !== 0x20) throw new Error('not a taproot output: ' + spkHex);
+  const P = schnorr.utils.lift_x(bytesToBigBE(internalKey));
+  const Q = schnorr.utils.lift_x(bytesToBigBE(spk.slice(2)));
+  const T = [Q.subtract(P), Q.negate().subtract(P)];
+  return (fillH, refundH) => {
+    let lo = fillH, hi = refundH;
+    if (cmp(hi, lo) < 0){ const t = lo; lo = hi; hi = t; }
+    const root = taggedHash('TapBranch/elements', lo, hi);
+    const t = schnorr.Point.Fn.create(bytesToBigBE(taggedHash('TapTweak/elements', internalKey, root)));
+    const R = schnorr.Point.BASE.multiply(t);
+    return R.equals(T[0]) || R.equals(T[1]);
+  };
+}
+
 // --- Order / taptree --------------------------------------------------------
 
 // deriveTaptree builds the {FILL, REFUND} taptree, Merkle root, tweaked output

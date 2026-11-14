@@ -26,7 +26,7 @@ test('the board names its transaction, and the figure asks the wallet\'s own rea
 });
 
 test('the same payment to an address asked again while the first is on its way is never said to be sent twice', () => {
-  assert.match(src('src/default-mode.js'), /const o = offboardOutcome\(v, p\.amt, p\.ticker, p\.minutes, p\.block\);/);
+  assert.match(src('src/default-mode.js'), /const o = offboardOutcome\(v, p\.amt, p\.ticker, p\.minutes, p\.block, p\.unlock\);/);
   assert.match(src('src/default-mode.js'), /if \(!o\.sent \|\| !id\) return \{ text: o\.text/);
 });
 

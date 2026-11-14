@@ -663,7 +663,9 @@ const uiMethods = {
   'setHidden': async ({ hex, on }) => ({ hidden: await setHidden(String(hex || ''), !!on) }),
   'default.assetMeta': async ({ hexes }) => {
     const out = {};
-    for (const h of hexes || []) if (/^[0-9a-f]{64}$/.test(h)) { const m = A.assetMeta(h); out[h] = { ticker: m.ticker, precision: m.precision }; }
+    // `price`: one whole unit's price on the feed, in USD, or null (the trade engine's fairRate).
+    for (const h of hexes || []) if (/^[0-9a-f]{64}$/.test(h)) { const m = A.assetMeta(h); out[h] = { ticker: m.ticker, precision: m.precision, price: A.unitPrice(h) }; }
+    if ((hexes || []).includes('BTC')) out.BTC = { ticker: 'BTC', precision: 8, price: A.unitPrice('BTC') };
     return out;
   },
   'default.ark': async ({ method, args }) => await dm.arkLightning(String(method), args),

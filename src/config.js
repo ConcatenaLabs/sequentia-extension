@@ -31,6 +31,11 @@ export const LSP = {
 // payment-name service (LSP.url + '/lnaddr'); the same names as the web wallet's.
 export const LNADDR_DOMAIN = 'sequentiatestnet.com';
 
+// Where the leaf wallet's worker waits out the library's pauses between two tries (the node
+// route's hold, held open for the time asked), so a pause costs no processor; the web wallet's
+// SEQ_PAUSE_URL.
+export const LEAF_PAUSE_URL = BASE + '/node-rpc/hold';
+
 // The operator default mode holds assets with (vendor/default-arca.js): its server, the node
 // its leaf wallet follows the chain through, and the operator's key, pinned. A wallet in default
 // mode that has joined none joins this one by itself, and only while its server shows this key.

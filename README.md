@@ -507,11 +507,16 @@ git archive --format=zip -o ambra-extension.zip HEAD -- manifest.json background
 - Default mode against the live testnet, end to end in headless Chromium:
   `CHROME=/path/to/chrome node test/default/live-drive.mjs <evidence-dir> <work-dir>`.
   Three fresh profiles: a new wallet joins by itself and shows its receive code, the
-  faucet pays it, it pays a second wallet's code, trades once in the composer
-  (`TRADE_PAY`, `TRADE_GET`, `TRADE_AMOUNT`), its phrase is restored in a third
+  faucet pays it, it pays a second wallet's code, trades in the composer
+  (`TRADE_PAY` for `TRADE_GET` and back, `TRADE_AMOUNT`; then BTC bought for `BTC_PAY`
+  of `TRADE_PAY` and half of it sold), each trade logged with the waits the wallet states
+  and the time it took, a purchase paid with BTC checked to end within the wait it states,
+  its phrase is restored in a third
   profile with the same figures, and the second wallet is removed and made again
   (BTC alone). One browser runs at a time. Every default-mode tab is read against the
-  forbidden words, and any error in the extension's contexts fails it. `FAUCET` names
+  forbidden words, and any error in the extension's contexts fails it. Phrases stay in
+  memory unless `PHRASE_DIR` names a directory outside the repository, where each is kept
+  (mode 600, `PHRASE_PREFIX` naming them) so the coins a run leaves are never stranded. `FAUCET` names
   the asset asked for (the faucet pays each asset once per wallet, and once a day to
   one network);
 - Receive in default mode against the live testnet, one fresh profile:

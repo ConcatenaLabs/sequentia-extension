@@ -1771,6 +1771,15 @@ async function renderTrade() {
         const o = ((await r.json()).vout || [])[vout]; return o && o.value != null ? String(o.value) : null;
       },
       admitted: async () => ({ pairs: served(), genesis }),
+      // Atoms of `receive` an atom of `pay` is worth on the price feed, or null when either is
+      // unpriced: the engine leaves out any entry far off it (the web wallet's rule).
+      fairRate: (pay, receive) => {
+        const a = assetInfo[pay], b = assetInfo[receive];
+        if (!a || !b || !(a.price > 0) || !(b.price > 0) || a.precision == null || b.precision == null) return null;
+        return (a.price / b.price) * Math.pow(10, b.precision - a.precision);
+      },
+      // A trade that changed what the wallet holds: the balance is read again.
+      changed: () => { refreshOverview(); },
       // BTC at the wallet's address, moved to the Bitcoin ark for a trade that pays more than the
       // ark holds (default mode only; the service worker answers 0 otherwise).
       btcAtAddress: async () => BigInt((await rpc('default.btcAtAddress', {})).sats || 0),
@@ -1800,6 +1809,11 @@ async function renderTrade() {
       // The chosen pair's market above the inputs, from the relay's one trade log.
       market: { relay: () => seqob.seqobBase(), pairOf: (a, b) => displayPair(a, b, (h) => metaOf(h).ticker),
         visible: () => !$('tTrade').classList.contains('hide') },
+      // A trade's transaction on Sequentia (an order taken with the wallet's own coins), in the explorer.
+      links: (r) => r && /^[0-9a-f]{64}$/i.test(String(r.txid || '')) && OV ? [{ chain: 'Sequentia', href: OV.explorerTx + r.txid, text: r.txid.slice(0, 12) + '…' + r.txid.slice(-8) }] : [],
+      // A trade's end, said wherever the person is in the popup.
+      notify: (text) => toast(text),
+      openHistory: () => tab('history'),
     });
   }
   // The tab draws at once; what it lists comes in behind it, and it draws again with it.

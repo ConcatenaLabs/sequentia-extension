@@ -225,7 +225,7 @@ export function makeCovenantHooks(ctx){
           });
           sum += BigInt(u.unblinded().value());
         }
-        if (sum < feeAtoms) throw new Error(`insufficient ${feeAsset} for the refund fee: need ${feeAtoms}, have ${sum}`);
+        if (sum < feeAtoms) throw new Error(`The wallet holds too little ${ctx.tickerOf ? ctx.tickerOf(feeAsset) : 'of the fee asset'} for the fee of taking the coins back.`);
       }
 
       const genesisHex = await genesisHash();

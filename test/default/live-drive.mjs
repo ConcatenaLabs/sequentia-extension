@@ -3,16 +3,22 @@
 // fresh profiles, every step through the popup as a person takes it.
 //
 //   A: a new wallet joins the pinned operator by itself and shows one receive code; the faucet
-//      pays that code; A sends part of it to B's receive code; A trades once in the composer.
+//      pays that code; A sends part of it to B's receive code; A trades in the composer: PAY for
+//      GET and back, then BTC bought with PAY, and PAY bought with BTC. Each trade's ticket,
+//      every wait the wallet states while it runs, and the time it took to Settled are logged;
+//      a purchase paid with BTC must state its wait and end within it.
 //   B: a new wallet, paid by A; then Remove wallet, and a new wallet shows BTC alone.
 //   C: A's phrase imported: the same figures as A.
 //
 // Every popup screen in default mode is read against the words default mode never says, and
 // every error or exception of the service worker, the offscreen document and its workers fails
-// the drive. Phrases stay in memory: nothing of them is written anywhere.
+// the drive. Phrases stay in memory, unless PHRASE_DIR names a directory outside the repository:
+// then each wallet's phrase is kept there (<label>-<time>.phrase, mode 600), so the coins it
+// leaves behind are never stranded. Never put that directory in evidence.
 //
-//   CHROME=… [TRADE_PAY=USDX] [TRADE_GET=EURX] [FAUCET=USDX] node test/default/live-drive.mjs <evidence-dir> <work-dir>
-import { mkdirSync, writeFileSync, appendFileSync, rmSync } from 'node:fs';
+//   CHROME=… [TRADE_PAY=USDX] [TRADE_GET=EURX] [TRADE_AMOUNT=5] [BTC_PAY=10] [FAUCET=USDX] \
+//     node test/default/live-drive.mjs <evidence-dir> <work-dir>
+import { mkdirSync, writeFileSync, appendFileSync, rmSync, chmodSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Browser, sleep } from '../leaves/cdp.mjs';
@@ -26,6 +32,10 @@ const work = resolve(process.argv[3] || '/tmp/default-drive');
 const FAUCET = process.env.FAUCET || 'USDX';
 const PAY = process.env.TRADE_PAY || 'USDX';
 const GET = process.env.TRADE_GET || 'EURX';
+const AMOUNT = process.env.TRADE_AMOUNT || '5';
+// The trades, in order: [pay, get, amount]; an amount of '' trades half of what the wallet then
+// holds of what it pays (the way back, and the BTC sale).
+const TRADES = [[PAY, GET, AMOUNT], [GET, PAY, ''], [PAY, 'BTC', process.env.BTC_PAY || '10'], ['BTC', PAY, '']];
 if (!CHROME) { console.error('set CHROME'); process.exit(2); }
 mkdirSync(join(out, 'screens'), { recursive: true }); mkdirSync(work, { recursive: true });
 const logFile = join(out, 'drive.log');
@@ -58,6 +68,11 @@ async function create(w) {
   await w.pop.click('#btnStartCreate');
   await w.pop.waitFor("!!document.querySelector('#newPhrase').dataset.phrase");
   const phrase = await w.pop.eval("document.querySelector('#newPhrase').dataset.phrase");
+  if (process.env.PHRASE_DIR) {
+    const f = join(process.env.PHRASE_DIR, `${process.env.PHRASE_PREFIX || 'live-drive'}-${w.label}-${new Date().toISOString().replace(/[:.]/g, '')}.phrase`);
+    writeFileSync(f, phrase + '\n', { mode: 0o600 }); chmodSync(f, 0o600);
+    note(`     ${w.label}: phrase kept in ${f.split('/').pop()}`);
+  }
   await w.pop.set('createPw', 'drive-password'); await w.pop.set('createPw2', 'drive-password');
   const t = Date.now();
   await w.pop.click('#btnCreateGo');
@@ -107,6 +122,76 @@ async function waitRow(w, ticker, pred, ms) {
     if (Date.now() - t > ms) return r || null;
     await sleep(2000);
   }
+}
+
+// The composer's asset chooser (vendor/asset-picker.js): opened, searched, the row clicked.
+const pickExpr = (id, want) => `(async () => {
+  const b = document.getElementById(${JSON.stringify(id)}); if (!b) return false;
+  b.click(); await new Promise((r) => setTimeout(r, 150));
+  const inp = document.querySelector('.swpop-search input'); if (!inp) return false;
+  inp.value = ${JSON.stringify(want)}; inp.dispatchEvent(new Event('input')); await new Promise((r) => setTimeout(r, 100));
+  const row = [...document.querySelectorAll('.swpop .swopt')].find((o) => o.dataset.hex === ${JSON.stringify(want)} || ((o.querySelector('.swopt-tk') || {}).firstChild || {}).textContent === ${JSON.stringify(want)});
+  if (!row) { inp.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })); return false; }
+  row.click(); return true;
+})()`;
+// The waits the composer states, read from all it shows: "within about N minutes" (the ticket's,
+// a BTC purchase's waitingOther) and "taking longer than usual" (waitingOtherLate).
+const STATED = /within about (\d+) minutes?|in about a minute|taking longer than usual/gi;
+// One trade through the composer, as a person makes it, followed to Settled or Returned.
+async function trade(A, pay, get, amount) {
+  const name = `${pay}->${get}`;
+  await A.pop.click('[data-tab=trade]');
+  await A.pop.waitFor("!!document.querySelector('#ucPay')", 60000);
+  const pick = async (id, tk) => { const t = Date.now(); while (!(await A.pop.eval(pickExpr(id, tk)))) { if (Date.now() - t > 60000) return false; await sleep(1000); } await sleep(500); return true; };
+  if (!check(`${name}: You pay lists ${pay}`, await pick('ucPay', pay))) return;
+  if (!check(`${name}: You receive lists ${get}`, await pick('ucGet', get))) return;
+  let amt = amount;
+  if (!amt) {
+    const r = (await rows(A))[pay];
+    if (!r || !(BigInt(r.total) > 0n)) { check(`${name}: something of ${pay} to pay`, false, r); return; }
+    const half = BigInt(r.total) / 2n, p = r.precision || 0;
+    amt = (Number(half) / 10 ** p).toFixed(Math.min(p, 8)).replace(/\.?0+$/, '');
+  }
+  await A.pop.eval(`(()=>{ const i=document.querySelector('#ucAmount'); i.value=${JSON.stringify(amt)}; i.dispatchEvent(new Event('input')); return true })()`);
+  const tq = Date.now();
+  await A.pop.click('#ucReview');
+  const tk = await A.pop.waitFor("(()=>{ const k=document.querySelector('#ucCard'); if(k) return 'CARD '+k.innerText; if(document.querySelector('#ucConfirm')) return document.querySelector('#ucTicket').innerText; const n=document.querySelector('#ucNote'); return n && n.classList.contains('err') && n.textContent ? 'ERR '+n.textContent : false })()", 600000).catch(() => 'ERR no ticket in 10 minutes');
+  const ticketWords = forbiddenIn(tk);
+  check(`${name}: a ticket for ${amt} ${pay}`, !/^(ERR|CARD)/.test(tk) && !ticketWords.length, `${tk.replace(/\n+/g, ' | ')} (${secs(tq)})`);
+  await A.pop.shot(join(out, 'screens', `A-trade-${pay}-${get}-ticket.png`));
+  if (/^(ERR|CARD)/.test(tk)) return;
+  const statedOnTicket = [...tk.matchAll(STATED)].map((m) => m[0]);
+  const tc = Date.now();
+  const rows0 = await A.pop.eval("document.querySelectorAll('#ucTrades .uc-trade').length");
+  await A.pop.click('#ucConfirm');
+  // Followed every two seconds: every wait it states, with when it was stated, and its end.
+  const stated = [];
+  let fin = null, last = '';
+  while (Date.now() - tc < 30 * 60_000) {
+    const v = await A.pop.eval(`(()=>{ const r=document.querySelectorAll('#ucTrades .uc-trade'); const st=r.length > ${rows0} ? (r[0].querySelector('.uc-state')||{}).textContent||'' : ''; return { st, all: document.querySelector('#userComposerRoot').innerText } })()`).catch(() => null);
+    if (v) {
+      for (const m of v.all.matchAll(STATED)) if (!stated.length || stated[stated.length - 1].words !== m[0]) stated.push({ words: m[0], at: +((Date.now() - tc) / 1000).toFixed(1) });
+      const bad = forbiddenIn(v.all);
+      if (bad.length && v.all !== last) check(`${name}: the composer says none of the forbidden words while it runs`, false, bad);
+      last = v.all;
+      if (/Settled|Returned/.test(v.st)) { fin = v.st; break; }
+    }
+    await sleep(2000);
+  }
+  const took = (Date.now() - tc) / 1000;
+  note(`     ${name}: ticket states ${JSON.stringify(statedOnTicket)}; stated while it ran ${JSON.stringify(stated)}`);
+  check(`${name}: Settled`, fin === 'Settled', `${fin} ${took.toFixed(1)} s after Trade`);
+  // A purchase paid with BTC waits for what it buys to be held for it, and says how long.
+  if (pay === 'BTC') {
+    // The first wait it states, counted from when it was stated: the trade must end by then.
+    const first = stated.find((x) => /within about \d+ minute|in about a minute/i.test(x.words));
+    const mins = first ? Number((first.words.match(/(\d+) minute/) || [0, 1])[1]) : null;
+    check(`${name}: the purchase states its wait`, !!first, stated);
+    if (first) check(`${name}: it ends within the wait it stated (${mins} min, stated ${first.at} s after Trade)`, took <= first.at + mins * 60, `${took.toFixed(1)} s after Trade`);
+    check(`${name}: never past the stated wait ("taking longer than usual")`, !stated.some((x) => /longer than usual/i.test(x.words)), stated);
+  }
+  await A.pop.shot(join(out, 'screens', `A-trade-${pay}-${get}-done.png`));
+  await sleep(5000);
 }
 
 async function unlock(w) {
@@ -193,34 +278,8 @@ async function main() {
       }
       }
 
-      // one trade in the composer
-      await A.pop.click('[data-tab=trade]');
-      await A.pop.waitFor("!!document.querySelector('#ucPay')", 60000);
-      const pick = async (id, ticker) => {
-        const v = await A.pop.eval(`[...document.querySelectorAll('#${id} option')].find(o=>o.textContent===${JSON.stringify(ticker)})?.value`);
-        if (!v) return false;
-        await A.pop.set(id, v); await sleep(800); return true;
-      };
-      check(`You pay lists ${PAY}`, await pick('ucPay', PAY));
-      await A.pop.waitFor("!!document.querySelector('#ucGet')", 30000);
-      check(`You get lists ${GET}`, await pick('ucGet', GET));
-      await A.pop.set('ucAmount', process.env.TRADE_AMOUNT || '5');
-      const tq = Date.now();
-      await A.pop.click('#ucReview');
-      await A.pop.waitFor("!!document.querySelector('#ucConfirm') || (/\\S/.test(document.querySelector('#ucNote').innerText) && !/Finding/.test(document.querySelector('#ucNote').innerText))", 900000);
-      const ticket = await A.pop.eval("(document.querySelector('#ucTicket')||{}).innerText + ' | ' + (document.querySelector('#ucNote')||{}).innerText");
-      note(`     ticket (${secs(tq)}): ${ticket.replace(/\n/g, ' | ')}`);
-      await A.pop.shot(join(out, 'screens', 'A-trade-ticket.png'));
-      if (await A.pop.eval("!!document.querySelector('#ucConfirm')")) {
-        const tc = Date.now();
-        await A.pop.click('#ucConfirm');
-        await A.pop.waitFor("!!document.querySelector('.uc-trade .uc-state') && !/Working/.test(document.querySelector('.uc-trade .uc-state').innerText)", 300000).catch(() => {});
-        const st = await A.pop.eval("[...document.querySelectorAll('.uc-trade')].map(d=>d.innerText.replace(/\\n/g,' ')).join(' ; ') + ' | ' + document.querySelector('#ucNote').innerText");
-        check('the trade was made', /Sent|Settled/.test(st), `${st} (${secs(tc)} after Trade)`);
-        for (let i = 0; i < 120 && !/Settled|Returned/.test(await A.pop.text('#ucTrades')); i++) await sleep(10000);
-        note(`     the trade after following it: ${(await A.pop.text('#ucTrades')).replace(/\n/g, ' | ')} (${secs(tc)} after Trade)`);
-        await A.pop.shot(join(out, 'screens', 'A-trade-after.png'));
-      } else check('the composer priced a trade', false, ticket);
+      // the trades: each way between two assets in the tree, then a BTC purchase and a BTC sale
+      for (const [pay, get, amount] of TRADES) await trade(A, pay, get, amount);
       await sleep(10000);
       const aRows = await rows(A);
       note(`     A's figures: ${JSON.stringify(aRows)}`);

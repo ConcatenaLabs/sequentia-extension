@@ -82,6 +82,24 @@ export function arcaWalletExists(mnemonic: string): boolean;
  */
 export function installStore(directory: string): Promise<void>;
 
+/**
+ * Waits `ms` milliseconds as the library does between two tries: through
+ * the host's wait ([`set_pause`]), never less than `ms`. For a host to check
+ * its wait.
+ */
+export function pause(ms: number): void;
+
+/**
+ * Gives the library the host's wait, `wait(ms)`: a function that blocks the
+ * calling thread for up to `ms` milliseconds without using the processor,
+ * and returns. It may return early or throw; the library then waits out the
+ * rest on the clock, which keeps a core busy, so a host that can wait
+ * without one should give it. `null` takes it back. How the host waits is
+ * its own: a synchronous request its server holds, `Atomics.wait` on a
+ * shared buffer where the page is cross-origin isolated or under Node.
+ */
+export function setPause(wait?: Function | null): void;
+
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
@@ -105,6 +123,8 @@ export interface InitOutput {
     readonly intounderlyingsink_write: (a: number, b: any) => any;
     readonly intounderlyingsource_cancel: (a: number) => void;
     readonly intounderlyingsource_pull: (a: number, b: any) => any;
+    readonly pause: (a: number) => void;
+    readonly setPause: (a: number) => void;
     readonly rust_zstd_wasm_shim_calloc: (a: number, b: number) => number;
     readonly rust_zstd_wasm_shim_free: (a: number) => void;
     readonly rust_zstd_wasm_shim_malloc: (a: number) => number;
@@ -133,8 +153,8 @@ export interface InitOutput {
     readonly rustsecp256k1_v0_10_0_context_destroy: (a: number) => void;
     readonly rustsecp256k1_v0_10_0_default_error_callback_fn: (a: number, b: number) => void;
     readonly rustsecp256k1_v0_10_0_default_illegal_callback_fn: (a: number, b: number) => void;
-    readonly wasm_bindgen_b19ca315ae9c045d___convert__closures_____invoke___js_sys_6877b6322c26ad48___Function_fn_wasm_bindgen_b19ca315ae9c045d___JsValue_____wasm_bindgen_b19ca315ae9c045d___sys__Undefined___js_sys_6877b6322c26ad48___Function_fn_wasm_bindgen_b19ca315ae9c045d___JsValue_____wasm_bindgen_b19ca315ae9c045d___sys__Undefined_______true_: (a: number, b: number, c: any, d: any) => void;
-    readonly wasm_bindgen_b19ca315ae9c045d___convert__closures_____invoke___wasm_bindgen_b19ca315ae9c045d___JsValue__core_37ee0ce0c4cd57d5___result__Result_____wasm_bindgen_b19ca315ae9c045d___JsError___true_: (a: number, b: number, c: any) => [number, number];
+    readonly wasm_bindgen_6c31107e48cb2cdf___convert__closures_____invoke___js_sys_88ba868c340644c5___Function_fn_wasm_bindgen_6c31107e48cb2cdf___JsValue_____wasm_bindgen_6c31107e48cb2cdf___sys__Undefined___js_sys_88ba868c340644c5___Function_fn_wasm_bindgen_6c31107e48cb2cdf___JsValue_____wasm_bindgen_6c31107e48cb2cdf___sys__Undefined_______true_: (a: number, b: number, c: any, d: any) => void;
+    readonly wasm_bindgen_6c31107e48cb2cdf___convert__closures_____invoke___wasm_bindgen_6c31107e48cb2cdf___JsValue__core_d941ad8722425d2e___result__Result_____wasm_bindgen_6c31107e48cb2cdf___JsError___true_: (a: number, b: number, c: any) => [number, number];
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
     readonly __externref_table_alloc: () => number;

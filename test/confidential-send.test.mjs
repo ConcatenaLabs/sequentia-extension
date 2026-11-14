@@ -53,7 +53,7 @@ test('what the wallet says while it moves is the contract\'s, and says none of t
     DEFAULT_WORDS.notMoved, DEFAULT_WORDS.notReady, DEFAULT_WORDS.stillOpening, DEFAULT_WORDS.addressShort,
     DEFAULT_WORDS.confidentialHidden, DEFAULT_WORDS.confidentialAmountHidden('USDX'), DEFAULT_WORDS.confidentialSeen,
   ];
-  assert.equal(said[0], 'Moving 1.00004 USDX out of the Ark so it can be sent confidentially. They are ready within 10 minutes. Keep this page open.');
+  assert.equal(said[0], 'Getting 1.00004 USDX ready to be sent confidentially. Ready within 10 minutes. Keep this page open.');
   for (const s of said) assert.deepEqual(forbiddenIn(s), [], s);
 });
 

@@ -192,7 +192,9 @@ wasm. Read this before changing anything.
   `vendor/lnupgrade.js`, `vendor/own-txs.js`, `vendor/stake-records.js`,
   `vendor/default-arca.js`, `vendor/confidential-pay.js`, `vendor/pay-code.js`, `vendor/faucet-wallet.js`, `vendor/btc-ark.js`, `vendor/lightning-to-ark.js`, `vendor/speed-up.js`,
   `vendor/user-trade.js`, `vendor/user-trade-btc.js`, `vendor/user-composer.js`,
-  `vendor/asset-picker.js`, `vendor/market-view.js`, `vendor/chart.js`, `vendor/indicators.js`,
+  `vendor/restricted-engine.js`, `vendor/restricted-composed.js`, `vendor/restricted-trade.js`
+  (the engine imports them; the popup gives it no `restricted`, so it trades as without them),
+  `vendor/explorer-script-hash.js`, `vendor/asset-picker.js`, `vendor/market-view.js`, `vendor/chart.js`, `vendor/indicators.js`,
   `vendor/vendor/lightweight-charts/` (`vendor/` mirrors the web wallet's root, so the market
   view's relative import finds the library), `vendor/tooling/lsp/` and `vendor/lightning/` are copied from
   `sequentia-web-wallet` — fix bugs THERE and re-copy, don't fork them silently.
@@ -204,8 +206,10 @@ wasm. Read this before changing anything.
   `src/pair.js` is its `canonicalPair` and `displayPair` (`swap.js`). Every asset `<select>` in the popup gets the shared
   chooser in front of it (`attachChooser`, `ASSET_SELECTS` in `popup/popup.js`; the select stays,
   hidden, as the value; its button is `<id>Chooser`). A new asset menu joins that list.
-- `leaves/worker.js` is copied from `sequentia-web-wallet/leaves/worker.js`
-  (fix it there and re-copy). `leaves/pkg/` is the `arca` repository's
+- `leaves/worker.js` and `leaves/hold.js` are copied from `sequentia-web-wallet/leaves/`
+  (fix them there and re-copy). The host tells the worker where the library's pauses wait
+  (`'pause'`, `LEAF_PAUSE_URL` in `src/config.js`: the node route's hold, the web wallet's
+  `SEQ_PAUSE_URL`). `leaves/pkg/` is the `arca` repository's
   `wallet-wasm/` build, and what is committed is always that repository's CI
   build, copied exactly: the `leaf-wallet-pkg` artifact of a commit on its
   master, fetched by `scripts/fetch-leaf-wallet.sh <arca commit>` with its

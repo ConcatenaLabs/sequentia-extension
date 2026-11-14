@@ -94,6 +94,7 @@ import { redoingAtoms } from './vendor/default-arca.js';
 import { boardCandidates, boardAll, boardSpent, CLAIMS_EVERY_MS, vestingLots, vestedOpen } from './vendor/default-arca.js';
 import { homeCoins, unreachableOf, homeQuote, homeTake, homeUnderWay } from './vendor/default-arca.js';
 import { createQueue, PERSON, PROMPT, UPKEEP } from './src/leaf-queue.js';
+import { LEAF_PAUSE_URL } from './src/config.js';
 
 const TICK_MS = 60_000;
 let worker = null;
@@ -161,6 +162,9 @@ function ensureWorker() {
     for (const p of pending.values()) p.no(failed);
     pending.clear();
   };
+  // The library's pauses wait on the node route's hold, as the web wallet's do (leaves/worker.js):
+  // a setting of the worker, answered at once, not a command of the library's.
+  post('pause', { url: LEAF_PAUSE_URL }).catch((e) => console.warn('[leaves] pause:', e && e.message));
 }
 
 function call(op, args = {}, prio = UPKEEP) {

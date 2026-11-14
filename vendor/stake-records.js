@@ -56,6 +56,8 @@
 //   stakesKey           the store key of the wallet's bonded stakes
 //   now()               optional clock
 
+import { explorerScriptHash } from './explorer-script-hash.js';
+
 export const PENDING_JOIN_KEY = 'swk.sequentia.pendingDelegation';
 
 // The record's own value. It has to clear the dust floor and then pay the fee
@@ -155,17 +157,9 @@ function writeStore(ctx, key, value){
   else ctx.store.setItem(key, JSON.stringify(value));
 }
 
-// The Electrum-style scripthash this explorer indexes by: the FORWARD sha256 of
-// the scriptPubKey. Verified against the deployed esplora rather than assumed:
-// the reversed form is the more common convention and returns an empty list
-// here, which would look exactly like "you are not delegating", the worst
-// possible wrong answer for a feature whose whole promise is that you can
-// always leave.
-export async function scriptHash(scriptHex){
-  const bytes = Uint8Array.from(scriptHex.match(/../g).map(b => parseInt(b, 16)));
-  const digest = await crypto.subtle.digest('SHA-256', bytes);
-  return [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, '0')).join('');
-}
+// The explorer is asked by explorerScriptHash (explorer-script-hash.js says why the reversed form
+// must never be used: here it would read as "you are not delegating", the worst possible wrong
+// answer for a feature whose whole promise is that you can always leave).
 
 // ---------------------------------------------------------------- finding
 
@@ -180,7 +174,7 @@ const KEY_HISTORY_PAGES = 8;
 // that key's P2WPKH history that spends from it, read for record outputs.
 async function recordsFromKeyHistory(ctx, mine){
   const spk = ctx.stakerScript();
-  const sh = await scriptHash(spk);
+  const sh = await explorerScriptHash(spk);
   const out = [];
   let path = `/scripthash/${sh}/txs`, lastConfirmed = null;
   for (let page = 0; page < KEY_HISTORY_PAGES; page++){
@@ -246,7 +240,7 @@ export async function findDelegation(ctx){
     for (const sg of group){
       let spk; try { spk = ctx.lwk.sequentiaDelegationScript(mine, sg); } catch { continue; }
       try {
-        const utxos = await json(ctx, `/scripthash/${await scriptHash(spk)}/utxo`);
+        const utxos = await json(ctx, `/scripthash/${await explorerScriptHash(spk)}/utxo`);
         for (const u of utxos || []){
           add({ txid: u.txid, vout: u.vout, signer: sg, atoms: BigInt(u.value),
                 height: (u.status && u.status.confirmed) ? u.status.block_height : null, unspent: true });
@@ -312,10 +306,10 @@ export async function findStakes(ctx, csv){
   const at = (st) => (st && st.confirmed && st.block_time) ? st.block_time * 1000 : Date.now();
   const out = new Map();
   const stakeSpk = ctx.lwk.sequentiaStakeScript(mine, csv);
-  for (const u of (await json(ctx, `/scripthash/${await scriptHash(stakeSpk)}/utxo`)) || [])
+  for (const u of (await json(ctx, `/scripthash/${await explorerScriptHash(stakeSpk)}/utxo`)) || [])
     if (!out.has(u.txid)) out.set(u.txid, { pubkey: mine, csv, txid: u.txid, atoms: String(u.value), time: at(u.status) });
   const unbondSpk = ctx.lwk.sequentiaUnbondScript(mine);
-  for (const u of (await json(ctx, `/scripthash/${await scriptHash(unbondSpk)}/utxo`)) || []){
+  for (const u of (await json(ctx, `/scripthash/${await explorerScriptHash(unbondSpk)}/utxo`)) || []){
     const tx = await json(ctx, `/tx/${u.txid}`);
     const vin = ((tx && tx.vin) || []).find(v => v.prevout && v.prevout.scriptpubkey === stakeSpk);
     if (!vin || out.has(vin.txid)) continue;

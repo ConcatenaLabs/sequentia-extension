@@ -16,7 +16,9 @@
 //   buying an asset with BTC   the maker makes a Bitcoin invoice; the wallet asks to receive the
 //                              asset under its hash; the maker's leaf pays it; once the wallet's
 //                              leaf has come and is final, with its home date far enough off, the
-//                              wallet pays the maker's invoice, learns the preimage, and claims.
+//                              wallet pays the maker's invoice, learns the preimage, hands it to
+//                              the operator at once (so any device of the wallet claims, the page
+//                              open or not), and claims.
 // Neither side can take what it gets before paying: the leaf received under the hash opens only
 // with the preimage, and the preimage comes out only when the BTC is paid.
 //
@@ -29,7 +31,10 @@
 // on the way), when the wallet can say what it is; else by the invoice's final delta alone, which only a
 // payment to a direct peer meets.
 
+import { nextFinalBy, settleMinutesOf } from './default-arca.js'
+
 const big = (v) => { try { return BigInt(v ?? 0) } catch { return 0n } }
+
 const ceilDiv = (a, b) => (a + b - 1n) / b
 
 // What the wallet allows the Bitcoin leg: a Bitcoin block at half its pace (the clocks meet only
@@ -60,8 +65,9 @@ export function btcTrades ({ run, deps, put, log, now, settleStep, maxFeePpm, fi
   const releaseNow = async (maker, swap) => { if (maker && swap) { try { await post(maker + '/v1/btc/release', { swap }) } catch {} } }
 
   // Firm terms of one entry (source 'btc-gateway') for `pay` of the pay asset. `onStep(key)`, when
-  // given, is told each step as it starts (user-trade.js tradeSteps).
-  async function firm (entry, payAsset, receiveAsset, pay, have, sized, onStep = null) {
+  // given, is told each step as it starts (user-trade.js tradeSteps); `onRefused(e)` is told the
+  // wallet's own refusal of the payment it checks.
+  async function firm (entry, payAsset, receiveAsset, pay, have, sized, onStep = null, onRefused = null) {
     if (!B()) return null
     const step = (k) => { if (onStep) try { onStep(k) } catch {} }
     let size = sized
@@ -78,7 +84,9 @@ export function btcTrades ({ run, deps, put, log, now, settleStep, maxFeePpm, fi
         catch (e) { log('[user trade] maker btc firm:', e.message); B().cancelInvoice(inv.payment_hash).catch(() => {}); return null }
         const drop = () => { release(entry.maker, o.swap); B().cancelInvoice(inv.payment_hash).catch(() => {}) }
         step('check')
-        try { q = await run('lightning_pay_quote', { invoice: o.invoice, asset: payAsset, max_fee_ppm: maxFeePpm }) } catch (e) { log('[user trade] lightning_pay_quote:', e.message); drop(); return null }
+        // The wallet's own refusal (its coins of the asset fall short now) is told to the quote, which
+        // then says so, never that the other side gave no price (#666).
+        try { q = await run('lightning_pay_quote', { invoice: o.invoice, asset: payAsset, max_fee_ppm: maxFeePpm }) } catch (e) { log('[user trade] lightning_pay_quote:', e.message); if (onRefused) try { onRefused(e, { paying: big(o.want) }) } catch {} drop(); return null }
         // The maker's invoice is under the wallet's own hash, for the asset paid, at the price quoted.
         const fair = ceilDiv(sats * entry.rateNum, entry.rateDen)
         if (q.payment_hash !== inv.payment_hash || q.asset !== payAsset || big(q.amount) !== big(o.want) || big(o.want) > fair) { log('[user trade] the maker\'s btc terms are not the quote\'s'); drop(); return null }
@@ -196,6 +204,9 @@ export function btcTrades ({ run, deps, put, log, now, settleStep, maxFeePpm, fi
     // the trade is under way whatever the maker answers now: a lock it refused is asked for again
     // as the trade is followed, and a receive it never pays lapses and the trade comes back.
     rec.state = 'waiting'; rec.waitingSince = now()
+    // What the page says the wait is before the library's first answer: the library's own figure for
+    // a leaf made by the operator's next round (settleMinutes, its step "round").
+    rec.waitFirstBy = rec.waitingSince + settleMinutesOf(await run('info').catch(() => null)) * 60_000
     put(rec)
     try { await post(rec.maker + '/v1/btc/lock', { swap: rec.swap, invoice: r.invoice }) } catch (e) { log('[user trade] the maker did not lock yet:', e.message) }
     return rec
@@ -260,7 +271,16 @@ export function btcTrades ({ run, deps, put, log, now, settleStep, maxFeePpm, fi
         log('[user trade] the leaf will not do:', e.message); rec.state = 'returned'; rec.returnedAt = now(); rec.why = e.message; return put(rec)
       }
       // Why the asset is not final yet, said once each time it changes.
-      if (!r.ready) { if (rec.notReady !== (r.why || '')) { rec.notReady = r.why || ''; log('[user trade] the asset is not final yet:', rec.notReady) } return put(rec) }
+      if (!r.ready) {
+        if (rec.notReady !== (r.why || '')) { rec.notReady = r.why || ''; log('[user trade] the asset is not final yet:', rec.notReady) }
+        // The wait the page states: the library's own (`usual_in_seconds`, else `final_in_seconds`,
+        // and its step), kept while the step stands or moves on. While the maker has not paid in
+        // (`payment`, which no round bounds) it is the time the maker has to lock its side.
+        rec.waitBy = r.waiting_for === 'payment'
+          ? { finalBy: (rec.waitingSince ?? rec.at) + MAKER_LOCK_MS, step: 'payment' }
+          : nextFinalBy(rec.waitBy && rec.waitBy.step !== 'payment' ? rec.waitBy : null, r, now())
+        return put(rec)
+      }
       rec.state = 'sent'; rec.sentAt = now(); rec.paying = true
       put(rec)
     }
@@ -285,9 +305,16 @@ export function btcTrades ({ run, deps, put, log, now, settleStep, maxFeePpm, fi
       if (st.state !== 'complete') return put(rec)
       rec.preimage = st.preimage
       put(rec)
+      // The operator is handed the preimage before anything else, so what was bought never rests on
+      // this page staying open: the operator serves it, and the wallet on any device (one restored
+      // from the phrase included) claims the asset at its next sync. Safe to hand on: it opens the
+      // wallet's leaf only with the wallet's own key, and the maker, paid, knows it already.
+      await postPreimage(rec)
       await run('lightning_receive_preimage', { hash: rec.hash, preimage: st.preimage })
       await run('sync').catch((e) => log('[user trade] sync:', e.message))
     }
+    // Handed on once more while the claim has not run, should the first try have failed.
+    if (rec.preimage && !rec.posted && rec.receiveState !== 'received') await postPreimage(rec)
     if (rec.preimage) {
       const r2 = ((await run('lightning_receives')) || {})[rec.hash] || {}
       rec.receiveState = r2.state || null
@@ -300,6 +327,12 @@ export function btcTrades ({ run, deps, put, log, now, settleStep, maxFeePpm, fi
       if ((await settleStep(rec)) === 'settled') { rec.state = 'settled'; rec.settledAt = now() }
     }
     return put(rec)
+  }
+
+  // Hands the operator the preimage of a purchase whose BTC is paid; `rec.posted` once it took it.
+  async function postPreimage (rec) {
+    try { await run('lightning_post_preimage', { hash: rec.hash, preimage: rec.preimage }); rec.posted = true; put(rec) }
+    catch (e) { log('[user trade] post preimage:', e.message) }
   }
 
   // The maker's invoice for a purchase, renewed when it runs out within INVOICE_LEFT_SECONDS: the
