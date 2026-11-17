@@ -794,7 +794,7 @@ export async function handleDappRequest(origin, method, params = {}) {
         deltas: [{ ticker: tick(b), atoms: '-' + quote.gives, precision: A.assetMeta(b).precision || 0 },
           { ticker: tick(a), atoms: String(quote.filled), precision: A.assetMeta(a).precision || 0 }],
         rows,
-        detail: 'The fill is final once the round’s block is certified and its Bitcoin anchor buried. If Bitcoin reorganises below it, so does Sequentia, and the fill is undone until the round is mined again. The take goes ahead only on the fill, price and fee shown.',
+        detail: 'The fill is final once the round’s block is certified and its Bitcoin anchor buried as deep as the operator asks, which may be no Bitcoin block at all. Final is not beyond Bitcoin: if Bitcoin reorganises below it, so does Sequentia, and the fill is undone until the round is mined again. The take goes ahead only on the fill, price and fee shown.',
       }, async () => {
         await ensureOpenOrThrow();
         return await leafTrade.take(origin, served, args, quote, win);
@@ -923,7 +923,7 @@ export async function handleDappRequest(origin, method, params = {}) {
         deltas: [{ ticker: (A.assetMeta(rec.gives.asset).ticker || rec.gives.asset.slice(0, 12)), atoms: '-' + rec.gives.value, precision: A.assetMeta(rec.gives.asset).precision || 0 },
           { ticker: (A.assetMeta(rec.gets.asset).ticker || rec.gets.asset.slice(0, 12)), atoms: String(rec.gets.value), precision: A.assetMeta(rec.gets.asset).precision || 0 }],
         rows: leafSwap.completeRows(rec, leafAmount),
-        detail: 'The wallet signs only if the acceptance keeps your coins and outputs exactly as offered. Final once a round settles it, its block certified and its Bitcoin anchor buried.',
+        detail: 'The wallet signs only if the acceptance keeps your coins and outputs exactly as offered. Final once a round settles it, its block certified and its Bitcoin anchor buried as deep as the operator asks, which may be no Bitcoin block at all; if Bitcoin reorganises below it, so does Sequentia, and it is undone until the round is mined again.',
       }, async () => {
         await ensureOpenOrThrow();
         const d = await leaves.run('swap_complete', { accept });
@@ -1036,7 +1036,7 @@ export async function handleDappRequest(origin, method, params = {}) {
           ['Order', served.order + ', resting at ' + quote.coin + (served.coin && served.coin !== quote.coin ? ' (the operator’s view; the relay listed it at ' + served.coin + ')' : '')],
           ['Operator', op.operator || '?'],
         ],
-        detail: 'The leaf you get is operator-confirmed, as any coin paid to you in the tree, and final once the round its order rests on is final, its block certified and its Bitcoin anchor buried. The fill goes ahead only on the amount, price and fee shown: if another taker fills the order first, the wallet fills it where it then rests only for the same amount and price and no higher fee.',
+        detail: 'The leaf you get is operator-confirmed, as any coin paid to you in the tree, and final once the round its order rests on is final, its block certified and its Bitcoin anchor buried as deep as the operator asks, which may be no Bitcoin block at all; if Bitcoin reorganises below it, so does Sequentia, and it is undone until the round is mined again. The fill goes ahead only on the amount, price and fee shown: if another taker fills the order first, the wallet fills it where it then rests only for the same amount and price and no higher fee.',
       }, async () => {
         await ensureOpenOrThrow();
         return await leafResting.fill(served, amount, quote);
