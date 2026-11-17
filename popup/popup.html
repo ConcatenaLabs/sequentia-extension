@@ -131,44 +131,35 @@
 
     <!-- receive -->
     <div id="tReceive" class="hide">
-      <!-- default mode: one receive code -->
-      <div class="card hide" id="recvDefault">
-        <h2 id="recvDLbl">Receive code</h2>
-        <p class="sub" id="recvDTip"></p>
-        <div id="recvDAmtRow" class="row recv-amt-row">
-          <input id="recvDAmt" placeholder="Amount in BTC (optional)" inputmode="decimal">
-          <select id="recvDAsset" class="hide"></select>
+      <!-- default mode: one card of three things (the QR code, one line, Copy); the rest behind More options -->
+      <div class="card hide recv-simple" id="recvDefault">
+        <img id="recvDQr" class="qr" alt="Receive QR code">
+        <p class="sub" id="recvDLine" style="margin:10px 0 0;text-align:center"></p>
+        <div id="recvDCode" class="addr mono hide" style="margin-top:12px"></div>
+        <div class="status recv-arrive hide" id="recvArrive" role="status" aria-live="polite"></div>
+        <div class="row recv-btns" style="margin-top:12px">
+          <button id="btnDCopy" class="ghost tiny">Copy</button>
         </div>
-        <img id="recvDQr" class="qr" alt="">
-        <div id="recvDCode" class="addr mono"></div>
-        <p class="sub hide" id="recvDPublic" style="margin:4px 0 0"></p>
-        <div class="row" style="margin-top:6px">
-          <button id="btnDCopy" class="ghost tiny">Copy receive code</button>
-          <button id="btnDNew" class="ghost tiny">New code</button>
-          <button id="btnDFull" class="ghost tiny hide">Show full code</button>
-        </div>
-        <div id="recvDConfRow" style="margin-top:10px">
-          <label class="recv-switch"><input type="checkbox" role="switch" id="recvDConf"><span id="recvDConfLbl">Confidential</span></label>
-          <p class="sub" id="recvDConfTip" style="margin:4px 0 0"></p>
-          <p class="sub hide" id="recvDConfNote" style="margin:4px 0 0"></p>
+        <div class="recv-more-toggle"><button class="quiet" id="btnRecvMore" aria-expanded="false" aria-controls="recvMore">More options</button></div>
+        <div id="recvMore" class="hide" style="margin-top:6px">
+          <p class="sub hide" id="recvMoreName" style="margin:0 0 10px"></p>
+          <label class="lbl hide" id="recvDAmtLbl" for="recvDAmt">Request a specific amount</label>
+          <div id="recvDAmtRow" class="row recv-amt-row">
+            <input id="recvDAmt" placeholder="Amount in BTC (optional)" inputmode="decimal">
+            <select id="recvDAsset" class="hide"></select>
+          </div>
+          <div class="row">
+            <button id="btnDNew" class="ghost tiny">New code</button>
+            <button id="btnDFull" class="ghost tiny hide">Show full code</button>
+          </div>
+          <div id="recvDConfRow" style="margin-top:14px">
+            <label class="recv-switch"><input type="checkbox" role="switch" id="recvDConf"><span id="recvDConfLbl">Confidential</span></label>
+            <p class="sub" id="recvDConfTip" style="margin:6px 0 0"></p>
+            <p class="sub hide" id="recvDConfNote" style="margin:6px 0 0"></p>
+          </div>
+          <div class="hide" id="recvOampToggle" style="margin-top:10px"><button class="quiet" id="btnRecvOamp" aria-expanded="false">Receive a restricted asset</button></div>
         </div>
         <div id="recvDStatus" class="status"></div>
-        <div id="nameBox" class="hide" style="margin-top:12px">
-          <h2 id="nameLbl" style="margin-top:0">Your payment name</h2>
-          <p class="sub" id="nameTip"></p>
-          <div id="nameAddr" class="addr mono hide"></div>
-          <div id="nameForm" class="row hide"><input id="nameInput" class="mono" autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="32"><span class="sub" id="nameDomain" style="align-self:center;white-space:nowrap"></span></div>
-          <div class="row" style="margin-top:6px">
-            <button id="btnNameGet" class="primary tiny">Get a name</button>
-            <button id="btnNameChoose" class="quiet">Choose your own</button>
-            <button id="btnNameWords" class="quiet hide">Use a word name instead</button>
-            <button id="btnNameSave" class="ghost tiny hide">Save</button>
-            <button id="btnNameCancel" class="ghost tiny hide">Cancel</button>
-            <button id="btnNameCopy" class="ghost tiny hide">Copy</button>
-            <button id="btnNameRemove" class="ghost tiny hide">Remove name</button>
-          </div>
-          <div id="nameStatus" class="status"></div>
-        </div>
       </div>
       <div class="card hide" id="faucetCard">
         <h2>Testnet faucet</h2>
@@ -209,6 +200,22 @@
           <button id="btnCopyInvoice" class="ghost tiny hide">Copy invoice</button>
         </div>
         <div id="recvStatus" class="status"></div>
+      </div>
+      <div id="nameBox" class="card hide">
+        <h2 id="nameLbl" style="margin-top:0">Your payment name</h2>
+        <p class="sub" id="nameTip"></p>
+        <div id="nameAddr" class="addr mono hide"></div>
+        <div id="nameForm" class="row hide"><input id="nameInput" class="mono" autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="32"><span class="sub" id="nameDomain" style="align-self:center;white-space:nowrap"></span></div>
+        <div class="row" style="margin-top:6px">
+          <button id="btnNameGet" class="primary tiny">Get a name</button>
+          <button id="btnNameChoose" class="quiet">Choose your own</button>
+          <button id="btnNameWords" class="quiet hide">Use a word name instead</button>
+          <button id="btnNameSave" class="ghost tiny hide">Save</button>
+          <button id="btnNameCancel" class="ghost tiny hide">Cancel</button>
+          <button id="btnNameCopy" class="ghost tiny hide">Copy</button>
+          <button id="btnNameRemove" class="ghost tiny hide">Remove name</button>
+        </div>
+        <div id="nameStatus" class="status"></div>
       </div>
       <div id="recvOamp" class="card hide">
         <h2>Restricted assets (OpenAMP)</h2>
@@ -285,6 +292,7 @@
 
     <!-- settings -->
     <div id="tSettings" class="hide">
+      <div id="setNameCard" class="hide"></div>
       <!-- Report a problem (vendor/problem-report.js, the web wallet's module and words). -->
       <div class="card" id="reportCard">
         <h2 id="reportTitle"></h2>

@@ -16,9 +16,9 @@
 // then each wallet's phrase is kept there (<label>-<time>.phrase, mode 600), so the coins it
 // leaves behind are never stranded. Never put that directory in evidence.
 //
-//   CHROME=… [TRADE_PAY=USDX] [TRADE_GET=EURX] [TRADE_AMOUNT=5] [BTC_PAY=10] [FAUCET=USDX] \
+//   CHROME=… [REUSE_A=<phrase file>] [TRADE_PAY=USDX] [TRADE_GET=EURX] [TRADE_AMOUNT=5] [BTC_PAY=10] [FAUCET=USDX] \
 //     node test/default/live-drive.mjs <evidence-dir> <work-dir>
-import { mkdirSync, writeFileSync, appendFileSync, rmSync, chmodSync } from 'node:fs';
+import { mkdirSync, writeFileSync, appendFileSync, rmSync, chmodSync, readFileSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Browser, sleep } from '../leaves/cdp.mjs';
@@ -30,6 +30,8 @@ const CHROME = process.env.CHROME;
 const out = resolve(process.argv[2] || 'default-evidence');
 const work = resolve(process.argv[3] || '/tmp/default-drive');
 const FAUCET = process.env.FAUCET || 'USDX';
+// REUSE_A=<phrase file>: A is that wallet restored (funded before), and the faucet is not asked.
+const REUSE_A = process.env.REUSE_A || '';
 const PAY = process.env.TRADE_PAY || 'USDX';
 const GET = process.env.TRADE_GET || 'EURX';
 const AMOUNT = process.env.TRADE_AMOUNT || '5';
@@ -55,6 +57,7 @@ async function open(label) {
   await b.launch(label);
   await b.serviceWorker();
   const pop = await b.page(`chrome-extension://${b.extId}/popup/popup.html`);
+  await pop.waitFor("!!document.body", 30000);
   await pop.eval("document.body.style.width='380px'; true");
   pop.ui = async (method, params = {}) => {
     const r = await pop.eval(`chrome.runtime.sendMessage({scope:'ui', method:${JSON.stringify(method)}, params:${JSON.stringify(params)}})`);
@@ -110,6 +113,19 @@ async function wordsCheck(w, tag) {
   }
   check(`${w.label} ${tag}: no forbidden word on any default-mode tab`, Object.values(seen).every((x) => !x.length), seen);
 }
+// The receive code a person copies from the card: the wallet's own answer for the full code
+// (the card shows the payment name, and writes the code out only under Show full code).
+async function fullCode(w, pat = /^bitcoin:.*sequentia=/i, ms = 120000) {
+  const t = Date.now();
+  for (;;) {
+    const r = await w.pop.ui('default.receiveCode', { full: true }).catch(() => null);
+    if (r && pat.test(r.code || '')) return r.code;
+    if (Date.now() - t > ms) throw new Error('no receive code in ' + ms / 1000 + ' s: ' + JSON.stringify(r && { isCode: r.isCode, code: String(r.code).slice(0, 40) }));
+    await sleep(2000);
+  }
+}
+// What Receive shows now: the line, whether the code's text and More options are shown, the name.
+const cardNow = (w) => w.pop.eval(`(() => { const vis = (id) => !!document.getElementById(id) && !document.getElementById(id).classList.contains('hide'); return { line: document.getElementById('recvDLine').innerText, copy: document.getElementById('btnDCopy').innerText, codeText: vis('recvDCode'), more: vis('recvMore'), moreBtn: document.getElementById('btnRecvMore').innerText, arrive: vis('recvArrive') ? document.getElementById('recvArrive').innerText : '', qr: !!document.getElementById('recvDQr').getAttribute('src') } })()`);
 async function rows(w) {
   const ov = await w.pop.ui('overview', { withLn: false });
   return Object.fromEntries(ov.rows.map((r) => [r.ticker, { total: r.total, arriving: r.arriving, precision: r.precision }]));
@@ -222,28 +238,71 @@ async function main() {
       const jb = await joined(B, bw.t);
       check('B joined the operator by itself', jb.joined && jb.open, jb);
       await B.pop.click('[data-tab=receive]');
-      await B.pop.waitFor("/^bitcoin:.*sequentia=/i.test(document.querySelector('#recvDCode').innerText)", 120000);
-      return await B.pop.text('#recvDCode');
+      return await fullCode(B);
     });
 
     // ---- A: a new wallet joins by itself; faucet; pays B; trades once ----
     const { a, aRows } = await session('A', async (A) => {
-      const a = await create(A);
+      const a = REUSE_A ? { phrase: readFileSync(REUSE_A, 'utf8').trim(), t: 0 } : await create(A);
+      if (REUSE_A) a.t = await importPhrase(A, a.phrase);
       const ja = await joined(A, a.t);
       check('A joined the operator by itself', ja.joined && ja.open, ja);
       check('A holds BTC on the Bitcoin ark wallet (open)', !!ja.ark, ja);
+      if (!REUSE_A) {
       const fresh = await rows(A);
       check('a fresh wallet lists BTC alone', Object.keys(fresh).join() === 'BTC', Object.keys(fresh));
       await A.pop.click('[data-tab=send]'); await sleep(800);
       const sendList = await A.pop.eval("[...document.querySelectorAll('#sendDAsset option')].map(o=>o.textContent)");
       check('a fresh wallet sends from BTC alone', sendList.join() === 'BTC', sendList);
+      }
       await A.pop.click('[data-tab=receive]');
-      await A.pop.waitFor("/^bitcoin:/i.test(document.querySelector('#recvDCode').innerText)", 120000);
-      const code = await A.pop.text('#recvDCode');
-      check('A shows one receive code with the ark and the Sequentia parts', /^bitcoin:tb1[0-9a-z]+\?/i.test(code) && /[?&]ark=/i.test(code) && /[?&]sequentia=/i.test(code), code.slice(0, 60) + '…');
-      note(`     A: code shown ${secs(a.t)} after Create`);
+      const code = await fullCode(A, /^bitcoin:/i);
+      check('A has one receive code with the ark and the Sequentia parts', /^bitcoin:tb1[0-9a-z]+\?/i.test(code) && /[?&]ark=/i.test(code) && /[?&]sequentia=/i.test(code), code.slice(0, 60) + '…');
+      note(`     A: code ready ${secs(a.t)} after Create`);
+      // Every wallet holds a payment name with nothing asked; Receive's picture is then the name.
+      const tn = Date.now();
+      let nm = null;
+      while (Date.now() - tn < 180000) { nm = await A.pop.ui('default.name').catch(() => null); if (nm && nm.name && nm.verified && !nm.unreachable) break; await sleep(2000); }
+      const hasName = !!(nm && nm.name && nm.verified && !nm.unreachable);
+      if (!hasName) {
+        // The name service limits new names from one network (a test network meets this after many
+        // wallets): the wallet says so and asks again by itself, and Receive shows the code meanwhile.
+        await A.pop.click('[data-tab=settings]'); await sleep(2500);
+        const tip = await A.pop.eval("document.getElementById('nameTip').innerText");
+        check('no name yet: the service limits new names from this network, and Settings says so', !!(nm && nm.refused === 'busy') && /^Too many names were made from your network/.test(tip), { refused: nm && nm.refused, tip });
+        await A.pop.click('[data-tab=receive]'); await sleep(500);
+      } else {
+      check('A holds a payment name by default, made with nothing asked', true, { name: nm.address, after: secs(tn) });
+      await A.pop.waitFor("document.getElementById('btnRecvMore') && (() => { const o = document.getElementById('recvDQr'); return !!o.getAttribute('src'); })()", 60000).catch(() => {});
+      await sleep(6000);   // the card is drawn again within a tick (4 s) of the name's appearing
+      const c0 = await cardNow(A);
+      check('Receive is one card: the picture, one line and Copy; no code text, More options closed', c0.qr && c0.line === 'Scan or share to get paid in BTC or any asset.' && c0.copy === 'Copy' && !c0.codeText && !c0.more && c0.moreBtn === 'More options' && !c0.arrive, c0);
+      await A.pop.shot(join(out, 'screens', 'A-receive-card.png'));
+      await A.pop.click('#btnRecvMore'); await sleep(500);
+      const c1 = await cardNow(A);
+      const opts = await A.pop.eval("({ name: document.getElementById('recvMoreName').innerText, full: document.getElementById('btnDFull').innerText, amt: !!document.getElementById('recvDAmt').offsetParent, conf: !!document.getElementById('recvDConf').offsetParent })");
+      check('More options (Fewer options) holds where the name is changed, Show full code, an amount and Confidential', c1.more && c1.moreBtn === 'Fewer options' && /Your payment name is .+@sequentiatestnet\.com\. You can change or remove it in Settings\./.test(opts.name) && opts.full === 'Show full code' && opts.amt && opts.conf, { ...c1, ...opts });
+      await A.pop.shot(join(out, 'screens', 'A-receive-more.png'));
+      await A.pop.click('#btnDFull'); await sleep(1500);
+      const c2 = await cardNow(A);
+      check('Show full code writes the code out, and Show name goes back', c2.codeText && /^BITCOIN:/i.test(await A.pop.text('#recvDCode')) && (await A.pop.text('#btnDFull')) === 'Show name', c2);
+      await A.pop.click('#btnDFull'); await sleep(1000);
+      await A.pop.click('#btnRecvMore'); await sleep(300);
+      // The name is changed or removed in Settings.
+      await A.pop.click('[data-tab=settings]'); await sleep(1500);
+      const sn = await A.pop.eval("({ shown: !!document.getElementById('nameBox').offsetParent, name: document.getElementById('nameAddr').innerText, buttons: [...document.querySelectorAll('#nameBox button')].filter((b) => b.offsetParent).map((b) => b.textContent) })");
+      check('Settings shows the name with Copy, Change name, Use a word name or Remove name', sn.shown && /@sequentiatestnet\.com$/.test(sn.name) && sn.buttons.includes('Copy') && sn.buttons.includes('Change name') && sn.buttons.includes('Remove name'), sn);
+      await A.pop.shot(join(out, 'screens', 'A-settings-name.png'));
+      }
+      await A.pop.click('[data-tab=receive]'); await sleep(500);
       await wordsCheck(A, 'fresh');
 
+      if (REUSE_A) {
+        // A wallet restored from its phrase, funded before: the faucet is not asked again.
+        const got = await waitRow(A, FAUCET, (v) => v > 0n, 240000);
+        check(`the restored A holds ${FAUCET}`, got && BigInt(got.total) > 0n, got);
+        for (let i = 0; i < 200; i++) { const r = (await rows(A))[FAUCET]; if (r && BigInt(r.arriving) === 0n) break; await sleep(3000); }
+      } else {
       // the faucet pays the code
       await A.pop.click('[data-tab=receive]'); await sleep(500);
       const tf = Date.now();
@@ -251,10 +310,28 @@ async function main() {
       await A.pop.waitFor("/Received|could not/.test(document.querySelector('#faucetStatus').innerText)", 180000);
       const fs = await A.pop.text('#faucetStatus');
       check('the faucet paid', /^Received /.test(fs), `${fs} (${secs(tf)})`);
+      // The card says a payment coming in: "Payment arriving…", then "Received <amount> <TICKER>.".
+      const seenArrive = [];
+      const ta = Date.now();
+      while (Date.now() - ta < 10 * 60_000) {
+        const c = await cardNow(A);
+        if (c.arrive && seenArrive[seenArrive.length - 1] !== c.arrive) seenArrive.push(c.arrive);
+        if (/^Received [\d,.]+ \w+\.$/.test(c.arrive)) break;
+        await sleep(1000);
+      }
+      check('Receive says the payment: arriving, then "Received <amount> <TICKER>."', /^Received [\d,.]+ \w+\.$/.test(seenArrive[seenArrive.length - 1] || ''), { said: seenArrive, after: secs(tf) });
+      await A.pop.shot(join(out, 'screens', 'A-receive-received.png'));
       const got = await waitRow(A, FAUCET, (v) => v > 0n, 180000);
       check(`A's ${FAUCET} figure shows it`, got && BigInt(got.total) > 0n, `${JSON.stringify(got)} ${secs(tf)} after the click`);
       await A.pop.click('[data-tab=balance]'); await sleep(1500);
       await A.pop.shot(join(out, 'screens', 'A-after-faucet.png'));
+      // What the wallet holds is spendable once it has settled: the drive waits for that, as a person
+      // does, before paying with it.
+      const ts0 = Date.now();
+      await waitRow(A, FAUCET, (v) => v > 0n, 1000);
+      for (;;) { const r = (await rows(A))[FAUCET]; if (r && BigInt(r.arriving) === 0n) break; if (Date.now() - ts0 > 15 * 60_000) break; await sleep(3000); }
+      note(`     A's ${FAUCET} settled ${secs(ts0)} after the figure showed`);
+      }
 
       // A pays B's code
       if (bcode) {
@@ -263,8 +340,12 @@ async function main() {
       const hex = await A.pop.eval(`[...document.querySelectorAll('#sendDAsset option')].find(o=>o.textContent===${JSON.stringify(FAUCET)})?.value`);
       await A.pop.set('sendDAsset', hex); await A.pop.set('sendDAmt', '1');
       await A.pop.click('#btnDReview');
-      await A.pop.waitFor("!!document.querySelector('.modal') || /\\S/.test(document.querySelector('#sendDErr').innerText)", 120000);
-      const review = await A.pop.eval("(document.querySelector('.modal')||{}).innerText||document.querySelector('#sendDErr').innerText");
+      const sent0 = Date.now();
+      await A.pop.waitFor("!!document.querySelector('.modal') || /\\S/.test(document.querySelector('#sendDErr').innerText)", 120000).catch(async () => {
+        note('     the send review gave nothing in 120 s: ' + JSON.stringify(await A.pop.eval("({ tab: !document.querySelector('#tSend').classList.contains('hide'), dis: document.querySelector('#btnDReview').disabled, to: document.querySelector('#sendDTo').value.length, asset: document.querySelector('#sendDAsset').value.slice(0, 6), amt: document.querySelector('#sendDAmt').value, code: document.querySelector('#sendDTo').value.slice(0, 40) })")));
+      });
+      note(`     the send review answered ${secs(sent0)} after Review`);
+      const review = await A.pop.eval("(document.querySelector('.modal')||{}).innerText||document.querySelector('#sendDErr').innerText||''");
       check('the review reads "Send 1 …?" "It arrives in seconds."', /Send 1 \w+\?/.test(review) && /It arrives in seconds\./.test(review), review.replace(/\n/g, ' | '));
       await A.pop.shot(join(out, 'screens', 'A-send-review.png'));
       if (await A.pop.eval("!!document.querySelector('.modal')")) {
@@ -321,7 +402,7 @@ async function main() {
     note(`${failures ? failures + ' FAILED' : 'all passed'}`);
   } finally {
     if (current) await current.b.close().catch(() => {});
-    rmSync(work, { recursive: true, force: true });
+    rmSync(work, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 });
   }
   process.exit(failures ? 1 : 0);
 }

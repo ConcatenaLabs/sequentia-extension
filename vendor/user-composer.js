@@ -26,7 +26,7 @@
 // step now (engine.offered), then the admitted rest, then every other asset known; it starts on
 // the first one offered.
 
-import { USER_WORDS, QUOTE_FIRM_MS, OFFERED_AGAIN_EVERY_MS, pickerOrder, costLine, tradeStateWord, tradeSteps } from './user-trade.js'
+import { USER_WORDS, QUOTE_FIRM_MS, OFFERED_AGAIN_EVERY_MS, pickerOrder, costLine, tradeStateWord, tradeSteps, heldAlready, SLOW_SETTLE_MIN } from './user-trade.js'
 import { settleWords } from './default-arca.js'
 import { mountMarketView } from './market-view.js'
 import { openPicker, PICKER_WORDS } from './asset-picker.js'
@@ -47,6 +47,22 @@ export const READY_TRIES = 30
 export const CONFIRM_SHOWN_MS = 1500
 export const FOLLOW_FAST_MS = 120_000
 export const FOLLOW_SLOW_MS = 30_000
+
+// Whether the open trades `recs` are followed every few seconds at `now` (ms), rather than every
+// FOLLOW_SLOW_MS: a trade sent within FOLLOW_FAST_MS; one that waits (a purchase paid with BTC
+// waiting for its asset to be final: its BTC is paid the moment the asset is); and one received
+// whose settling with the network is still under way, until the wallet calls it late
+// (SLOW_SETTLE_MIN). Settling takes the operator's next round and the block that makes it final,
+// one to four minutes on the testnet, so most of it falls past FOLLOW_FAST_MS: followed slowly,
+// "Settled" came up to half a minute after the network had settled it.
+export function followFast (recs, now = Date.now()) {
+  return (recs || []).some((r) => {
+    const age = now - (r.sentAt || r.at || 0)
+    if (r.state === 'waiting' || age < FOLLOW_FAST_MS) return true
+    const settling = heldAlready(r) && (r.settleState || []).some((x) => x && x !== 'released')
+    return settling && age < SLOW_SETTLE_MIN * 60_000
+  })
+}
 
 // The "You pay" list: BTC always, and an asset only while the wallet holds some of it (or it is
 // the one chosen now), in the pickers' order. A fresh wallet pays from BTC alone.
@@ -688,10 +704,8 @@ export function mountUserComposer (ctx) {
     try { await ctx.engine.resume() } catch (e) { console.warn('[user composer] resume:', e && e.message) }
     // Painted whether the tab is shown or not: an ending is said wherever the person is.
     paintTrades()
-    // A purchase paid with BTC that waits for its asset to be final is followed every few seconds
-    // however long it waits: its BTC is paid the moment the asset is, and the person watches it.
-    const young = openRecs.some((r) => r.state === 'waiting' || Date.now() - (r.sentAt || r.at || 0) < FOLLOW_FAST_MS)
-    S.timer = setTimeout(follow, young ? (ctx.followMs || 4000) : (ctx.followSlowMs || FOLLOW_SLOW_MS))
+    // Followed every few seconds while a person watches something move (followFast).
+    S.timer = setTimeout(follow, followFast(openRecs) ? (ctx.followMs || 4000) : (ctx.followSlowMs || FOLLOW_SLOW_MS))
   }
 
   return { render, follow, state: S, paintHave }

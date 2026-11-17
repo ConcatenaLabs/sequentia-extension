@@ -80,8 +80,11 @@ wasm. Read this before changing anything.
   (`vendor/lnaddr.js` `mountLnAddress`) lives in `offscreen-ark.js` beside the ark that makes
   its invoices; it leaves the name's stock of signed receive codes with the service and tops it
   up (`vendor/name-stock.js`), each code made by the service worker at the index the stock picks
-  (`default.nameCode`, from `default.nameIndices`). Receive shows the name as the QR code when the
-  wallet has one (`receiveCode` `isName`, words in `src/receive-view.js`); Send checks a name's code
+  (`default.nameCode`, from `default.nameIndices`). Every wallet in default mode holds a name made with nothing asked
+  (`nameEnsure`, from the popup and the once-a-minute alarm: the name its key holds, else its
+  word name, never again once removed), and Receive shows it as the QR code only while the service
+  has said this key holds it and answers (`nameShown`, `receiveCode` `isName`, words in
+  `src/receive-view.js`); it is changed in Settings; Send checks a name's code
   against the name's key and the key kept from paying it before (`namePins`). BTC lives on the
   Bitcoin ark in the offscreen document (`offscreen-ark.js`, scope `ark`), open in
   both modes so its BTC is in BTC's figure; it boards the wallet's confirmed tb1
@@ -190,7 +193,7 @@ wasm. Read this before changing anything.
   `vendor/seqob.js`, `vendor/covenant.js`, `vendor/covenant-order.js`, `vendor/covenant-flow.js`,
   `vendor/covenant-fill-host.js`, `vendor/noble-ciphers.js`, `vendor/contracts.js`, `vendor/bolt11.js`,
   `vendor/lnupgrade.js`, `vendor/own-txs.js`, `vendor/stake-records.js`,
-  `vendor/default-arca.js`, `vendor/confidential-pay.js`, `vendor/pay-code.js`, `vendor/faucet-wallet.js`, `vendor/btc-ark.js`, `vendor/lightning-to-ark.js`, `vendor/speed-up.js`,
+  `vendor/default-arca.js`, `vendor/confidential-pay.js`, `vendor/pay-code.js`, `vendor/receive-watch.js`, `vendor/faucet-wallet.js`, `vendor/btc-ark.js`, `vendor/lightning-to-ark.js`, `vendor/speed-up.js`,
   `vendor/user-trade.js`, `vendor/user-trade-btc.js`, `vendor/user-composer.js`,
   `vendor/restricted-engine.js`, `vendor/restricted-composed.js`, `vendor/restricted-trade.js`
   (the engine imports them; the popup gives it no `restricted`, so it trades as without them),
