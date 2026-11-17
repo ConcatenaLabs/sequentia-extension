@@ -70,27 +70,34 @@ confidential `tsqb1…` addresses are an explicit opt-in).
   mode, and offers **Take my coins home**, which sends every coin to the wallet's own
   address from what the wallet holds and the chain alone, each coin's fees quoted by
   the library and shown first (the web wallet's `default-arca.js` `homeQuote` and
-  `homeTake`, and its docs/DEFAULT_MODE.md words). Receive shows one
-  receive code, `BITCOIN:<TB1>?ark=<ARK ADDRESS>&sequentia=<SQR1…>` (the web wallet's
-  `pay-code.js`, kept in `vendor/`), with
-  an optional amount and a menu of what it is in: in BTC it adds `amount=` and an ark
+  `homeTake`, and its docs/DEFAULT_MODE.md words). Receive is one card
+  of three things: the QR code, one line ("Scan or share to get paid in BTC or any asset.") and
+  **Copy**, with a payment coming in said under the line ("Payment arriving…", then "Received
+  <amount> <TICKER>.", read from the figures Balance shows by `vendor/receive-watch.js`: only value
+  the wallet did not hold counts, so a move of its own or a trade says nothing). Every wallet holds
+  a payment name, made with nothing asked (the name its key holds at the name service, else its word
+  name; never again by itself once the person removed it), and the QR code holds only
+  `name@sequentiatestnet.com`, about 30 characters, shown once the service has said this wallet's
+  key holds it. While the name service does not answer, the QR code is the full receive code,
+  `BITCOIN:<TB1>?ark=<ARK ADDRESS>&sequentia=<SQR1…>` (the web wallet's `pay-code.js`, kept in
+  `vendor/`), and the name takes its place when the service answers, with no reload. Everything else
+  is under **More options** (**Fewer options** while open): where the name is changed (Settings),
+  an amount and a menu of what it is in (in BTC the full code adds `amount=` and an ark
   invoice as `lightning=`, in an asset the operator receives over Lightning that asset's
   invoice from the operator's node (`lightning_receive`), each only up to the most the
-  operator takes in one Lightning payment (the `max_payment` its `info` publishes; 1,500
-  USD when it publishes none). A wallet with a payment name shows the name instead while no
-  amount is typed and Confidential is off: the QR code holds `name@sequentiatestnet.com`, with
-  **Copy name** and **Show full code**, whose full code carries the name's LNURL-pay as
-  `lightning=`. The name is then said once, in one card: the QR, the name, one line on who
-  can pay it and when, the line saying names are public, Copy name and Show full code, the
-  Confidential switch, and **Remove name** as a quiet link at its foot. **New code** moves to an address not shown before, within
-  the twenty past the last one paid that a restore reads (`vendor/receive-index.js`). The
-  **Confidential** switch under the code makes it the wallet's confidential address alone,
-  saying what stays public, and is off whenever Receive opens. Under it, **Your payment
-  name**: `name@sequentiatestnet.com`, held by a key of the phrase (`vendor/lnaddr.js`, the
-  web wallet's). **Get a name** takes the wallet's word name in one tap (`vendor/word-name.js`: two
-  words from a list, shown with a capital for each, `AmberFalcon@…`, derived from the name's key so a
-  restore gets it back; lower case in the QR code, Copy and every lookup); **Choose your own** and,
-  for a name of the wallet's own choosing, **Use a word name instead** are quiet links. The offscreen document keeps the name's link with the name service while the
+  operator takes in one Lightning payment: the `max_payment` its `info` publishes, 1,500
+  USD when it publishes none), **New code**, **Show full code** (with a name: the full code in the
+  QR code and written out, which carries the name's LNURL-pay as `lightning=`; **Show name** goes
+  back), the **Confidential** switch and **Receive a restricted asset**. **New code** moves to an
+  address not shown before, within the twenty past the last one paid that a restore reads
+  (`vendor/receive-index.js`). **Confidential** makes the code the wallet's confidential address
+  alone, saying what stays public. Leaving Receive closes More options and turns Show full code,
+  Confidential and Receive a restricted asset off. The payment name, `name@sequentiatestnet.com`
+  held by a key of the phrase (`vendor/lnaddr.js`, the web wallet's), is changed or removed in
+  **Settings** (**Copy**, **Change name**, **Use a word name instead** for a name of the wallet's
+  own choosing, **Remove name**; a word name is two words from a list, shown with a capital for
+  each, `AmberFalcon@…`, derived from the name's key so a restore gets it back, lower case in the QR
+  code, Copy and every lookup, `vendor/word-name.js`); developer mode keeps it under the address. The offscreen document keeps the name's link with the name service while the
   wallet is unlocked: a Lightning wallet paying it gets an invoice of the wallet's ark for
   the amount it chose, and a Sequentia wallet, open or closed, one of the signed receive
   codes the link leaves with the service and tops up while the wallet is unlocked
@@ -582,7 +589,7 @@ vendor/                modules copied from sequentia-web-wallet (btc.js,
                        covenant-order.js, covenant-fill-host.js,
                        noble-ciphers.js, contracts.js, bolt11.js,
                        lnupgrade.js, own-txs.js, lightning/ signer SDK,
-                       default-arca.js, pay-code.js, btc-ark.js, lightning-to-ark.js,
+                       default-arca.js, pay-code.js, receive-watch.js, btc-ark.js, lightning-to-ark.js,
                        user-trade.js, user-trade-btc.js, user-composer.js,
                        asset-picker.js, market-view.js, chart.js, indicators.js,
                        vendor/lightweight-charts/ (the chart library),

@@ -31,13 +31,22 @@
 // the payer cannot know:
 //
 //   byte 0         version, 1
-//   byte 1         flags: 1 the vtxo-2 template, 2 a landing, 4 an asset, 8 a value, 16 channels
+//   byte 1         flags: 1 the vtxo-2 template, 2 a landing, 4 an asset, 8 a value, 16 channels,
+//                  32 the record formats the wallet reads
 //   bytes 2-5      the first 4 bytes of the operator's key       } checked against the payer's
 //   bytes 6-9      the first 4 bytes of the chain's genesis hash } own, never taken from here
 //   bytes 10-41    owner           bytes 42-73   owner nonce       bytes 74-105   mailbox
 //   bytes 106-107  exit delay units (big-endian)                   bytes 108-111  until (big-endian)
 //   then, as flagged: landing (20 bytes), asset (32), value (8, big-endian), channels (a count
-//   byte, then per channel its asset (32) and its leaf (32))
+//   byte, then per channel its asset (32) and its leaf (32)), reads (2 bytes, big-endian, one bit
+//   for each name of `RECORD_FORMATS` it holds, bit 0 the first; then a count byte and each name
+//   the table does not hold, a length byte and its letters)
+//
+// `reads` is the list of record formats the wallet takes coins in (the library's
+// `arca_covenant::RECORD_FORMATS`); a payer gives it only coins of those formats, and reads a
+// request that names none as an older wallet's, so it must travel. The table names the formats
+// the library knows today in its own order, so the usual list costs two bytes; a format added
+// later travels by its name until the table is extended, here and in every copy of this file.
 //
 // A payer on the same operator and chain rebuilds the library's request from it with its own
 // operator and genesis (`expandRequest`); any other payer could not pay the request in the tree
@@ -167,10 +176,15 @@ export function nameLnurlUrl (name, domain) {
 // ---- the short receive request -------------------------------------------------------------
 
 export const REQUEST_HRP = 'sqr'
-const F_V2 = 1, F_LANDING = 2, F_ASSET = 4, F_VALUE = 8, F_CHANNELS = 16
+const F_V2 = 1, F_LANDING = 2, F_ASSET = 4, F_VALUE = 8, F_CHANNELS = 16, F_READS = 32
 // The keys the short form carries; a request with any other is left in the library's spelling.
 const CARRIED = new Set(['kind', 'genesis_hash', 'operator', 'owner', 'owner_nonce', 'mailbox', 'exit_delay_units',
-  'until', 'landing', 'asset', 'value', 'template', 'channels'])
+  'until', 'landing', 'asset', 'value', 'template', 'channels', 'reads'])
+// The record formats a request's `reads` names by bit, in the library's order
+// (arca covenant/src/batch.rs RECORD_FORMATS). Never reorder or remove a name: a code made with
+// this table is read with it.
+export const RECORD_FORMATS = Object.freeze(['leaf-2', 'leaf-3', 'accumulator-1', 'accumulator-4', 'coin-2', 'landing-2'])
+const FORMAT_RE = /^[a-z0-9][a-z0-9._-]{0,62}$/
 
 const isHex = (s, n) => typeof s === 'string' && s.length === 2 * n && /^[0-9a-fA-F]+$/.test(s)
 const hexBytes = (s) => { const b = []; for (let i = 0; i < s.length; i += 2) b.push(parseInt(s.slice(i, i + 2), 16)); return b }
@@ -206,12 +220,26 @@ export function compactRequest (text) {
   if (r.value !== undefined && !(typeof r.value === 'string' && /^\d+$/.test(r.value) && BigInt(r.value) < 1n << 64n)) return null
   const channels = r.channels === undefined ? null : Object.entries(r.channels || {})
   if (channels && (!channels.length || channels.length > 255 || channels.some(([a, l]) => !isHex(a, 32) || !isHex(l, 32)))) return null
+  // reads: the table's names in its order, then names it does not hold, each once; anything else
+  // stays in the library's spelling, so the list comes back exactly as it was written.
+  let readsMask = 0, readsExtra = []
+  if (r.reads !== undefined) {
+    if (!Array.isArray(r.reads) || r.reads.length > 32 || new Set(r.reads).size !== r.reads.length) return null
+    let last = -1, extra = false
+    for (const f of r.reads) {
+      if (typeof f !== 'string' || !FORMAT_RE.test(f)) return null
+      const i = RECORD_FORMATS.indexOf(f)
+      if (i >= 0) { if (extra || i < last) return null; last = i; readsMask |= 1 << i } else { extra = true; readsExtra.push(f) }
+    }
+    if (readsExtra.length > 255) return null
+  }
   let flags = 0
   if (r.template) flags |= F_V2
   if (r.landing !== undefined) flags |= F_LANDING
   if (r.asset !== undefined) flags |= F_ASSET
   if (r.value !== undefined) flags |= F_VALUE
   if (channels) flags |= F_CHANNELS
+  if (r.reads !== undefined) flags |= F_READS
   const b = [1, flags, ...hexBytes(r.operator).slice(0, 4), ...hexBytes(r.genesis_hash).slice(0, 4),
     ...hexBytes(r.owner), ...hexBytes(r.owner_nonce), ...hexBytes(r.mailbox),
     delay >> 8, delay & 0xff, (until >>> 24) & 0xff, (until >>> 16) & 0xff, (until >>> 8) & 0xff, until & 0xff]
@@ -219,6 +247,10 @@ export function compactRequest (text) {
   if (r.asset !== undefined) b.push(...hexBytes(r.asset))
   if (r.value !== undefined) { let v = BigInt(r.value); const vb = []; for (let i = 0; i < 8; i++) { vb.unshift(Number(v & 0xffn)); v >>= 8n } b.push(...vb) }
   if (channels) { b.push(channels.length); for (const [a, l] of channels) b.push(...hexBytes(a), ...hexBytes(l)) }
+  if (r.reads !== undefined) {
+    b.push(readsMask >> 8, readsMask & 0xff, readsExtra.length)
+    for (const f of readsExtra) b.push(f.length, ...new TextEncoder().encode(f))
+  }
   return bech32mEncode(REQUEST_HRP, b)
 }
 
@@ -230,7 +262,7 @@ export function readShortRequest (text) {
   const b = d.bytes
   if (b.length < 112 || b[0] !== 1) return null
   const flags = b[1]
-  if (flags & ~31) return null
+  if (flags & ~63) return null
   const at = (i, n) => bytesHex(b.slice(i, i + n))
   const r = { kind: 'request', owner: at(10, 32), owner_nonce: at(42, 32), mailbox: at(74, 32),
     exit_delay_units: (b[106] << 8) | b[107], until: b[108] * 0x1000000 + (b[109] << 16) + (b[110] << 8) + b[111] }
@@ -246,6 +278,17 @@ export function readShortRequest (text) {
       if (!n) return null
       r.channels = {}
       for (let k = 0; k < n; k++) { const s = need(64); r.channels[at(s, 32)] = at(s + 32, 32) }
+    }
+    if (flags & F_READS) {
+      const s = need(2), mask = (b[s] << 8) | b[s + 1]
+      if (mask >> RECORD_FORMATS.length) return null
+      r.reads = RECORD_FORMATS.filter((_, k) => mask & (1 << k))
+      const n = b[need(1)]
+      for (let k = 0; k < n; k++) {
+        const len = b[need(1)], f = new TextDecoder().decode(Uint8Array.from(b.slice(need(len), i)))
+        if (!FORMAT_RE.test(f) || r.reads.includes(f)) return null
+        r.reads.push(f)
+      }
     }
   } catch { return null }
   if (i !== b.length) return null

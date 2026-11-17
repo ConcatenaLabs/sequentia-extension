@@ -34,14 +34,14 @@ test('Confidential: the confidential address alone, before any other part is ask
   assert.match(body, /const c = engine\.currentAddress\(true\)\.address;\n    return \{ code: c, qr: qr\(c\), isCode: true, confidential: true \};/);
   // Off whenever Receive is left; the words are the contract's.
   const pop = read('popup/popup.js');
-  assert.match(pop, /function tab\(name\) \{\n[^\n]*\n  if \(name !== 'receive'\) \{ recvConf0 = false; recvFull = false; \}/);
+  assert.match(pop, /function tab\(name\) \{\n[^\n]*\n  if \(name !== 'receive'\) \{ recvConf0 = false; recvFull = false; recvMore = false; recvOampOpen = false; recvW\.stop\(\); \}/);
   for (const w of [DEFAULT_WORDS.confidential, DEFAULT_WORDS.confidentialTip, DEFAULT_WORDS.confidentialNote, DEFAULT_WORDS.receiveTipConf]) assert.deepEqual(forbiddenIn(w), [], w);
   assert.match(DEFAULT_WORDS.confidentialNote, /BTC is never confidential/);
 });
 
 test('without an amount the picture is the name; the full code carries its LNURL-pay; with an amount, the invoice', () => {
   const dm = read('src/default-mode.js');
-  assert.match(dm, /if \(named && !full\) \{\n    const text = nameQrText\(nm\.address\);\n    return \{ code: text, shown: nm\.display \|\| text, qr: qr\(text\), isCode: true, isName: true, named: true \};/);
+  assert.match(dm, /if \(named && !full\) \{\n    const text = nameQrText\(nm\.address\);\n    return \{ code: text, shown: nm\.display \|\| text, nameText: nm\.display \|\| nm\.address, qr: qr\(text\), isCode: true, isName: true, named: true \};/);
   assert.match(dm, /if \(n === 0n\) \{ try \{ nm = await nameState\(\); \} catch \{ nm = null; \} \}/, 'only without an amount');
   assert.ok(dm.indexOf('if (named && !full)') > dm.indexOf('if (confidential) {'), 'Confidential gives its own address first');
   assert.match(dm, /if \(n === 0n && named\) lnurl = nameLnurlUrl\(nm\.name, LNADDR_DOMAIN\);/);

@@ -25,7 +25,7 @@ test('a word name comes from the name key, lower case to read, a capital per wor
 
 test('Get a name and Use a word name instead take the word name through the offscreen link', () => {
   assert.match(read('offscreen-ark.js'), /else if \(op === 'words'\) await A\.name\.claimWordName\(\);/);
-  assert.match(read('offscreen-ark.js'), /display: A\.name\.display\(\), isWordName: A\.name\.isWordName\(\)/);
+  assert.match(read('offscreen-ark.js'), /display: A\.name\.display\(\), isWordName: A\.name\.isWordName\(\),/);
   assert.ok(read('background.js').includes("'default.nameWords': async () => await dm.nameWords(),"));
   const html = read('popup/popup.html');
   assert.match(html, /<button id="btnNameGet" class="primary tiny">Get a name<\/button>/);
@@ -33,9 +33,9 @@ test('Get a name and Use a word name instead take the word name through the offs
   assert.match(html, /<button id="btnNameWords" class="quiet hide">Use a word name instead<\/button>/);
   const pop = read('popup/popup.js');
   assert.match(pop, /\$\('btnNameGet'\)\.onclick = \(\) => getWordName\(\$\('btnNameGet'\)\);/);
-  assert.match(pop, /vis\('btnNameWords', !!nameNow && !nameEditing && !st\.isWordName\)/);
-  // Shown with capitals; the QR code and Copy keep the lower case.
-  assert.match(pop, /\$\('recvDCode'\)\.textContent = r\.shown \|\| r\.code;/);
-  assert.match(read('src/default-mode.js'), /return \{ code: text, shown: nm\.display \|\| text, qr: qr\(text\)/);
+  assert.match(pop, /vis\('btnNameWords', !!name && !nameEditing && !st\.isWordName\)/);
+  // Shown with capitals (Settings, and the line in More options); the QR code and Copy keep the lower case.
+  assert.match(pop, /\$\('nameAddr'\)\.textContent = name \? \(st\.display \|\| st\.address \|\| ''\) : '';/);
+  assert.match(read('src/default-mode.js'), /return \{ code: text, shown: nm\.display \|\| text, nameText: nm\.display \|\| nm\.address, qr: qr\(text\)/);
   assert.match(read('NOTICE'), /EFF short\nwordlist 1[\s\S]*Creative Commons Attribution 3\.0 United States/);
 });

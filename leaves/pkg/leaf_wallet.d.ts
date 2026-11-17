@@ -70,6 +70,15 @@ declare class IntoUnderlyingSource {
 export type { IntoUnderlyingSource };
 
 /**
+ * What a pass of `sync` in slices would cost on the store named `name`
+ * (the name its storage file carries), read from the store alone and
+ * opened read-only: nothing is written, and no operator or node is asked
+ * ([`bark::arca::size`]). For a copy of a wallet's storage, never the
+ * storage a running wallet uses.
+ */
+export function arcaSyncSize(name: string): string;
+
+/**
  * Whether this browser's storage holds the wallet of `mnemonic`.
  */
 export function arcaWalletExists(mnemonic: string): boolean;
@@ -108,6 +117,7 @@ export interface InitOutput {
     readonly __wbg_intounderlyingbytesource_free: (a: number, b: number) => void;
     readonly __wbg_intounderlyingsink_free: (a: number, b: number) => void;
     readonly __wbg_intounderlyingsource_free: (a: number, b: number) => void;
+    readonly arcaSyncSize: (a: number, b: number) => [number, number, number, number];
     readonly arcaWalletExists: (a: number, b: number) => [number, number, number];
     readonly arcawallet_create: (a: number, b: number, c: number, d: number) => [number, number, number];
     readonly arcawallet_open: (a: number, b: number, c: number, d: number) => [number, number, number];

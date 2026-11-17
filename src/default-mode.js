@@ -18,6 +18,7 @@
 
 import { ARCA, FAUCET_URL, LNADDR_DOMAIN, LSP } from './config.js';
 import { parseLnAddress, resolveLnAddress, nameQrText } from '../vendor/lnaddr.js';
+import { nameShown } from './receive-view.js';
 import { stGet, stSet, parseAtoms, fmtAtoms } from './util.js';
 import { ensureOffscreen, offscreenUp } from './offscreen-doc.js';
 import { sessionMnemonic } from './vault.js';
@@ -291,7 +292,7 @@ export async function receiveChoices() {
 //   full            with a payment name and no amount, the full code all the same ("Show full
 //                   code"); without it the picture is the name (`isName`, vendor/lnaddr.js
 //                   nameQrText), which a payer's wallet looks up for a new code of this wallet's.
-// `named` says the wallet holds a payment name.
+// `named` says the wallet holds a payment name that is shown (`nameShown`), `nameText` is it.
 export async function receiveCode({ sats = null, asset = 'BTC', amount = null, fresh = false, confidential = false, full = false } = {}) {
   await engine.ensureOpen();
   const address = (fresh ? engine.newAddress(false) : engine.currentAddress(false)).address;
@@ -306,10 +307,10 @@ export async function receiveCode({ sats = null, asset = 'BTC', amount = null, f
   if (n < 0n) n = 0n;
   let nm = null;
   if (n === 0n) { try { nm = await nameState(); } catch { nm = null; } }
-  const named = !!(nm && nm.name);
+  const named = nameShown(nm);
   if (named && !full) {
     const text = nameQrText(nm.address);
-    return { code: text, shown: nm.display || text, qr: qr(text), isCode: true, isName: true, named: true };
+    return { code: text, shown: nm.display || text, nameText: nm.display || nm.address, qr: qr(text), isCode: true, isName: true, named: true };
   }
   let sequentia = null, ark = null, lightning = null, lnurl = null, btcAmount = null, invoiceHash = null, invoiceKind = null;
   const open = await leafOpen();
@@ -343,9 +344,10 @@ export async function receiveCode({ sats = null, asset = 'BTC', amount = null, f
       lightning = inv.invoice; invoiceHash = inv.payment_hash; invoiceKind = kind;
     } catch (e) { console.warn('[default] no invoice in the asset for the code:', e.message); }
   }
-  if (!sequentia) return { code: address, qr: qr(address), isCode: false, named };
+  const nameText = named ? nm.display || nm.address : null;
+  if (!sequentia) return { code: address, qr: qr(address), isCode: false, named, nameText };
   const code = buildPayCode({ address, ark, sequentia, amount: btcAmount, lightning, lnurl });
-  return { code, qr: qr(code), isCode: true, invoiceHash, invoiceKind, named };
+  return { code, qr: qr(code), isCode: true, invoiceHash, invoiceKind, named, nameText };
 }
 // A receive's state: the ark's for BTC; for an asset, the leaf library's (`lightning_receives`),
 // 'paid' once a payment is held for it (the wallet then syncs, which claims it), 'open' or 'gone'.
@@ -362,6 +364,14 @@ export async function assetInvoiceState(hash) {
 export async function nameState() {
   if (!(await arkOpen())) return null;
   try { return await arkHost('name', { op: 'state' }); } catch { return null; }
+}
+// Every wallet in default mode holds a payment name with nothing asked: its key's name at the
+// service, else its word name, made when the wallet is created or restored (and never again by
+// itself once the person removed it). It asks again by itself while the service does not answer.
+// Developer mode makes none.
+export async function nameEnsure() {
+  await ensureArk();
+  return await arkHost('name', { op: 'ensure', want: await isDefault() });
 }
 export async function nameRegister(name) { await ensureArk(); return await arkHost('name', { op: 'register', name }); }
 export async function nameRelease() { await ensureArk(); return await arkHost('name', { op: 'release' }); }

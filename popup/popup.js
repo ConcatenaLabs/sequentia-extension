@@ -10,7 +10,8 @@ import { chainGenesis } from '../src/chain-genesis.js';
 import { DEFAULT_WORDS, heldAssetList, anchorDepth, homeSummary, homeOnWay, homeHours } from '../vendor/default-arca.js';
 import { BTC_WORDS } from '../vendor/btc-ark.js';
 import { NAME_WORDS, nameProblem } from '../vendor/lnaddr.js';
-import { receiveView } from '../src/receive-view.js';
+import { receiveView, nameShown } from '../src/receive-view.js';
+import { makeReceiveWatch } from '../vendor/receive-watch.js';
 import { LNADDR_DOMAIN } from '../src/config.js';
 import { SPEED_WORDS } from '../vendor/speed-up.js';
 import { FAUCET_WORDS, faucetLabel } from '../vendor/faucet-wallet.js';
@@ -36,7 +37,7 @@ new MutationObserver((ms) => {
 
 const $ = (id) => document.getElementById(id);
 // Default mode's Confidential switch on Receive (renderDefaultReceive): off whenever Receive opens.
-let recvConf0 = false, recvFull = false;
+let recvConf0 = false, recvFull = false, recvMore = false, recvOampOpen = false;
 const el = (t, c, txt) => { const e = document.createElement(t); if (c) e.className = c; if (txt != null) e.textContent = txt; return e; };
 
 const rpc = (method, params = {}) => new Promise((resolve, reject) => {
@@ -73,7 +74,7 @@ function view(id) { for (const v of VIEWS) $(v).classList.toggle('hide', v !== i
 const TABS = ['balance', 'send', 'receive', 'trade', 'stake', 'history', 'settings'];
 function tab(name) {
   // Receive's Confidential switch is a choice for one payment: off again once Receive is left.
-  if (name !== 'receive') { recvConf0 = false; recvFull = false; }
+  if (name !== 'receive') { recvConf0 = false; recvFull = false; recvMore = false; recvOampOpen = false; recvW.stop(); }
   for (const t of TABS) $('t' + t[0].toUpperCase() + t.slice(1)).classList.toggle('hide', t !== name);
   for (const b of document.querySelectorAll('.tabs [data-tab]')) b.classList.toggle('on', b.dataset.tab === name);
   if (name === 'receive') { if (isDefault()) renderDefaultReceive(); else renderReceive(); }
@@ -641,6 +642,7 @@ $('btnLnPay').onclick = async () => {
 // ---- receive ----
 let recvConf = false, recvMode = 'onchain';
 async function renderReceive() {
+  renderName().catch(() => {});
   $('recvOnchain').classList.toggle('hide', recvMode !== 'onchain');
   $('recvLn').classList.toggle('hide', recvMode !== 'ln');
   $('btnRecvMode').textContent = recvMode === 'onchain' ? 'Lightning' : 'On-chain';
@@ -662,10 +664,14 @@ async function renderReceive() {
       o.value = k; sel.appendChild(o);
     }
   }
-  // OpenAMP receive card
-  const hasOamp = OV && OV.oampAid && OV.oampAssets && OV.oampAssets.length;
-  $('recvOamp').classList.toggle('hide', !hasOamp);
-  if (hasOamp) {
+  paintOamp(!!(OV && OV.oampAid && OV.oampAssets && OV.oampAssets.length));
+}
+// The restricted-asset card (the wallet's account id and the deposit address for one asset): developer
+// mode shows it, default mode keeps it behind Receive's More options.
+function paintOamp(show) {
+  $('recvOamp').classList.toggle('hide', !show);
+  if (!show) return;
+  {
     $('oampAid').textContent = OV.oampAid;
     const sel = $('oampRecvAsset');
     if (!sel.dataset.filled) {
@@ -680,7 +686,7 @@ async function renderReceive() {
           $('oampRecvAddr').textContent = r.address || '—';
           $('oampRecvAddr').classList.remove('hide');
           if (r.qr) { $('oampRecvQr').src = r.qr; $('oampRecvQr').classList.remove('hide'); }
-        } catch (e) { $('recvStatus').className = 'status err'; $('recvStatus').textContent = e.message; }
+        } catch (e) { $('recvDStatus').className = 'status err'; $('recvDStatus').textContent = e.message; $('recvStatus').className = 'status err'; $('recvStatus').textContent = e.message; }
       };
     }
   }
@@ -1393,9 +1399,10 @@ function applyMode() {
 }
 
 // ---- receive: one code ----
-// The code (docs/DEFAULT_MODE.md of the web wallet, Receive): an optional amount in BTC or in an
-// asset the operator receives over Lightning, New code, the Confidential switch, and the payment
-// name under it.
+// Receive is one card of three things (docs/DEFAULT_MODE.md of the web wallet, Receive): the QR code,
+// one line and Copy, with a payment coming in said under them. Behind More options: where the
+// payment name is changed, an amount in BTC or in an asset the operator receives over Lightning,
+// New code, Show full code, the Confidential switch and Receive a restricted asset.
 let recvCode = null, recvAsk = null, recvWatch = 0, recvChoices = ['BTC'], recvMetas = {};
 const recvAsset = () => $('recvDAsset').value || 'BTC';
 const recvMeta = (k) => (k === 'BTC' ? { ticker: 'BTC', precision: 8 } : recvMetas[k] || (() => { const r = OV && OV.rows.find((x) => x.key === k); return r ? { ticker: r.ticker, precision: r.precision } : { ticker: k.slice(0, 8), precision: 8 }; })());
@@ -1425,29 +1432,45 @@ function paintConf() {
   $('recvDConfNote').textContent = DEFAULT_WORDS.confidentialNote;
   $('recvDConfNote').classList.toggle('hide', !recvConf0);
   $('recvDAmtRow').classList.toggle('hide', recvConf0);
+  $('recvDAmtLbl').classList.toggle('hide', recvConf0);
+}
+// The card around the picture, from the last answer: the line, the code's text (only when asked
+// for), More options and what sits in it.
+function paintRecvCard() {
+  const hasAmount = !!recvAtoms();
+  const v = receiveView(recvCode, { full: recvFull, conf: recvConf0, amount: hasAmount });
+  $('recvDLine').textContent = v.line;
+  $('recvDCode').textContent = v.codeText || '';
+  $('recvDCode').classList.toggle('hide', !v.codeText);
+  $('btnDCopy').textContent = DEFAULT_WORDS.copy;
+  $('btnRecvMore').textContent = recvMore ? DEFAULT_WORDS.fewerOptions : DEFAULT_WORDS.moreOptions;
+  $('btnRecvMore').setAttribute('aria-expanded', String(recvMore));
+  $('recvMore').classList.toggle('hide', !recvMore);
+  $('recvMoreName').textContent = v.settingsLine || ''; $('recvMoreName').classList.toggle('hide', !v.settingsLine);
+  $('btnDNew').textContent = DEFAULT_WORDS.newCode; $('btnDNew').classList.toggle('hide', recvConf0);
+  $('btnDFull').classList.toggle('hide', !v.toggle); $('btnDFull').textContent = v.toggle || '';
+  const oamp = !!(OV && OV.oampAid && OV.oampAssets && OV.oampAssets.length);
+  $('recvOampToggle').classList.toggle('hide', !oamp);
+  $('btnRecvOamp').textContent = DEFAULT_WORDS.restrictedReceive;
+  $('btnRecvOamp').setAttribute('aria-expanded', String(recvOampOpen));
+  paintOamp(oamp && recvOampOpen);
+  paintRecvArrive();
 }
 async function renderDefaultReceive(fresh = false) {
-  $('recvDTip').textContent = recvConf0 ? DEFAULT_WORDS.receiveTipConf : DEFAULT_WORDS.receiveTip;
   paintConf();
   paintRecvChoices().catch(() => {});
+  ensureDefaultName();
   renderName().catch(() => {});
-  if (!recvCode || fresh) { $('recvDCode').textContent = DEFAULT_WORDS.receiveWait; $('recvDQr').removeAttribute('src'); }
+  if (!recvCode || fresh) { recvCode = null; $('recvDQr').removeAttribute('src'); }
+  if (!recvW.watching() && OV) recvW.start(recvSnapshot());
+  paintRecvCard();
   const atoms = recvAtoms(), asset = recvAsset();
   const ask = (recvAsk = rpc('default.receiveCode', { asset, amount: atoms ? $('recvDAmt').value.trim() : null, fresh, confidential: recvConf0, full: recvFull }));
   try {
     const r = await ask;
     if (ask !== recvAsk) return;
     recvCode = r;
-    const v = receiveView(r, { full: recvFull });
-    $('recvDLbl').textContent = v.label;
-    if (v.tip) $('recvDTip').textContent = v.tip;
-    $('btnDCopy').textContent = v.copy;
-    $('btnDNew').classList.toggle('hide', !v.newCode);
-    $('btnDFull').classList.toggle('hide', !v.toggle); $('btnDFull').textContent = v.toggle || '';
-    $('recvDPublic').textContent = v.publicLine || ''; $('recvDPublic').classList.toggle('hide', !v.publicLine);
-    // A word name is read with a capital for each word; the QR code and Copy keep it in lower case.
-    $('recvDCode').textContent = r.shown || r.code;
-    paintNameBox();
+    paintRecvCard();
     if (r.qr) $('recvDQr').src = r.qr; else $('recvDQr').removeAttribute('src');
     if (r.invoiceHash) watchInvoice(r.invoiceHash, r.invoiceKind || 'BTC', atoms);
     // The address stands in while the wallet cannot hold coins with the operator yet: the open
@@ -1474,63 +1497,112 @@ function watchInvoice(hash, kind, atoms) {
     try { r = kind === 'BTC' ? await rpc('default.invoiceReceived', { hash }) : await rpc('default.assetInvoiceState', { hash }); } catch {}
     if (r && r.state === 'paid') {
       const m = recvMeta(kind);
-      $('recvDStatus').className = 'status ok';
-      $('recvDStatus').textContent = kind === 'BTC' ? BTC_WORDS.received(fmtAtoms(atoms, 8)) : DEFAULT_WORDS.faucetReceived(fmtAtoms(atoms, m.precision ?? 8) + ' ' + m.ticker);
-      $('recvDAmt').value = ''; refreshOverview(); renderDefaultReceive(true); return;
+      $('recvDAmt').value = '';
+      // The card says it once, as a payment coming in (below); this says it only if that did not.
+      await recvTick();
+      const st = recvW.state();
+      if (!(st && st.kind === 'received')) {
+        $('recvDStatus').className = 'status ok';
+        $('recvDStatus').textContent = kind === 'BTC' ? BTC_WORDS.received(fmtAtoms(atoms, 8)) : DEFAULT_WORDS.faucetReceived(fmtAtoms(atoms, m.precision ?? 8) + ' ' + m.ticker);
+      }
+      refreshOverview(); renderDefaultReceive(true); return;
     }
     if (r && r.state === 'gone') { renderDefaultReceive(); return; }
     setTimeout(tick, kind === 'BTC' ? 3000 : 5000);
   };
   setTimeout(tick, 3000);
 }
-$('btnDCopy').onclick = () => { if (recvCode) navigator.clipboard.writeText(recvCode.code).then(() => toast(recvCode.isName ? NAME_WORDS.copiedName : recvCode.isCode ? 'Receive code copied' : 'Copied')); };
+$('btnDCopy').onclick = () => { if (recvCode) navigator.clipboard.writeText(recvCode.code).then(() => { toast('Copied'); const b = $('btnDCopy'); b.textContent = 'Copied'; setTimeout(() => { b.textContent = DEFAULT_WORDS.copy; }, 1500); }); };
+$('btnRecvMore').onclick = () => { recvMore = !recvMore; paintRecvCard(); };
+$('btnRecvOamp').onclick = () => { recvOampOpen = !recvOampOpen; paintRecvCard(); if (recvOampOpen) { try { $('recvOamp').scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch {} } };
 $('btnDFull').onclick = () => { recvFull = !recvFull; $('recvDStatus').textContent = ''; recvWatch++; renderDefaultReceive(); };
 $('btnDNew').onclick = () => { $('recvDStatus').textContent = ''; recvWatch++; renderDefaultReceive(true); };
 $('recvDConf').onchange = () => { recvConf0 = $('recvDConf').checked; recvWatch++; renderDefaultReceive(); };
 { let t = null; $('recvDAmt').addEventListener('input', () => { clearTimeout(t); t = setTimeout(() => { recvWatch++; renderDefaultReceive(); }, 600); }); }
 $('recvDAsset').onchange = () => { $('recvDAmt').placeholder = recvAsset() === 'BTC' ? BTC_WORDS.amountHint : DEFAULT_WORDS.amountHint; recvWatch++; renderDefaultReceive(); };
 
-// ---- the payment name (vendor/lnaddr.js): name@LNADDR_DOMAIN, under the code ----
-let nameEditing = false, nameBusy = false, nameNow = null;
-// While Receive shows the name (`isName`), the card says it once: the name block keeps only Remove
-// name, a quiet link at the card's foot. With the full code it is shown whole, as before.
-function paintNameBox() {
-  const above = !!nameNow && !!(recvCode && recvCode.isName) && isDefault();
-  const vis = (id, on) => $(id).classList.toggle('hide', !on);
-  vis('nameLbl', !above); vis('nameTip', !above);
-  vis('nameAddr', !!nameNow && !nameEditing && !above);
-  vis('btnNameCopy', !!nameNow && !nameEditing && !above);
-  $('btnNameRemove').classList.toggle('quiet', above);
-  $('btnNameRemove').classList.toggle('ghost', !above);
-  $('btnNameRemove').classList.toggle('tiny', !above);
-  $('nameBox').style.marginTop = above ? '6px' : '12px';
+// A payment coming in while Receive is open (vendor/receive-watch.js): "Payment arriving…", then
+// "Received <amount> <TICKER>." on the card, read from the figures Balance shows: what counts now
+// and what is on its way. A move of the wallet's own, or a trade, says nothing.
+const recvW = makeReceiveWatch();
+function recvSnapshot() {
+  const snap = {};
+  for (const r of (OV && OV.rows) || []) {
+    const vestedArr = (Array.isArray(r.vesting) ? r.vesting : []).filter((l) => l.arriving).reduce((n, l) => n + BigInt(l.atoms), 0n);
+    const total = BigInt(r.total || 0);
+    let arriving = BigInt(r.arriving || 0) + vestedArr;
+    if (arriving > total) arriving = total;
+    snap[r.key] = { settled: total - arriving, arriving };
+  }
+  return snap;
 }
+function paintRecvArrive() {
+  const st = recvW.state(), box = $('recvArrive');
+  if (!st || !isDefault()) { box.textContent = ''; box.classList.add('hide'); return; }
+  if (st.kind === 'arriving') { box.className = 'status recv-arrive'; box.textContent = DEFAULT_WORDS.paymentArriving; }
+  else {
+    const m = recvMeta(st.asset);
+    box.className = 'status ok recv-arrive'; box.textContent = DEFAULT_WORDS.faucetReceived(fmtAmount(st.atoms, m.precision ?? 0) + ' ' + m.ticker);
+  }
+}
+async function recvTick() {
+  if (!receiveOpen()) { if (recvW.watching()) recvW.stop(); return; }
+  // The wallet's figures are read again every few seconds while Receive is open. The wallet looks for
+  // what it was paid on its own schedule: no sync is asked for here, which would queue ahead of a
+  // payment or a trade a person starts meanwhile.
+  try { OV = await rpc('overview', { withLn: false }); } catch {}
+  if (!receiveOpen()) return;
+  if (!recvW.watching()) recvW.start(recvSnapshot()); else recvW.update(recvSnapshot());
+  paintRecvArrive();
+  renderName().catch(() => {});
+}
+setInterval(() => { recvTick().catch(() => {}); }, 4000);
+
+// ---- the payment name (vendor/lnaddr.js): name@LNADDR_DOMAIN ----
+// Every wallet in default mode holds one, made with nothing asked; Receive's picture is the name,
+// and it is changed or removed in Settings (developer mode keeps it under the address).
+let nameEditing = false, nameBusy = false, nameNow = null, nameShownNow = false;
+// Start the default name (the service worker asks again by itself while the name service does not
+// answer; the name then appears without a reload).
+function ensureDefaultName() { if (isDefault()) rpc('default.nameEnsure').catch(() => {}); }
 async function renderName() {
   let st = null; try { st = await rpc('default.name'); } catch {}
-  const box = $('nameBox');
+  const box = $('nameBox'), dev = !isDefault();
+  // Default mode keeps the name in Settings, where it is changed or removed; developer mode keeps
+  // it on Receive, under the address.
+  const setCard = $('setNameCard');
+  if (!dev) { if (box.parentNode !== setCard) setCard.appendChild(box); }
+  else if (box.parentNode !== $('tReceive')) $('tReceive').insertBefore(box, $('recvOamp'));
+  setCard.classList.toggle('hide', dev || !st);
   if (!st) { box.classList.add('hide'); return; }
   box.classList.remove('hide');
-  const was = nameNow; nameNow = st.name || null;
-  const dev = !isDefault();
+  const was = nameShownNow;
+  nameNow = st.name || null;
+  nameShownNow = nameShown(st);
+  // A name kept from before shows once the service has confirmed it; until then the card says
+  // nothing and offers nothing, so no name is copied or replaced on a stale word.
+  const checking = !!nameNow && !st.verified, name = checking ? null : nameNow;
+  const refused = !name && st.refused;
   $('nameLbl').textContent = dev ? NAME_WORDS.devLabel : NAME_WORDS.label;
-  $('nameTip').textContent = nameNow ? (dev ? NAME_WORDS.devTip : NAME_WORDS.tip) : NAME_WORDS.none;
-  $('nameAddr').textContent = st.display || st.address || '';
-  $('nameAddr').classList.toggle('hide', !nameNow || nameEditing);
+  $('nameTip').textContent = checking ? '' : name ? (dev ? NAME_WORDS.devTip : NAME_WORDS.tip) : refused === 'busy' ? NAME_WORDS.newBusy : NAME_WORDS.none;
+  $('nameAddr').textContent = name ? (st.display || st.address || '') : '';
+  $('nameAddr').classList.toggle('hide', !name || nameEditing);
   $('nameForm').classList.toggle('hide', !nameEditing);
   $('nameDomain').textContent = '@' + LNADDR_DOMAIN;
   $('nameInput').placeholder = NAME_WORDS.hint;
   const vis = (id, on) => $(id).classList.toggle('hide', !on);
-  vis('btnNameGet', !nameNow && !nameEditing); vis('btnNameChoose', !nameNow && !nameEditing);
+  vis('btnNameGet', !checking && !name && !nameEditing);
+  // Default mode changes a name in place (registering another releases the first).
+  vis('btnNameChoose', !checking && (!name || !dev) && !nameEditing);
   // A name that is not one of this wallet's word names can become one in one tap.
-  vis('btnNameWords', !!nameNow && !nameEditing && !st.isWordName); $('btnNameWords').textContent = NAME_WORDS.useWords;
+  vis('btnNameWords', !!name && !nameEditing && !st.isWordName); $('btnNameWords').textContent = NAME_WORDS.useWords;
   if (!nameBusy) $('btnNameGet').textContent = NAME_WORDS.getName;
   vis('btnNameSave', nameEditing); vis('btnNameCancel', nameEditing);
-  vis('btnNameRemove', !!nameNow && !nameEditing);
-  paintNameBox();
-  $('btnNameChoose').textContent = NAME_WORDS.choose; $('btnNameCancel').textContent = NAME_WORDS.cancel; $('btnNameCopy').textContent = NAME_WORDS.copy;
+  vis('btnNameCopy', !!name && !nameEditing); vis('btnNameRemove', !!name && !nameEditing);
+  $('btnNameChoose').textContent = name ? NAME_WORDS.change : NAME_WORDS.choose; $('btnNameCancel').textContent = NAME_WORDS.cancel; $('btnNameCopy').textContent = NAME_WORDS.copy;
   if (!nameBusy) { $('btnNameSave').textContent = NAME_WORDS.save; $('btnNameRemove').textContent = NAME_WORDS.remove; }
-  // The code carries the name while it is held: drawn again when it changes.
-  if (was !== nameNow && was !== null && isDefault() && receiveOpen()) renderDefaultReceive();
+  // Receive's picture is the name while it is shown: drawn again when that changes, with no reload.
+  if (was !== nameShownNow && isDefault() && receiveOpen()) renderDefaultReceive();
 }
 // Get a name: the wallet's own word name, registered in one tap; the same for a wallet holding a
 // name of another kind (Use a word name instead).

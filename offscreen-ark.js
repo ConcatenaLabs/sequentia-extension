@@ -28,8 +28,9 @@
 //   'received' { hash }               -> the receive's state, claimed when paid
 //   'ln'    { method, args }          -> the trade composer's BTC (`lightning()`), BigInt as { $big }
 //   'board' { lim, changeNext, cap }  -> boards the confirmed BTC at the first `lim` keys
-//   'name'  { op: 'state' | 'register' | 'words' | 'release', name? } -> { name, address, display,
-//           isWordName } of the payment name ('words' takes the wallet's word name)
+//   'name'  { op: 'state' | 'register' | 'words' | 'release' | 'ensure', name?, want? } -> { name, address,
+//           display, isWordName, verified, unreachable, refused, removed } of the payment name ('words'
+//           takes the wallet's word name; 'ensure' starts the default name, with nothing asked)
 // The balance is sent to the service worker as `arkBalance` after every change.
 //
 // The payment name (vendor/lnaddr.js, the web wallet's module): `name@LNADDR_DOMAIN`, held by a key of
@@ -50,7 +51,7 @@ import { mountLnAddress, nameKey } from './vendor/lnaddr.js';
 import { LSP, LNADDR_DOMAIN } from './src/config.js';
 
 const BTC_DUST = 294n;
-const A = { ark: null, fp: null, phrase: null, lastBoard: null, lastError: null, name: null, nameKey: null, idx: null, idxTimer: null };
+const A = { ark: null, fp: null, phrase: null, lastBoard: null, lastError: null, name: null, nameKey: null, idx: null, idxTimer: null, nameWant: false };
 const sw = async (method, params = {}) => {
   const r = await chrome.runtime.sendMessage({ scope: 'ui', method, params });
   if (!r || !r.ok) throw new Error((r && r.error) || method + ' failed');
@@ -136,22 +137,33 @@ function followNameInvoice(inv) {
     }
   })();
 }
-async function name({ op, name: wanted }) {
+async function name({ op, name: wanted, want }) {
   if (!A.name) throw { message: 'the Bitcoin ark wallet is not open' };
   if (op === 'register') await A.name.register(String(wanted || ''));
   else if (op === 'words') await A.name.claimWordName();
   else if (op === 'release') await A.name.release();
-  else if (op !== 'state') throw { message: 'no name operation ' + op };
+  // Every wallet in default mode holds a name with nothing asked (vendor/lnaddr.js `ensure`): the
+  // name its key holds at the service, else its word name; never again by itself once the person
+  // removed it. It asks again by itself while the service does not answer, so this starts it and
+  // answers at once; `want` is read each time it asks, so developer mode stops it.
+  else if (op === 'ensure') {
+    A.nameWant = !!want;
+    if (A.nameWant) A.name.ensure({ want: () => A.nameWant }).then(() => { if (A.name) A.name.start(); }).catch(() => {});
+  } else if (op !== 'state') throw { message: 'no name operation ' + op };
   // `display`: a word name with a capital for each word (vendor/word-name.js), for the person to
-  // read; `address` stays in lower case, as the QR code, Copy and every lookup use it.
-  return { name: A.name.name(), address: A.name.address(), display: A.name.display(), isWordName: A.name.isWordName() };
+  // read; `address` stays in lower case, as the QR code, Copy and every lookup use it. `verified`:
+  // the service has said, since this document opened, that this key holds the name; `unreachable`:
+  // it did not answer the last time it was asked; `refused`: why a new name waits ('busy').
+  // A name is shown, and put in the QR code, only while it is verified and reachable.
+  return { name: A.name.name(), address: A.name.address(), display: A.name.display(), isWordName: A.name.isWordName(),
+    verified: A.name.verified(), unreachable: A.name.unreachable(), refused: A.name.refused(), removed: A.name.removed() };
 }
 
 function stop() {
   if (A.ark) { try { A.ark.close(); } catch {} }
   if (A.name) { try { A.name.stop(); } catch {} }
   clearInterval(A.idxTimer); A.idxTimer = null; A.idx = null;
-  A.ark = null; A.fp = null; A.phrase = null; A.name = null; A.nameKey = null;
+  A.ark = null; A.fp = null; A.phrase = null; A.name = null; A.nameKey = null; A.nameWant = false;
 }
 
 // ---- the board's funding, built and signed here with the phrase's own keys ----

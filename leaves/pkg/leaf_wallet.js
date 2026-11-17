@@ -206,6 +206,36 @@ class IntoUnderlyingSource {
 if (Symbol.dispose) IntoUnderlyingSource.prototype[Symbol.dispose] = IntoUnderlyingSource.prototype.free;
 
 /**
+ * What a pass of `sync` in slices would cost on the store named `name`
+ * (the name its storage file carries), read from the store alone and
+ * opened read-only: nothing is written, and no operator or node is asked
+ * ([`bark::arca::size`]). For a copy of a wallet's storage, never the
+ * storage a running wallet uses.
+ * @param {string} name
+ * @returns {string}
+ */
+export function arcaSyncSize(name) {
+    let deferred3_0;
+    let deferred3_1;
+    try {
+        const ptr0 = passStringToWasm0(name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.arcaSyncSize(ptr0, len0);
+        var ptr2 = ret[0];
+        var len2 = ret[1];
+        if (ret[3]) {
+            ptr2 = 0; len2 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred3_0 = ptr2;
+        deferred3_1 = len2;
+        return getStringFromWasm0(ptr2, len2);
+    } finally {
+        wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+    }
+}
+
+/**
  * Whether this browser's storage holds the wallet of `mnemonic`.
  * @param {string} mnemonic
  * @returns {boolean}
@@ -661,7 +691,7 @@ function __wbg_get_imports() {
             return ret;
         }, arguments); },
         __wbindgen_generic_0000000000000001: function(arg0, arg1) {
-            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 1138, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
+            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 1145, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
             const ret = makeMutClosure(arg0, arg1, wasm_bindgen_6c31107e48cb2cdf___convert__closures_____invoke___wasm_bindgen_6c31107e48cb2cdf___JsValue__core_d941ad8722425d2e___result__Result_____wasm_bindgen_6c31107e48cb2cdf___JsError___true_);
             return ret;
         },
