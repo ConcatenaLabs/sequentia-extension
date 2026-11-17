@@ -65,14 +65,19 @@ export const DEFAULT_WORDS = Object.freeze({
   // Held where it cannot be sent in seconds (a wallet's own Lightning channel, in a wallet made
   // before), on its way to where it can (lightning-to-ark.js). Part of the figure meanwhile.
   moving: (amount, ticker) => `Moving ${amount} ${ticker} so it can be sent in seconds.`,
-  codeLabel: 'Receive code',
-  receiveTip: 'Any asset, any amount. A payment from another Sequentia wallet arrives in seconds. Each code is paid once; a new one shows when it is.',
   receiveWait: 'Making your receive code\u2026',
-  copyCode: 'Copy receive code',
   showAddress: 'Show address',
   showCode: 'Show receive code',
   newCode: 'New code',
-  addressTip: 'Your address, the same tb1 address on both chains. For BTC, and for senders that ask for an address.',
+  // Receive's one card: the QR code, this one line, and Copy; the rest behind More options.
+  receiveLine: 'Scan or share to get paid in BTC or any asset.',
+  copy: 'Copy',
+  moreOptions: 'More options',
+  fewerOptions: 'Fewer options',
+  // A payment coming in while Receive is open (receive-watch.js); once it counts, faucetReceived's
+  // "Received <amount> <TICKER>.".
+  paymentArriving: 'Payment arriving\u2026',
+  restrictedReceive: 'Receive a restricted asset',
   // While a wallet opened in this browser for the first time finds what it holds.
   finding: 'Syncing… finding everything this wallet holds.',
   // The same, once it has run a few minutes (a wallet with a long history), and once it has run
@@ -81,7 +86,7 @@ export const DEFAULT_WORDS = Object.freeze({
   findingLong: 'Syncing… finding everything this wallet holds is taking far longer than it should. Nothing has moved, and your coins are still yours. Reload the page to start again.',
   // A payment asked then.
   findingLongPay: 'Your wallet is taking far longer than it should to find everything it holds, so nothing has moved. Reload the page to start again; your coins are still yours.',
-  findingTip: 'Your address, the same tb1 address on both chains. Your receive code shows here once the wallet has found everything it holds.',
+  findingTip: 'Scan or share to get paid in BTC or any asset. Your wallet is still finding everything it holds.',
   // The same, while the service that holds the wallet's coins for instant payments does not answer:
   // the wallet asks again by itself every half minute.
   findingStalled: 'Syncing… the service that holds your coins for instant payments is not answering, so this wallet has not found them yet. They are still yours, and show here once it answers.',

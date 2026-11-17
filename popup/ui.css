@@ -126,3 +126,7 @@ a.link { color: var(--gold); text-decoration: none; cursor: pointer; }
 .news-line { display: flex; gap: 10px; align-items: center; justify-content: space-between; }
 .news-line + .news-line { margin-top: 8px; }
 .news-text { margin: 0; font-size: 13px; }
+/* default mode's Receive: one card of the QR code, one line and Copy; the rest under More options */
+.recv-simple .recv-btns, .recv-simple .recv-more-toggle { justify-content: center; text-align: center; }
+.recv-simple .recv-arrive { text-align: center; margin-top: 10px; }
+.recv-simple #recvMore { border-top: 1px solid var(--line); padding-top: 12px; }

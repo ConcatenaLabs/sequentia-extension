@@ -246,7 +246,7 @@ try {
   chrome.alarms.onAlarm.addListener((a) => {
     if (a && a.name === 'leafHost') {
       dm.autoJoin().then(() => leaves.ensureRunning()).then((up) => (up ? dm.syncDefaults().then(() => resumeLeafTrades()) : null)).catch(() => {});
-      sessionMnemonic().then((m) => (m ? dm.ensureArk().then(() => dm.boardBtcSoon()).then(() => dm.moveDownSoon()) : null)).catch(() => {});
+      sessionMnemonic().then((m) => (m ? dm.ensureArk().then(() => dm.nameEnsure()).then(() => dm.boardBtcSoon()).then(() => dm.moveDownSoon()) : null)).catch(() => {});
       // A wallet made before default mode held its coins in the Ark: what its own channels hold
       // moves there by itself (src/ln-to-ark.js).
       lnToArk.tick().catch((e) => console.warn('[ln to ark]', e && e.message));
@@ -631,6 +631,7 @@ const uiMethods = {
   'default.assetInvoiceState': async ({ hash }) => await dm.assetInvoiceState(String(hash)),
   // The payment name (vendor/lnaddr.js), whose link the offscreen document keeps.
   'default.name': async () => await dm.nameState(),
+  'default.nameEnsure': async () => await dm.nameEnsure(),
   'default.nameRegister': async ({ name }) => await dm.nameRegister(String(name || '')),
   'default.nameRelease': async () => await dm.nameRelease(),
   'default.nameWords': async () => await dm.nameWords(),
@@ -777,7 +778,7 @@ const uiMethods = {
 
 // ---- message dispatch ----
 // The popup's reads, which a person opening it does not count as asking for anything.
-const PASSIVE_UI = new Set(['default.nameCode', 'default.nameIndices', 'default.name', 'default.receiveChoices', 'default.assetInvoiceState', 'state', 'overview', 'stakingOverview', 'rewardsOverview', 'stakes', 'history', 'feeAssets', 'getMode',
+const PASSIVE_UI = new Set(['default.nameCode', 'default.nameIndices', 'default.name', 'default.nameEnsure', 'default.receiveChoices', 'default.assetInvoiceState', 'state', 'overview', 'stakingOverview', 'rewardsOverview', 'stakes', 'history', 'feeAssets', 'getMode',
   'default.joined', 'default.leafInfo', 'default.assetMeta', 'default.btcAtAddress', 'leaves.state', 'leaves.channels', 'leaves.home', 'getSettings', 'sites', 'sync']);
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // The leaf wallet's events, from its host in the offscreen document: relayed to

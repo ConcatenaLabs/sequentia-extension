@@ -149,10 +149,12 @@ async function main() {
       const t = REUSE ? await unlock(R) : await create(R, join(phrases, `${NAME}-receiver.phrase`));
       check('R joined by itself', (await joined(R, t)).joined);
       await R.pop.click('[data-tab=receive]');
-      await R.pop.waitFor("/^bitcoin:/i.test(document.querySelector('#recvDCode').innerText)", 180000);
+      // Receive's Confidential switch is under More options; the code is the wallet's own answer.
+      await R.pop.waitFor("!!document.querySelector('#recvDQr').getAttribute('src')", 180000);
+      await R.pop.click('#btnRecvMore');
       await R.pop.eval("(()=>{ const c=document.querySelector('#recvDConf'); c.checked=true; c.dispatchEvent(new Event('change')); return true })()");
-      await R.pop.waitFor("/^tsqb1/.test(document.querySelector('#recvDCode').innerText)", 60000);
-      const a = await R.pop.text('#recvDCode');
+      await R.pop.waitFor("document.querySelector('#recvDLine').innerText.startsWith('Any Sequentia asset')", 60000);
+      const a = (await R.pop.ui('default.receiveCode', { confidential: true })).code;
       check('R\'s confidential code is its confidential address alone', /^tsqb1[0-9a-z]+$/.test(a), a.slice(0, 24) + '…');
       await R.pop.shot(join(out, 'screens', 'C-0-receiver-confidential.png'));
       // What R holds before, read after a sync, so the payment is told from what it held already.
@@ -169,8 +171,9 @@ async function main() {
       const t = await create(P, join(phrases, `${NAME}-payer.phrase`));
       check('P joined by itself', (await joined(P, t)).joined);
       await P.pop.click('[data-tab=receive]');
-      await P.pop.waitFor("/^bitcoin:.*sequentia=/i.test(document.querySelector('#recvDCode').innerText)", 180000);
-      if (FUNDER) return await P.pop.text('#recvDCode');
+      const fullCode = async () => { for (let i = 0; i < 90; i++) { const r = await P.pop.ui('default.receiveCode', { full: true }).catch(() => null); if (r && /^bitcoin:.*sequentia=/i.test(r.code || '')) return r.code; await sleep(2000); } throw new Error('no receive code in 180 s'); };
+      const pc = await fullCode();
+      if (FUNDER) return pc;
       const tf = Date.now();
       await P.pop.click(`#faucetBtns [data-faucet="${ASSET}"]`);
       await P.pop.waitFor("/Received|could not|sent/i.test(document.querySelector('#faucetStatus').innerText)", 300000);

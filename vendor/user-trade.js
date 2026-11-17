@@ -293,6 +293,9 @@ export const USER_WORDS = Object.freeze({
   // What the trade brings is the wallet's; only its settling with the network is left. One word on
   // every surface, with no time: how long settling takes is the network's, not the trade's.
   received: 'Received, settling',
+  // A trade whose coins settle in the operator's next round: the wait the wallet gives a round of this
+  // operator (settleMinutes, from its published intervals), as its indicative tickets state it.
+  receivedWithin: (n) => `Received, settling (within about ${n} min)`,
   receivedSlow: 'Received, and yours to use. Settling with the network is taking longer than usual.',
   minutes: (word, n) => `${word} (${n} min)`,
   returned: 'Returned: nothing traded.',
@@ -426,7 +429,16 @@ export function tradeStateWord (r, now = Date.now()) {
   // Received, its settling still waiting with the network after ten minutes (the network had no
   // room for it yet): said so, the coins being the wallet's all along.
   const held = heldAlready(r)
-  const word = held ? (m >= SLOW_SETTLE_MIN && (r.settleState || []).some((x) => x && x !== 'released') ? W.receivedSlow : W.received)
+  const settling = held && (r.settleState || []).some((x) => x && x !== 'released')
+  // Settling in a round: the wait stated (settleMin, set when the settle started), and past it by
+  // SETTLE_LATE_MS that it takes longer, as a payment settling first says it. A minutes count since
+  // the trade was sent would read as a promise it is not.
+  if (settling && r.settleMin) {
+    const lateAt = (r.settleSince || r.sentAt || r.at || now) + r.settleMin * 60_000 + SETTLE_LATE_MS
+    return now > lateAt ? W.receivedSlow : W.receivedWithin(r.settleMin)
+  }
+  if (held && r.settle && !r.settleMin) return W.received
+  const word = held ? (m >= SLOW_SETTLE_MIN && settling ? W.receivedSlow : W.received)
     : r.source === 'btc-gateway' && r.dir === 'sell' ? W.btcOnItsWay
       : r.source === 'btc-gateway' && r.dir === 'buy' ? (r.preimage && r.posted ? W.btcCollecting : W.btcPaying)
         : r.awaiting ? W.sentAwaiting : W.sent
@@ -658,7 +670,7 @@ const FEED_REACH = 2
 // The least time between two syncs the engine asks for.
 const SYNC_EVERY_MS = 10000
 // Minutes after which a received trade still settling is said to be slow.
-const SLOW_SETTLE_MIN = 10
+export const SLOW_SETTLE_MIN = 10
 
 // The library's commands the engine runs that only read, which it runs one after another for a
 // quote or a pass over its trades: each asks the library to answer from a look at the chain made
@@ -2419,6 +2431,8 @@ export function createEngine (deps) {
         parts.push(...ok.map((p) => p.participation))
       }
       rec.settle = { coins: [...deep.map((c) => c.leaf_id), ...taken.map((t) => t.coin)], participations: [...new Set([...parts, ...taken.map((t) => t.participation)])] }
+      // The wait the row states (tradeStateWord): the wallet's figure for a round of this operator.
+      if (!rec.settleMin) { rec.settleMin = settleMinutesOf(await operatorInfo()); rec.settleSince = now() }
       put(rec)
       return 'waiting'
     }

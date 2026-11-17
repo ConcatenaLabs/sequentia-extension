@@ -55,9 +55,11 @@ const unhex = (h) => {
 // mode's `dev*` lines do.
 export const NAME_WORDS = Object.freeze({
   label: 'Your payment name',
-  tip: 'Other wallets can pay you at this name, in any amount they choose. A Sequentia wallet can pay it while this wallet is closed; other wallets, while it is open.',
+  // Said beside the name, since every wallet holds one: who can pay it, and what they see.
+  tip: 'Anyone can look this name up and pay you at it, in any amount they choose, and see the address each payment goes to. A Sequentia wallet can pay it while this wallet is closed; other wallets, while it is open.',
   none: 'Get a name other wallets can pay you at, in any amount they choose.',
   choose: 'Choose your own',
+  change: 'Change name',
   getName: 'Get a name',
   getting: 'Getting a name…',
   useWords: 'Use a word name instead',
@@ -70,18 +72,16 @@ export const NAME_WORDS = Object.freeze({
   copied: 'Copied',
   remove: 'Remove name',
   removing: 'Removing…',
-  // Receive, when the wallet has a name: the picture is the name.
-  qrTip: 'Any asset, any amount, a new receive code of yours for each payer. A Sequentia wallet can pay this name while this wallet is closed; other wallets, while it is open.',
-  public: 'Anyone who has your name can look it up and get a receive code of yours.',
-  copyName: 'Copy name',
-  copiedName: 'Name copied',
   showFull: 'Show full code',
   showName: 'Show name',
+  // Receive's More options, with a name: where it is changed.
+  settingsLine: (name) => `Your payment name is ${name}. You can change or remove it in Settings.`,
   fullTip: 'For a wallet that can\'t look names up, or to pay without a connection. Each code is paid once; a new one shows when it is.',
   // What Send says when a name's code does not check out. Nothing is sent.
   unsigned: 'This name gave a receive code its wallet did not sign, so nothing was sent. Ask the recipient for their full code.',
   changed: 'This name now belongs to another wallet than the one you paid before, so nothing was sent. Ask the recipient for their full code.',
   busy: 'Too many lookups from your network. Try again in a minute.',
+  newBusy: 'Too many names were made from your network just now. Try again in a few minutes.',
   devLabel: 'Lightning address',
   devTip: 'LNURL-pay (LUD-06, LUD-16) at this service: a payer picks the amount and this page makes the invoice on the Bitcoin ark while it is open. A Sequentia wallet paying it is given one of the signed receive codes this page leaves with the service.',
 });
@@ -250,10 +250,25 @@ export async function resolveLnAddress ({ text, asset, msat = null, domain, base
 //   shownIndex () -> the index of the address Receive shows, or null
 // With a stock, a code the service asks for while the wallet is open is made the same way.
 export function mountLnAddress ({ base, domain, key, invoice, code, limits = () => null, store, fetch: fetchFn = (...a) => fetch(...a), log = () => {}, now = () => Date.now(), onChange = () => {}, retryMs = 5_000,
-  stockCode = null, nextUnused = () => 0, shownIndex = () => null, stockSize = STOCK_SIZE, topUpEveryMs = 15_000 }) {
+  stockCode = null, nextUnused = () => 0, shownIndex = () => null, stockSize = STOCK_SIZE, topUpEveryMs = 15_000,
+  lookUpTimeoutMs = 8_000, recheckMs = 30_000 }) {
   let name = null; try { name = store.get('lnaddr.name') || null; } catch {}
+  // Whether the service said, since this page opened, that this key holds `name`. A name kept from
+  // before is not shown to payers until it has (`verified()`): it may have been released or moved
+  // on another device meanwhile.
+  let verified = false, lookedOkAt = 0;
   let running = false, stopped = true, ctl = null;
   let topping = null, toppedAt = 0;
+  // Whether the service failed to answer the last time it was asked (cleared by its next answer),
+  // and the one run of `ensure` under way.
+  let unreachable = false, ensuring = null;
+  // Whether the service holds this key as one whose person removed its name (`lookUp`).
+  let declinedThere = false;
+  // Why `ensure` has no name yet while it asks again: 'busy' while the service limits new names
+  // from this network (`refused()`), else null.
+  let refusal = null;
+  function refuse (why) { if (refusal === why) return; refusal = why; try { onChange(name) } catch {} }
+  function reach (ok) { if (unreachable === !ok) return; unreachable = !ok; try { onChange(name) } catch {} }
   const ts = () => Math.floor(now() / 1000);
   const keyOrThrow = () => { const k = key(); if (!k) throw new Error('Your wallet is locked; unlock it and try again.'); return k; };
 
@@ -265,7 +280,7 @@ export function mountLnAddress ({ base, domain, key, invoice, code, limits = () 
     if (!r.ok || !j || j.ok === false) { const e = new Error((j && j.error) || 'The name could not be saved. Check your connection and try again.'); e.status = r.status; e.code = j && j.code; throw e; }
     return j;
   }
-  function keep (n) { name = n; try { store.set('lnaddr.name', n); } catch {} try { onChange(n); } catch {} }
+  function keep (n, ok = !!n) { name = n; verified = ok; try { store.set('lnaddr.name', n); } catch {} try { onChange(n); } catch {} }
 
   // The stock this wallet made for its name: { name, mine: id -> { index, until }, handed: [index] }.
   function stockRec () {
@@ -316,15 +331,71 @@ export function mountLnAddress ({ base, domain, key, invoice, code, limits = () 
     return topping;
   }
 
-  // The name this wallet's key holds at the service, if any (a wallet restored elsewhere finds it).
-  async function recover () {
-    const k = key(); if (!k) return name;
+  // The name this wallet's key holds at the service, if any (a wallet restored elsewhere finds it),
+  // and whether its person removed it on any device (`declined`), which this device then keeps too.
+  // Bounded by `lookUpTimeoutMs`: a name is never shown on the strength of a request that hangs.
+  // Signed by the wallet's key, so the service counts it against that key and not against the
+  // lookups of payers on the same network. A refusal for too many requests (429) is not the service
+  // being unreachable: what is shown stays as it is, and the next check asks again.
+  async function lookUp () {
+    const k = key(); if (!k) return false;
+    const ctl2 = typeof AbortController === 'function' ? new AbortController() : null;
+    const t = ctl2 ? setTimeout(() => ctl2.abort(), lookUpTimeoutMs) : null;
     try {
-      const r = await fetchFn(`${base}/lnaddr/-/mine?pubkey=${k.pub}`);
+      const ts0 = ts(), sig = signWith(k.priv, signedDigest('mine', domain, '-', k.pub, ts0));
+      const r = await fetchFn(`${base}/lnaddr/-/mine?pubkey=${k.pub}&ts=${ts0}&sig=${sig}`, ctl2 ? { signal: ctl2.signal } : undefined);
+      if (r.status === 429) return false;
       const j = await r.json();
-      if (r.ok && j && j.ok) { if ((j.name || null) !== name) keep(j.name || null); }
-    } catch {}
-    return name;
+      if (r.ok && j && j.ok) {
+        reach(true);
+        if (!j.name && j.declined) { try { store.set('lnaddr.removed', '1'); } catch {} }
+        declinedThere = !!j.declined;
+        lookedOkAt = now();
+        if ((j.name || null) !== name) keep(j.name || null);
+        else if (name && !verified) { verified = true; try { onChange(name) } catch {} }
+        return true;
+      }
+    } catch {} finally { if (t) clearTimeout(t); }
+    reach(false);
+    return false;
+  }
+  async function recover () { await lookUp(); return name; }
+  // Every wallet holds a name by default: the name its key holds at the service (a wallet restored
+  // from its phrase gets its name back), else its word name, registered with nothing asked. Not
+  // while `want()` says no (developer mode), not for a key whose person removed its name on any
+  // device (the service keeps that per key; a removal only this device knows of is told to the
+  // service first), and never when the service is full or holds no word name free for this key. While the service does not
+  // answer it asks again, at `retryMs` growing to a minute, until it does: the name then shows
+  // without a reload (`onChange`). -> the name, or null.
+  function ensure ({ want = () => true } = {}) {
+    if (ensuring) return ensuring;
+    ensuring = (async () => {
+      for (let wait = retryMs; ; wait = Math.min(wait * 2, 60_000)) {
+        if (!key()) return name;
+        // The page's start asks once (`recover`); a fresh answer is not asked for again.
+        if ((verified || !name) && lookedOkAt && now() - lookedOkAt < 5_000 || await lookUp()) {
+          if (name) return name;
+          if (removed()) { if (!declinedThere) await decline().catch((e) => log('[lnaddr] decline:', e && e.message)); return name; }
+          if (!want()) return name;
+          try { const n = await claimWordName(); refuse(null); return n; } catch (e) {
+            if (e && (e.code === 'full' || e.code === 'taken' || e.message === NAME_WORDS.noWordName || e.status === 400 || e.status === 403)) { log('[lnaddr] no default name:', e.message); return name; }
+            // Too many new names from this network just now: asked again, and said meanwhile.
+            if (e && e.code === 'busy') refuse('busy'); else reach(false);
+          }
+        }
+        await new Promise((ok) => setTimeout(ok, wait));
+      }
+    })().finally(() => { ensuring = null; });
+    return ensuring;
+  }
+  // Whether the person removed this wallet's name: it is then not given one again by itself.
+  function removed () { try { return store.get('lnaddr.removed') === '1'; } catch { return false; } }
+
+  // Tell the service this key wants no name made by itself, for a removal it never saw.
+  async function decline () {
+    const k = keyOrThrow(), t = ts();
+    await post('decline', { pubkey: k.pub, ts: t, sig: signWith(k.priv, signedDigest('decline', domain, '-', k.pub, t)) });
+    declinedThere = true;
   }
 
   async function register (wanted) {
@@ -332,7 +403,9 @@ export function mountLnAddress ({ base, domain, key, invoice, code, limits = () 
     const p = nameProblem(n); if (p) throw new Error(p);
     const k = keyOrThrow(), t = ts();
     await post('register', { name: n, pubkey: k.pub, ts: t, sig: signWith(k.priv, signedDigest('register', domain, n, k.pub, t)) });
-    keep(n); start(); topUp();
+    try { store.set('lnaddr.removed', null); } catch {}
+    declinedThere = false;
+    reach(true); lookedOkAt = now(); keep(n); start(); topUp();
     return n;
   }
   // The wallet's word name (word-name.js): the first of its key's candidates the service does not
@@ -359,6 +432,8 @@ export function mountLnAddress ({ base, domain, key, invoice, code, limits = () 
     if (!name) return;
     const k = keyOrThrow(), t = ts(), n = name;
     await post('release', { name: n, ts: t, sig: signWith(k.priv, signedDigest('release', domain, n, t)) });
+    try { store.set('lnaddr.removed', '1'); } catch {}
+    declinedThere = true;
     keep(null); stop();
   }
 
@@ -388,9 +463,15 @@ export function mountLnAddress ({ base, domain, key, invoice, code, limits = () 
     running = true;
     const seen = new Set();
     try {
-      while (!stopped && name) {
+      let checkedAt = now();
+    while (!stopped && name) {
         const k = key(), lim = limits();
-        if (!k || !lim) { await new Promise((ok) => setTimeout(ok, retryMs)); continue; }
+        // Not waiting for payers: the name is checked with the service every `recheckMs` instead,
+        // so a release or a move on another device still shows here.
+        if (!k || !lim) {
+          if (now() - checkedAt >= recheckMs) { checkedAt = now(); await lookUp(); }
+          await new Promise((ok) => setTimeout(ok, retryMs)); continue;
+        }
         const n = name, t = ts();
         ctl = typeof AbortController === 'function' ? new AbortController() : null;
         let j;
@@ -399,12 +480,15 @@ export function mountLnAddress ({ base, domain, key, invoice, code, limits = () 
             sig: signWith(k.priv, signedDigest('wait', domain, n, t, lim.min_sat, lim.max_sat)) }, { signal: ctl ? ctl.signal : undefined });
         } catch (e) {
           if (stopped) break;
-          // The service no longer knows the name under this key: it was released elsewhere.
-          if (e && (e.status === 404 || e.status === 403)) { keep(null); break; }
+          // The service no longer knows the name under this key: it was released or moved
+          // elsewhere. Not shown from now on; the name the key holds now, if any, is asked for.
+          if (e && (e.status === 404 || e.status === 403)) { keep(null); lookUp().then(() => { if (name) start(); }); break; }
+          if (!e || e.status == null || e.status >= 500) reach(false);
           log('[lnaddr] wait:', e && e.message);
           await new Promise((ok) => setTimeout(ok, retryMs));
           continue;
         }
+        reach(true);
         for (const req of (j && j.requests) || []) {
           if (seen.has(req.id)) continue;
           seen.add(req.id); if (seen.size > 200) seen.delete(seen.values().next().value);
@@ -421,5 +505,5 @@ export function mountLnAddress ({ base, domain, key, invoice, code, limits = () 
   function start () { stopped = false; if (!running && name) { loop(); topUp(); } }
   function stop () { stopped = true; try { if (ctl) ctl.abort(); } catch {} }
 
-  return { name: () => name, address: () => (name ? `${name}@${domain}` : null), display, isWordName, register, claimWordName, release, recover, start, stop, topUp, stock: () => stockRec(), running: () => running };
+  return { name: () => name, verified: () => !!name && verified, address: () => (name ? `${name}@${domain}` : null), display, isWordName, register, claimWordName, release, recover, ensure, removed, unreachable: () => unreachable, refused: () => refusal, start, stop, topUp, stock: () => stockRec(), running: () => running };
 }
