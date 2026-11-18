@@ -171,7 +171,9 @@ wasm. Read this before changing anything.
   can spend), the person's while what they approved runs, the engine's whole confirmation
   included for as long as it goes on (its hold), and approved always wins; the wallet's own
   otherwise. What one site asks can never be another site's, nor make the person's approved
-  trade for another site its own. At
+  trade for another site its own. A review reads only the library's orders that no other
+  review records (`reviewLeaves`), so a site's placement whose answer was lost can never take
+  another site's order, or one kept before, for its own. At
   most 16 of one site's commands wait, whatever line of the wallet asked them; the same read
   waiting is shared. The person's own reads are shared likewise, and one line of the wallet
   has at most 16 reads, and 16 other commands, waiting. One more is refused at once as busy,

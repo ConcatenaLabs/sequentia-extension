@@ -116,9 +116,10 @@ test('each site\'s records under its own tag; the records kept before are found 
 test('every route a site reaches before approval names its origin; each site has its own engine; what the person approved does not', () => {
   const st = readFileSync(new URL('../src/site-trade.js', import.meta.url), 'utf8');
   assert.doesNotMatch(st, /siteContext|several sites|person: held > 0/, 'no wallet-wide counter');
-  assert.match(st, /s = makeTrades\(b\.st, siteTag\(b\.tag, key\), siteSide\(key, leaves\.runUser\)\); sites\.set\(key, s\);/, 'one engine and review for each site, under its own tag');
-  assert.match(st, /kept = keptRecords\(b\.st, b\.tag\) \? makeTrades\(b\.st, b\.tag, keptSide\(leaves\.runUser\)\) : null;/, 'the records kept before, by one more');
+  assert.match(st, /s = makeTrades\(b\.st, b\.tag, siteTag\(b\.tag, key\), siteSide\(key, leaves\.runUser\)\); sites\.set\(key, s\);/, 'one engine and review for each site, under its own tag');
+  assert.match(st, /kept = keptRecords\(b\.st, b\.tag\) \? makeTrades\(b\.st, b\.tag, b\.tag, keptSide\(leaves\.runUser\)\) : null;/, 'the records kept before, by one more');
   assert.match(st, /leaves: side\.leaves,/, 'the engine gets the side\'s hold back');
+  assert.match(st, /leaves: reviewLeaves\(side, \(\) => recordedElsewhere\(Object\.keys\(mem \|\| \{\}\), \(k\) => st\.getItem\(k\), walletTag, tag\)\),/, 'each review reads only the orders no other review records');
   assert.match(st, /const q = await s\.side\.asking\(\(\) => s\.orders\.quote\(params, origin\)\);/);
   assert.match(st, /const r = await s\.side\.approving\(\(\) => s\.orders\.confirm\(id\)\);/);
   assert.match(st, /const mine = await s\.side\.asking\(\(\) => s\.orders\.orders\(origin\)\);/);

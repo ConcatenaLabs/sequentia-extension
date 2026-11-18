@@ -252,7 +252,7 @@ test('a read the trade composer asks while nobody waits is the wallet’s own wo
   // (src/site-context.js, test/site-context.test.mjs).
   const site = readFileSync(new URL('../src/site-trade.js', import.meta.url), 'utf8');
   assert.match(site, /leaves: side\.leaves,/, 'each site\'s engine asks through its own side');
-  assert.match(site, /leaves: \{ command: side\.leaves\.command \},/, 'and its review');
+  assert.match(site, /leaves: reviewLeaves\(side, /, 'and its review');
   const dm = readFileSync(new URL('../src/default-mode.js', import.meta.url), 'utf8');
   assert.match(dm, /async function leafInfo\(\) \{\n  return await leaves\.ask\('info'\);/);
   assert.match(dm, /const b = await leaves\.ask\('balance'\);/, 'what the tree holds, before a send');

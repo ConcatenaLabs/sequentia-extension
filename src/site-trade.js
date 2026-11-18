@@ -26,7 +26,7 @@ import { walletTag } from './mode.js';
 import * as engineMod from './engine.js';
 import { servedPairs, supervisedAssets } from './leaf-profiles.js';
 import { chainGenesis } from './chain-genesis.js';
-import { siteSide, keptSide, siteTag, keptRecords, sitesWithRecords } from './site-context.js';
+import { siteSide, keptSide, siteTag, keptRecords, sitesWithRecords, recordedElsewhere, reviewLeaves } from './site-context.js';
 
 // The kit wallet's own balances, for the figures.
 async function engineBalances() { const b = await engineMod.balances(); return { seq: b.seq, btc: b.btc }; }
@@ -79,7 +79,9 @@ let kept;                    // the engine over the records kept before, null wh
 const owners = new Map();    // a quote's id -> the engine and review that made it
 let base = null;             // { st, tag }
 
-function makeTrades(st, tag, side) {
+// `walletTag`: the wallet's tag; `tag`: this engine's and review's (the site's, or the wallet's alone
+// for the records kept before).
+function makeTrades(st, walletTag, tag, side) {
   const engine = createEngine({
     leaves: side.leaves,
     fetchJson,
@@ -115,7 +117,8 @@ function makeTrades(st, tag, side) {
   });
   const orders = makeSiteOrders({
     engine, store: st, tag: () => tag,
-    leaves: { command: side.leaves.command },
+    // The library's orders another review records are never this review's to take for a placement.
+    leaves: reviewLeaves(side, () => recordedElsewhere(Object.keys(mem || {}), (k) => st.getItem(k), walletTag, tag)),
     assetMeta: (h) => A.assetMeta(h),
     fmtAtoms: (atoms, p) => fmtAtoms(atoms, p),
     log: (...a) => console.log(...a),
@@ -136,12 +139,12 @@ async function forSite(origin) {
   const b = await fresh();
   const key = String(origin || '');
   let s = sites.get(key);
-  if (!s) { s = makeTrades(b.st, siteTag(b.tag, key), siteSide(key, leaves.runUser)); sites.set(key, s); }
+  if (!s) { s = makeTrades(b.st, b.tag, siteTag(b.tag, key), siteSide(key, leaves.runUser)); sites.set(key, s); }
   return s;
 }
 async function keptTrades() {
   const b = await fresh();
-  if (kept === undefined) kept = keptRecords(b.st, b.tag) ? makeTrades(b.st, b.tag, keptSide(leaves.runUser)) : null;
+  if (kept === undefined) kept = keptRecords(b.st, b.tag) ? makeTrades(b.st, b.tag, b.tag, keptSide(leaves.runUser)) : null;
   return kept;
 }
 // A site's request into one engine: its own, or (`kept`) the one over the records kept before.

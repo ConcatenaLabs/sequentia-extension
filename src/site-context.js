@@ -92,3 +92,35 @@ export function sitesWithRecords(keys, tag) {
   }
   return [...out];
 }
+
+// The orders the other reviews record: every site's review but this one (`ownTag`), and the review
+// over the records kept before (the wallet's tag alone). Read from the store's keys
+// ('swk.siteorders.<tag>' and 'swk.siteorders.<tag>|site|<origin>').
+export function recordedElsewhere(keys, read, tag, ownTag) {
+  const out = new Set();
+  const kept = 'swk.siteorders.' + tag, sites = kept + '|site|', own = 'swk.siteorders.' + ownTag;
+  for (const k of keys) {
+    if (k === own || !(k === kept || k.startsWith(sites))) continue;
+    let db = null;
+    try { db = JSON.parse(read(k) || 'null'); } catch { db = null; }
+    for (const id of Object.keys((db && db.orders) || {})) out.add(id);
+  }
+  return out;
+}
+
+// A review's `leaves`: its side's, except that the library's orders it reads (`orders`) leave out
+// those another review records. A review looks for the order a placement whose answer was lost made
+// among the library's orders that no record of its own names; with one review for each site, an
+// order another site's review (or the review of the records kept before) records must not be one of
+// them, or a site's placement would take that order for its own, list it and take it back from its
+// records (the review of #227). `elsewhere()` -> the Set of those orders' ids, read when asked.
+export function reviewLeaves(side, elsewhere) {
+  return {
+    async command(cmd, args) {
+      const r = await side.leaves.command(cmd, args);
+      if (cmd !== 'orders' || !Array.isArray(r)) return r;
+      const other = elsewhere();
+      return r.filter((o) => !(o && other.has(String(o.order))));
+    },
+  };
+}
