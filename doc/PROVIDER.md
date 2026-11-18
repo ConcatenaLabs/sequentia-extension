@@ -709,11 +709,14 @@ Returns the library's answer:
 `until` is the median time at which the request lapses; nobody pays it after
 that. The payment arrives in the wallet's mailbox. While a request the wallet
 handed out waits, the wallet reads its mailbox about once a minute (every few
-seconds in default mode) until the request is paid or lapses. A payment to a
-request another wallet of the same phrase handed out is taken in by the
-library's catch-up between the phrase's wallets, which the wallet runs as soon
-as its mailbox shows such a payment, within the library's ten minutes between
-catch-ups. Each coin read fires `leafArrived`.
+seconds in default mode) until the request is paid or lapses; a request with no
+lapse date, one handed out before requests carried it, is read so for the
+27 days a request lasts. A payment to a request another wallet of the same
+phrase handed out is taken in by the library's catch-up between the phrase's
+wallets: the wallet keeps waiting for it and runs that catch-up whenever the
+library allows one (once every ten minutes of the chain's median time) until it
+holds the coin, for at most six catch-ups. Each coin taken in fires
+`leafArrived`.
 
 The approval window says the site asks for a receive request for leaves, and
 shows the asset and the amount, or "any" for each left out.
@@ -764,7 +767,11 @@ Delivered to connected sites only, and only in developer mode:
 
 - `leafArrived` — `{ leaf_id, asset, value, kind }` for each coin a sync
   accepted from the mailbox (`value` in atoms). It fires once per coin, from
-  the sync that accepted it, whoever asked for that sync. A claim of a
+  the sync that accepted it, whoever asked for that sync. A coin paid to a
+  request another wallet of the phrase handed out fires it once the catch-up
+  has taken it in, also when one sync both reads the payment and takes it in;
+  the other coins a catch-up takes in (those the phrase's other wallets made
+  themselves) do not. A claim of a
   distribution, which the wallet takes up by itself (see below), arrives with
   `kind: 'claim'`, `leaf_id` the coin it was paid on to.
 - `leafSyncDue` — `{ now, next_sync_at, why? }` when the library's schedule
