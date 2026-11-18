@@ -44,6 +44,10 @@ restricted assets.
 - Read methods (`getBalances`, `getAddress`) require the origin to be
   connected AND the wallet unlocked; they never prompt.
 - Signing / paying methods additionally open an approval window per request.
+  A request the person does not decide is refused: when they close its window
+  (`the approval window was closed`), when the site's last connection to the
+  wallet goes (`the site that asked is gone`: its tabs closed or navigated
+  away), or after 5 minutes (`approval timed out`).
 - If the wallet is locked when a prompt-worthy request arrives, the approval
   window doubles as an unlock screen.
 
@@ -931,7 +935,10 @@ Offers `give` atoms of `give_asset` for `want` atoms of `want_asset`. The librar
 the offer first (`swap_offer`): it holds the coins the offer spends and signs nothing.
 The window shows what is given, what is got, and what the maker pays: the
 reassignment's margin and the margins its coins leave, in the asset given. Rejecting
-cancels the offer at once and frees the coins. Returns:
+cancels the offer at once and frees the coins. A site has at most one offer waiting for
+the person's approval: a second asked meanwhile is refused at once (`an offer from this
+site already waits for your approval: approve or reject it first`), makes no offer and
+opens no window. Returns:
 ```js
 { swap: '<id>', offer: '<text>', gives: { asset, value }, gets: { asset, value },
   pays: { asset, margin, margins } }

@@ -66,6 +66,10 @@ export function heartbeat(stage) {
 }
 heartbeat('boot');
 
+// An approval's tab closed by hand, before a decision: the request is refused, as a rejection is
+// (src/approvals.js approvalTabClosed).
+try { chrome.tabs.onRemoved.addListener((tabId) => { router.approvalTabClosed(tabId); }); } catch { /* no tabs API in this context */ }
+
 // ---- dapp event ports (content scripts subscribe after connect) ----
 const dappPorts = new Map();   // origin -> Set<Port>
 chrome.runtime.onConnect.addListener((port) => {
@@ -93,6 +97,9 @@ chrome.runtime.onConnect.addListener((port) => {
     port.onDisconnect.addListener(() => {
       const s = dappPorts.get(origin);
       if (s) { s.delete(port); if (!s.size) dappPorts.delete(origin); }
+      // The site's last port gone (its tabs closed or navigated away): what it waits approval for
+      // is refused, and lets go of whatever it held (src/approvals.js originGone).
+      if (!dappPorts.has(origin)) router.originGone(origin);
     });
   }
   // 'seq-ui' ports keep the service worker alive while the popup is open; no messages flow

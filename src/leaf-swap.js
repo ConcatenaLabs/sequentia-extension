@@ -15,6 +15,22 @@ import { stGet, stSet } from './util.js';
 
 export const KEY = 'ext.leafSwaps';
 
+// A site's swap offer holds the wallet's coins from the moment the library makes it, before the
+// person has approved anything (the approval shows the library's own answer: what is given, got
+// and paid), and a rejection or the approval's timeout frees them. So each site has at most one
+// offer waiting for the person: a second while one waits is refused at once with words the site
+// sees, and makes no offer and opens no window. -> { release() }, which the caller calls once the
+// approval has ended, however it ended.
+export const OFFER_WAITS = 'an offer from this site already waits for your approval: approve or reject it first';
+const offering = new Set();
+export function takeOfferSlot(origin) {
+  const key = String(origin || '');
+  if (offering.has(key)) throw new Error(OFFER_WAITS);
+  offering.add(key);
+  let done = false;
+  return { release() { if (!done) { done = true; offering.delete(key); } } };
+}
+
 export async function records() { return (await stGet('local', KEY)) || {}; }
 export async function remember(id, rec) {
   const all = await records();
