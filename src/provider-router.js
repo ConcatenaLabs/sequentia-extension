@@ -865,22 +865,28 @@ export async function handleDappRequest(origin, method, params = {}) {
       if (args.give_asset === args.want_asset) throw new Error('a swap exchanges two assets');
       if (!(await sessionMnemonic())) throw new Error('the wallet is locked; open the wallet popup and unlock first');
       await leaves.requireLeaves();
-      const o = await leaves.run('swap_offer', args, { origin });
+      // One offer of this site's waiting for the person at a time (src/leaf-swap.js takeOfferSlot):
+      // the offer holds coins before anything is approved.
+      const slot = leafSwap.takeOfferSlot(origin);
       try {
-        return await requestApproval(origin, 'leafSwapOffer', {
-          text: origin + ' asks you to offer a swap to another wallet that holds leaves of your operator: one reassignment in the tree moves both assets at once, once the other wallet accepts and you complete it.',
-          deltas: [{ ticker: (A.assetMeta(o.gives.asset).ticker || o.gives.asset.slice(0, 12)), atoms: '-' + o.gives.value, precision: A.assetMeta(o.gives.asset).precision || 0 },
-            { ticker: (A.assetMeta(o.gets.asset).ticker || o.gets.asset.slice(0, 12)), atoms: String(o.gets.value), precision: A.assetMeta(o.gets.asset).precision || 0 }],
-          rows: leafSwap.offerRows(o, leafAmount),
-          detail: 'Approving hands the offer to the site, which passes it to the other wallet. Nothing is signed until you complete the swap with its acceptance; rejecting cancels the offer and frees your coins.',
-        }, async () => {
-          await leafSwap.remember(o.swap, { origin, role: 'maker', swap: o.swap, gives: o.gives, gets: o.gets, pays: o.pays, at: Date.now() });
-          return { swap: o.swap, offer: o.offer, gives: o.gives, gets: o.gets, pays: o.pays };
-        });
-      } catch (e) {
-        await leaves.run('swap_cancel', { swap: o.swap }, { origin }).catch(() => {});
-        throw e;
-      }
+        const o = await leaves.run('swap_offer', args, { origin });
+        try {
+          return await requestApproval(origin, 'leafSwapOffer', {
+            text: origin + ' asks you to offer a swap to another wallet that holds leaves of your operator: one reassignment in the tree moves both assets at once, once the other wallet accepts and you complete it.',
+            deltas: [{ ticker: (A.assetMeta(o.gives.asset).ticker || o.gives.asset.slice(0, 12)), atoms: '-' + o.gives.value, precision: A.assetMeta(o.gives.asset).precision || 0 },
+              { ticker: (A.assetMeta(o.gets.asset).ticker || o.gets.asset.slice(0, 12)), atoms: String(o.gets.value), precision: A.assetMeta(o.gets.asset).precision || 0 }],
+            rows: leafSwap.offerRows(o, leafAmount),
+            detail: 'Approving hands the offer to the site, which passes it to the other wallet. Nothing is signed until you complete the swap with its acceptance; rejecting cancels the offer and frees your coins.',
+          }, async () => {
+            await leafSwap.remember(o.swap, { origin, role: 'maker', swap: o.swap, gives: o.gives, gets: o.gets, pays: o.pays, at: Date.now() });
+            return { swap: o.swap, offer: o.offer, gives: o.gives, gets: o.gets, pays: o.pays };
+          });
+        } catch (e) {
+          // The person's rejection (or the window gone): cancelled as the person's, at their priority.
+          await leaves.run('swap_cancel', { swap: o.swap }).catch(() => {});
+          throw e;
+        }
+      } finally { slot.release(); }
     }
 
     // The taker's side: the library reads the offer (signing, holding and storing

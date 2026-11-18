@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { textSwapId, offerRows, readRows, completeRows, forOrigin } from '../src/leaf-swap.js';
+import { textSwapId, offerRows, readRows, completeRows, forOrigin, takeOfferSlot, OFFER_WAITS } from '../src/leaf-swap.js';
+import { readFileSync } from 'node:fs';
 
 const X = 'aa'.repeat(32), Y = 'bb'.repeat(32);
 const amt = (atoms, hex) => `${atoms} ${hex === X ? 'X' : 'Y'} (${atoms} atoms)`;
@@ -36,4 +37,21 @@ test('a site sees only the swaps it started', () => {
   assert.deepEqual(forOrigin(list, recs, 'https://one').map((s) => s.swap), ['a']);
   assert.equal(forOrigin(list, recs, 'https://one')[0].offer, 'swap-offer:..');
   assert.deepEqual(forOrigin(list, recs, 'https://three'), []);
+});
+
+test('a site has at most one swap offer waiting for the person\'s approval (sequentia-extension#224)', () => {
+  const a = takeOfferSlot('https://a.example');
+  assert.throws(() => takeOfferSlot('https://a.example'), (e) => e.message === OFFER_WAITS, 'a second offer while one waits is refused, in words the site sees');
+  const b = takeOfferSlot('https://b.example');
+  a.release();
+  a.release();
+  const again = takeOfferSlot('https://a.example');
+  assert.throws(() => takeOfferSlot('https://a.example'));
+  again.release(); b.release();
+  // The provider takes the slot before the library makes the offer, and gives it back however the
+  // approval ends.
+  const pr = readFileSync(new URL('../src/provider-router.js', import.meta.url), 'utf8');
+  const offer = pr.slice(pr.indexOf("case 'leafSwapOffer': {"), pr.indexOf("case 'leafSwapAccept': {"));
+  assert.ok(offer.indexOf('const slot = leafSwap.takeOfferSlot(origin);') >= 0 && offer.indexOf('const slot = leafSwap.takeOfferSlot(origin);') < offer.indexOf("leaves.run('swap_offer'"), 'no offer without the slot');
+  assert.match(offer, /\} finally \{ slot\.release\(\); \}\n    \}\n/);
 });

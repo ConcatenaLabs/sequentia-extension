@@ -931,7 +931,10 @@ Offers `give` atoms of `give_asset` for `want` atoms of `want_asset`. The librar
 the offer first (`swap_offer`): it holds the coins the offer spends and signs nothing.
 The window shows what is given, what is got, and what the maker pays: the
 reassignment's margin and the margins its coins leave, in the asset given. Rejecting
-cancels the offer at once and frees the coins. Returns:
+cancels the offer at once and frees the coins. A site has at most one offer waiting for
+the person's approval: a second asked meanwhile is refused at once (`an offer from this
+site already waits for your approval: approve or reject it first`), makes no offer and
+opens no window. Returns:
 ```js
 { swap: '<id>', offer: '<text>', gives: { asset, value }, gets: { asset, value },
   pays: { asset, margin, margins } }
