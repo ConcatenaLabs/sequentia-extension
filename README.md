@@ -104,11 +104,11 @@ confidential `tsqb1…` addresses are an explicit opt-in).
   (`vendor/name-stock.js`: each at an address of its own within what a restore reads). The testnet faucet pays the
   code, and the wallet reads its mailbox for the coin at once (the offscreen host's
   `takeIn`, every 2 s for up to 45 s), so the popup says Received within seconds. The wallet keeps its money in coins: it opens no channel leaf by
-  itself, and closes any it holds into a coin at the next round, since a trade or a payment
+  itself, its receive codes name none, and it closes any it holds into a coin at the next round, since a trade or a payment
   in the tree cannot spend a channel's side (developer mode opens one in each asset the
   operator makes them of, with `care` and `channels`). A payment whose coins need a round
   first (a channel to close, coins not yet settled) waits for that round and goes, rather
-  than being declined. Coins that arrive at the address
+  than being declined, and says meanwhile "Goes through within about N minutes". Coins that arrive at the address
   are moved into the tree (assets) or onto the ark (BTC) by themselves, and so is
   what the wallet's own Lightning channels hold (a wallet made before default mode
   held its coins this way, `src/ln-to-ark.js` over the web wallet's

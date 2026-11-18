@@ -30,7 +30,7 @@ import * as ln from './ln.js';
 import { leafPerAsset } from './balance-view.js';
 import { plainRefusal } from './leaf-profiles.js';
 import { fromWire } from './wire.js';
-import { codeNamesChannels } from './leaf-schedule.js';
+import { codeNamesChannels, codeChannelsNow, receiveArgs } from './leaf-schedule.js';
 import { boardCap, moveDown, direct, lnFits } from './ark-band.js';
 import {
   pinnedOperator, defaultWatchtowers, checkPinned, treeRoute, parseReceiveCode, arrivingAtoms, addressRoute, arrivalMinutes, moveOutMinutes, offboardOutcome,
@@ -249,7 +249,11 @@ async function leafCode(fresh, { quick = false } = {}) {
   let kept = all[tag];
   if (kept && !fresh) {
     const st = await leaves.status().catch(() => null);
-    if (st && st.payable && !codeNamesChannels(kept, st.payable)) kept = null;
+    // A kept code names the channels a payer can pay now: none in default mode, which keeps its money
+    // in coins (receiveArgs), so a code made while a channel was open is made again, whatever the
+    // host reports; in developer mode, those the host reports.
+    const dev = !(await isDefault());
+    if ((!dev || (st && st.payable)) && !codeNamesChannels(kept, codeChannelsNow(st && st.payable, dev))) kept = null;
     if (quick && kept && kept.text && kept.owner && kept.until && kept.until - Date.now() / 1000 > CODE_MARGIN_S) {
       const r = (((st && st.schedule) || {}).receive_requests || []).find((x) => x.owner === kept.owner);
       if (!r || r.state === 'waiting') return kept;
@@ -263,7 +267,7 @@ async function leafCode(fresh, { quick = false } = {}) {
       if (r && r.state === 'waiting' && (r.lapses_at == null || r.lapses_at - ((s && s.now) || 0) > CODE_MARGIN_S)) return kept;
     } catch { /* a new one */ }
   }
-  const v = await leaves.runUser('receive', {});
+  const v = await leaves.runUser('receive', receiveArgs(!(await isDefault())));
   all[tag] = { text: v.request, owner: (v.details && v.details.owner) || null, until: (v.details && v.details.until) || null,
     channels: (v.details && v.details.channels) || {} };
   await stSet('local', CODE_KEY, all);
@@ -392,7 +396,8 @@ export async function nameCode({ index } = {}) {
   const address = engine.addressAt(index);
   let ark = null;
   try { if (await arkOpen()) ark = (await arkHost('run', { command: 'address' })).address; } catch { /* none */ }
-  const sequentia = (await leaves.runAny('receive', {})).request;
+  // The name stock's codes name no channel in default mode either (receiveArgs).
+  const sequentia = (await leaves.runAny('receive', receiveArgs(!(await isDefault())))).request;
   return buildPayCode({ address, ark: ark || undefined, sequentia });
 }
 // The key each payment name was first paid at, for this wallet (vendor/lnaddr.js `pins`): a code

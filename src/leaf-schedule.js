@@ -2,6 +2,8 @@
 // shared by the offscreen document's host and the tests. The same rules as the web
 // wallet's developer mode (sequentia-web-wallet/leaves.js).
 
+import { DEFAULT_WORDS, nextFinalBy, settleWords } from '../vendor/default-arca.js';
+
 // Whether something is moving that sync must follow now, whatever the schedule says:
 // a coin pending, being sent, held for an in-tree swap (the other wallet completes it,
 // and only a sync reads what it pays this one), given to a participation, under a
@@ -294,8 +296,43 @@ export function plannedCoins(plans) {
 // wallet's ROUND_POLL_MS.
 export const ROUND_POLL_MS = 5_000;
 // A payment whose coins waited for RELEASE_TRIES rounds and still cannot go: said in plain words,
-// never the library's own text (it names the asset by its id). The web wallet's settleGaveUp.
-export const SETTLE_GAVE_UP = 'This payment could not go through yet: nothing was sent, and your money stays in your wallet.';
+// never the library's own text (it names the asset by its id). The web wallet's own sentence.
+export const SETTLE_GAVE_UP = DEFAULT_WORDS.settleGaveUp;
+
+// The arguments of the library's `receive` (a receive code, the payment name's stock codes): in
+// default mode the code names no channel, since the wallet keeps its money in coins and closes any
+// channel it holds (the web wallet's receiveArgs); developer mode names every channel a payer can
+// pay. And the channels a kept code must name to be shown again: none in default mode.
+export function receiveArgs(developer) { return developer ? {} : { channels: false }; }
+export function codeChannelsNow(payable, developer) { return developer ? (payable || {}) : {}; }
+
+// What default mode says while a payment waits for a round of its own (`releasing`, as the host
+// reports it, why 'settle' or 'channel'): "Goes through within about N minutes" to the time the
+// library last said (`finalBy`), else the operator's usual wait (`minutes`), and past that time
+// that it takes longer and goes by itself (the web wallet's settleWords). null for any other wait.
+export function releasingWords(rel, nowMs = Date.now()) {
+  if (!rel || (rel.why !== 'settle' && rel.why !== 'channel')) return null;
+  return settleWords(rel.finalBy ?? null, rel.minutes ?? null, nowMs);
+}
+
+// Developer mode's line for the same wait, by what it waits for: planned leaves released, coins
+// settled first, or channels closed. `short(id)` shortens a leaf id. '' when nothing waits.
+export function developerReleasingLine(rel, short = (x) => String(x)) {
+  if (!rel) return '';
+  const ids = (rel.coins || []).map(short).join(', ');
+  const n = (rel.coins || []).length;
+  const by = rel.finalBy ? ' The library said by ' + new Date(rel.finalBy).toISOString() + '.' : '';
+  if (rel.why === 'settle') {
+    return 'Paying through the next round: ' + rel.command + ' waits for ' + (n ? n + ' leaf(s) (' + ids + ')' : 'the leaves of its asset')
+      + ' to settle first (settle_first: a round of their own, or one the wallet is in); it is asked again once they are through.' + by;
+  }
+  if (rel.why === 'channel') {
+    return 'Paying through the next round: ' + rel.command + ' needs the wallet\'s side of ' + n + ' channel(s) (' + ids
+      + '), closed into the next round for leaves of its own; it is asked again once that round is final.';
+  }
+  return 'Paying through the next round: ' + rel.command + ' needs more than the unplanned leaves hold, so '
+    + n + ' planned leaf(s) (' + ids + ') are given up in the next round for leaves no plan names; it is asked again once that round is final.';
+}
 
 // One command asked through the next round when the wallet's own coins need one first, never
 // refused for it (the web wallet's leaves.js `paying`):
@@ -326,17 +363,25 @@ export async function payThrough(command, args, io) {
         if (i >= RELEASE_TRIES) throw { kind: 'refused', code: 'settle_gave_up', message: SETTLE_GAVE_UP };
         const coins = Array.isArray(e.coins) && e.coins.length ? e.coins : null;
         const ask = coins ? { coins } : { asset: e.asset };
-        const state = { command, coins: coins || [], asset: e.asset || null, since: now(), why: 'settle' };
+        // How long the library says those coins wait (its refusal's reading, then each answer's):
+        // `finalBy`, which the words count down to (default-arca.js nextFinalBy).
+        let wait = nextFinalBy(null, e, now());
+        const state = { command, coins: coins || [], asset: e.asset || null, since: now(), why: 'settle', finalBy: wait ? wait.finalBy : null };
         if (io.waiting) io.waiting(state);
         try {
           const until = now() + RELEASE_WAIT_MS;
           for (let first = true; ; first = false) {
             if (!first) { try { await io.sync(); } catch { /* asked again at the next poll */ } }
             let v = null;
+            // A refusal of `settle_first` itself stands, as the web wallet's waitSettled lets it: the
+            // payment ends at once in its words, never asked again for hours. A library without the
+            // command: the payment's own refusal stands.
             try { v = result(await io.run('settle_first', ask)); } catch (s) {
-              // A library without the command: the refusal stands.
               if (/no command|unknown command/i.test(String((s && s.message) || ''))) throw e;
+              throw s;
             }
+            wait = nextFinalBy(wait, v, now());
+            if (wait && wait.finalBy !== state.finalBy) { state.finalBy = wait.finalBy; if (io.waiting) io.waiting(state); }
             if (v && v.ready) break;
             if (now() >= until) throw { kind: 'refused', code: 'settle_gave_up', message: SETTLE_GAVE_UP };
             await sleep(ROUND_POLL_MS);

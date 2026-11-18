@@ -130,7 +130,10 @@ wasm. Read this before changing anything.
   the wallet was used, opened or paid within three minutes, else every 5 s, never while
   another command runs, and never while a send review is open (`holdReads`); a channel paid
   reports the balance at once. When the channels a payer can pay change it sends
-  `channelsChanged`, and the receive code is made again to name them (`codeNamesChannels`).
+  `channelsChanged`, and in developer mode the receive code is made again to name them
+  (`codeNamesChannels`). Default mode's receive code and the payment name's stock codes name
+  no channel (`receive` with `receiveArgs`: `channels: false`), and a code kept from before
+  that names one is made again.
   Which channel pays, and every refusal, is the library's (`send` routes over a channel by
   itself when the receive code names one).
 - **A payment never fails for a round the wallet needs first.** Every command a person
@@ -139,7 +142,13 @@ wasm. Read this before changing anything.
   coins it names through the next round (`settle_first`, asked again until ready), and one
   of kind `in_channel` closes the channels it names into the next round; each waits for
   that round and asks the same command again, at most three times. Only then is it said
-  in plain words that the payment could not go yet.
+  in plain words that the payment could not go yet. A refusal of `settle_first` itself
+  stands, as the web wallet's `waitSettled` lets it. While it waits, the host's `releasing`
+  carries when the library said the coins would be through (`finalBy`, `nextFinalBy`) and the
+  operator's usual wait (`settleMinutesOf`), and default mode's Send reads "Goes through
+  within about N minutes", then that it takes longer (`releasingWords`, the web wallet's
+  `settleWords`); developer mode's Leaves card names what it waits for
+  (`developerReleasingLine`).
 - **A person waiting comes first.** The host keeps one command in the leaf worker at a
   time and holds the rest in its own queue (`src/leaf-queue.js`), by priority: a person's
   commands (PERSON), what a person started waits on (PROMPT: the faucet's coin taken in,

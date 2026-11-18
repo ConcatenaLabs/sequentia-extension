@@ -122,7 +122,7 @@
 import { inFlight, nextAskMs, requestWaits, catchUpWait, catchUpAfterSync, catchUpHeld, catchUpAttempt, catchUpGate, catchUpSyncIn, readUntil, syncDecision, careDue, careSummary, careArgs, channelsToClose, payThrough, CARE_EVERY_MS, RELEASE_WAIT_MS, laterMode,
   channelPollMs, channelArrivals, payableChannels } from './src/leaf-schedule.js';
 import { frozenAtoms, holdingRefusal } from './src/leaf-profiles.js';
-import { redoingAtoms } from './vendor/default-arca.js';
+import { redoingAtoms, settleMinutesOf } from './vendor/default-arca.js';
 import { boardCandidates, boardAll, boardSpent, CLAIMS_EVERY_MS, vestingLots, vestedOpen } from './vendor/default-arca.js';
 import { homeCoins, unreachableOf, homeQuote, homeTake, homeUnderWay } from './vendor/default-arca.js';
 import { createQueue, PERSON, PROMPT, SITE, PASS, UPKEEP } from './src/leaf-queue.js';
@@ -1241,7 +1241,10 @@ async function handle(op, args) {
         channelsHeld: (asset) => { S.channelsHeldUntil = asset ? Date.now() + RELEASE_WAIT_MS : null; },
         waiting: (st) => {
           const first = !!st && !S.releasing;
-          S.releasing = st ? { command: st.command, coins: st.coins, asset: st.asset, since: st.since, why: st.why || 'planned' } : null;
+          // `finalBy`: when the library said the coins would be through (settle_first's own reading);
+          // `minutes`: the operator's usual wait for a round of the wallet's own, before it has said.
+          let minutes = null; try { minutes = settleMinutesOf(S.info); } catch { /* the words' default */ }
+          S.releasing = st ? { command: st.command, coins: st.coins, asset: st.asset, since: st.since, why: st.why || 'planned', finalBy: st.finalBy ?? null, minutes } : null;
           if (first) console.info(st.why === 'settle' ? `[leaves] ${st.command}: the coins it needs go through the next round first; paid once through`
             : st.why === 'channel' ? `[leaves] ${st.command}: ${st.coins.length} channel(s) closed into the next round; paid once it is final`
             : `[leaves] ${st.command}: the unplanned leaves fall short; ${st.coins.length} planned leaf(s) given up in the next round, the payment asked again once it is final`);
