@@ -15,6 +15,7 @@ import * as A from './assets.js';
 import * as engine from './engine.js';
 import { mode, walletTag } from './mode.js';
 import { sessionMnemonic } from './vault.js';
+import { keptRead, figureReads } from './kept-read.js';
 
 const SIGNER_DEFAULT_ATOMS = 10_000_000n;
 
@@ -33,6 +34,13 @@ function closeFee(kind) {
   if (!(r > 0)) return null;
   return (400n * 100_000_000n + BigInt(r) - 1n) / BigInt(r);
 }
+// The move's reads of the leaf wallet are awaited and acted on (what is still moving, which emptied
+// channel to close): they are kept in the host's line, never refused as busy (`keep`), and a refusal
+// for any other reason reaches the move, which leaves its state as it was until its next pass. Its
+// figures read the coins at once (`drawing`, in channelPart and moving below): the last reading,
+// never a command per figure (src/kept-read.js).
+const keep = { keep: true };
+const leafCoins = figureReads(keptRead(() => leaves.runAny('coins', {}, keep)));
 const move = mountLightningToArk({
   dev: async () => (await mode()) === 'developer',
   personBusy: () => Date.now() - personAt < 20_000,
@@ -54,9 +62,9 @@ const move = mountLightningToArk({
   },
   leaves: {
     isOpen: async () => { try { return !!(await leaves.status()).open; } catch { return false; } },
-    info: () => leaves.runAny('info'),
-    coins: () => leaves.runAny('coins'),
-    run: (command, args) => leaves.runAny(command, args),
+    info: () => leaves.runAny('info', {}, keep),
+    coins: leafCoins.read,
+    run: (command, args) => leaves.runAny(command, args, keep),
   },
   // The extension sets no Lightning payment limit, so its signer's own default holds every
   // payment: 10,000,000 atoms of each asset a day (vendor/lightning/seqln-signer-sdk.js).
@@ -81,7 +89,7 @@ export async function tick() {
 }
 
 // For the overview: the channels' part of `kind`'s figure, `read` as last read; what is moving.
-export function channelPart(kind, read) { return move.channelPart(kind, read); }
-export function moving(kind) { return move.moving(kind); }
+export function channelPart(kind, read) { return leafCoins.drawing(() => move.channelPart(kind, read)); }
+export function moving(kind) { return leafCoins.drawing(() => move.moving(kind)); }
 export function ownHashes() { return move.ownHashes(); }
 export function setTag(t) { if (t) tagNow = t; }

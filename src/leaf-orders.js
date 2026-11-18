@@ -154,6 +154,15 @@ export function postParams(o, rec, normTerms, orderFromTerms) {
   };
 }
 
+// The operator's margin before an order's refund (its `info`'s fills.order_margin_seconds, 0 when
+// the operator states none), or null when the operator's info was not read: the listing must end
+// that far before the refund, so an order is posted only once the margin is known.
+export function orderMargin(info) {
+  if (!info || typeof info !== 'object') return null;
+  const m = Number(((info.server_info || {}).fills || {}).order_margin_seconds || 0);
+  return Number.isFinite(m) && m >= 0 ? m : null;
+}
+
 // How long the relay lists the offer: until the order's REFUND opens (a median time,
 // which the order's own clock reads) but no longer than the relay takes (`maxSecs`),
 // less a minute either way. The wallet posts it again before that runs out while the

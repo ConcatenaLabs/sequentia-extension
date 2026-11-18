@@ -68,8 +68,14 @@ async function siteOrders() {
   if (S) return S;
   const st = await store();
   const tag = await walletTag();
+  // A site's quote or confirmation is a person waiting (the engine runs it inside `hold`): its reads
+  // go at a person's priority; the engine's background follow of trades stays upkeep.
+  let held = 0;
   const engine = createEngine({
-    leaves: { command: (cmd, args) => leaves.runUser(String(cmd), args || {}) },
+    leaves: {
+      command: (cmd, args) => leaves.runUser(String(cmd), args || {}, { person: held > 0 }),
+      hold: async (f) => { held++; try { return await f(); } finally { held--; } },
+    },
     fetchJson,
     makers: () => LEAF_MAKERS,
     relayBook: (pay, receive) => relayPairBook(receive, pay),
@@ -103,7 +109,8 @@ async function siteOrders() {
   });
   const orders = makeSiteOrders({
     engine, store: st, tag: () => tag || 'default',
-    leaves: { command: (cmd, args) => leaves.runUser(String(cmd), args || {}) },
+    // Every command of a site's order review (its schedule, quote and placing) is a person's.
+    leaves: { command: (cmd, args) => leaves.runUser(String(cmd), args || {}, { person: true }) },
     assetMeta: (h) => A.assetMeta(h),
     fmtAtoms: (atoms, p) => fmtAtoms(atoms, p),
     log: (...a) => console.log(...a),

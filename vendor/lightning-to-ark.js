@@ -465,7 +465,13 @@ export function mountLightningToArk (deps) {
     const hash = String(r.payment_hash)
     update((s) => { if (!s.paid.includes(hash)) s.paid = tail([...s.paid, hash]); s.ownHashes = tail([...s.ownHashes, hash]); s.moved[asset + ':' + n.node_key] = now() })
     log(`moving ${amount} of ${n.spendable} ${a8} from the channel to the tree, leaf ${r.value}, fee ${r.fee}, hash ${hash}`)
-    await setMoving(await receives())
+    // A reading refused here (a leaf wallet that answers through another document may refuse one)
+    // stops the move before anything leaves the channel: the receive is given up, so it is never
+    // counted as moving while unpaid.
+    try { await setMoving(await receives()) } catch (e) {
+      update((s) => { s.paid = s.paid.filter((h) => h !== hash); s.givenUp = tail([...s.givenUp, hash]) })
+      throw e
+    }
     const node_key = await deps.connect(asset)
     try {
       // Held by the operator until the leaf's round: the call may outlast the service's wait, and

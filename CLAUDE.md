@@ -130,23 +130,63 @@ wasm. Read this before changing anything.
   Which channel pays, and every refusal, is the library's (`send` routes over a channel by
   itself when the receive code names one).
 - **A person waiting comes first.** The host keeps one command in the leaf worker at a
-  time and holds the rest in its own queue (`src/leaf-queue.js`): a command a person
-  started (`run` with `paying`) goes ahead of every upkeep command waiting, and the
-  faucet's coin taken in (`takeIn`) ahead of upkeep too, so each waits at most for the one
-  command already running. A read the trade composer asks while nobody waits on it (it
-  follows open trades every few seconds) is the wallet's own work instead: it goes in line
-  with the upkeep and does not count as a person asking, so it never keeps the mailbox and
-  channel reads off. The scheduled pass gives way between its commands while a
-  person waits, starts no sooner than 15 s after a person's last command (put off 90 s at
-  most, never while a take waits), and leaves the bond's watch to a later pass when a person
-  is waiting. While the popup's trade composer prices or confirms a trade it also holds the
-  upkeep (`default.holdUpkeep`, op `holdUpkeep`, at most two minutes, let go when the step
-  ends). A sync the composer asks for (it follows open trades with one) waits while a
-  person waits, and one asked within 10 s of the last sync's end is answered by that sync;
-  a quote that finds coins not ready asks for one at the next quiet moment (`syncSoon`).
-  Between the pass's commands the host reads the mailbox and the channels when they are
-  due, so a payment to the receive code is not held up behind a whole pass. Every command
-  over 10 s is logged with what it waited, and a slow sync names its slowest steps
+  time and holds the rest in its own queue (`src/leaf-queue.js`), by priority: a person's
+  commands (PERSON), what a person started waits on (PROMPT: the faucet's coin taken in,
+  `takeIn`; a read asked with `leaves.ask`), the host's own work (PASS: its scheduled pass,
+  every sync, the mailbox and channel reads), then what the rest of the wallet asks (UPKEEP),
+  and fairly: a priority with work waiting that three commands of higher priorities have gone
+  past (`FAIR_TURN`) is served next. So a person's command waits at most for the command
+  running and one command of each lower priority whose turn has come (three at most), and
+  however a caller asks, every lower priority with work waiting still gets at least one
+  command in four: no stream of persons' commands keeps the pass, the mailbox read or the
+  upkeep from their turns. A person's
+  command is every command a site or the developer page asks (`leaves.run`, reads
+  included), every command that moves coins, and a read whose caller says a person waits on
+  it: `runUser` with `person` (a quote or a confirmation of the popup's composer or a site's
+  engine, inside its `hold`; a site order's review; a payment out of the tree being quoted),
+  and `leaves.ask` (Receive's `schedule` and `info`, the tree's `balance` and `info` before a
+  send, the Trade tab's `info`). A person's read does not make the wallet's own work step aside
+  (only a person's other commands, and the popup's hold, do): the order already serves it
+  first. The same person's read waiting is shared (a site polling one read adds one command,
+  not one per poll), and one caller has at most 16 different reads waiting; one more is
+  refused at once as busy, which the caller sees and the host says once a minute. Taking the
+  coins home (`homeQuote`, `takeHome`, to the balance it reports) and a payment's release (its
+  sync, the sync's reads, its polls of the coins) run at PERSON too; a home quote is made from
+  a reading of the coins and channels made then, and a refusal of either is the answer. A sync
+  a person asks for (a site's, developer mode's Sync now) runs at once at PERSON; one asked
+  otherwise waits for a person at most a minute. The faucet's coin taken in reports the balance
+  at PROMPT before the popup says Received.
+  A read of a trade's background follow (the composer or a site's engine with no hold, no
+  `person`) is the wallet's own work instead: it goes in line with the upkeep and does not
+  count as a person asking, so it never keeps the mailbox and channel reads off. A person's
+  command and the host's own are never shared and never dropped. A read the rest of the
+  wallet asks (`runAny`, a trade's follow) shares the answer of the same read already
+  waiting and is refused as busy once it has waited two minutes, said once a minute with what
+  was asked most and from where (each request carries `from`, its caller's file, line and
+  function); a caller that acts on the answer and cannot take that refusal asks it kept
+  (`runAny` with `keep`: the Lightning-to-ark move's reads). The move reads the coins at once
+  for every figure it draws: inside `drawing` (its `channelPart` and `moving`) it gets the
+  last reading or none, never a command per figure and never a throw; in its pass it gets a
+  read made then, whose refusal reaches it and leaves what is moving as it was
+  (`src/kept-read.js`). Every pass ends: it waits only for the command running, and stops at
+  its bound (200 of its commands or 3 minutes), checked between two of its steps, between two
+  whole boards (never inside one: a board's quotes, the board and the reads after it go
+  together), between two keys handed to the library, and again after the mailbox and channel
+  reads between them; it says in which step and command it stopped, and the next pass takes up
+  the rest. The host's `status` carries `diag`, and `leafHostDiag()` in the offscreen
+  document's console answers it at once: the command running with its arguments' shape and
+  caller, what waits by priority and command, the pass under way and the last, the reads, and
+  the payment name's stock (`nameStockDiag()`). The scheduled pass gives way between its
+  commands while a person waits, starts no sooner than 15 s after a person's last command
+  (put off 90 s at most, never while a take waits), and leaves the bond's watch to a later
+  pass when a person is waiting. While the popup's trade composer prices or confirms a trade
+  it also holds the upkeep (`default.holdUpkeep`, op `holdUpkeep`, at most two minutes, let go
+  when the step ends). A sync the composer asks for (it follows open trades with one) waits
+  while a person waits, and one asked within 10 s of the last sync's end is answered by that
+  sync; a quote that finds coins not ready asks for one at the next quiet moment
+  (`syncSoon`). Between the pass's commands the host reads the mailbox and the channels when
+  they are due, so a payment to the receive code is not held up behind a whole pass. Every
+  command over 10 s is logged with what it waited, and a slow sync names its slowest steps
   (`cost_by_step`). A command still running after 10 minutes ends the worker: every command
   waiting fails at once, and the leaf wallet opens again at the next request.
 - **Care is the library's, run by the host.** The offscreen host runs `care` once

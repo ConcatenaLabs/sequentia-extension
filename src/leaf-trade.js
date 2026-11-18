@@ -160,9 +160,12 @@ export function progressOrders() {
     const all = await leaves.runAny('orders');
     const now = Math.floor(Date.now() / 1000);
     // The operator takes an order only while its refund lies more than its margin
-    // ahead: the listing ends there.
-    let margin = 0;
-    try { margin = Number(((await leaves.runAny('info')).server_info || {}).fills?.order_margin_seconds || 0); } catch { /* none known */ }
+    // ahead: the listing ends there. Without the operator's word on it nothing is posted
+    // this time (a listing past the margin offers an order the operator no longer takes).
+    let info = null;
+    try { info = await leaves.runAny('info'); } catch (e) { console.info('[leaves] orders not posted now: the operator\'s info was not read:', (e && e.message) || e); }
+    const margin = R.orderMargin(info);
+    if (margin == null) return;
     for (const rec of recs) {
       const o = (all || []).find((x) => x.order === rec.order);
       if (!R.postDue(o, rec, now)) continue;
