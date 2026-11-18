@@ -39,15 +39,141 @@ export function nextAskMs(schedule, tickMs) {
   return Math.max(0, Math.min(tickMs, (next - now) * 1000));
 }
 
-// Whether a receive request handed out within the last `windowSecs` (median time)
-// still waits. While one does, the host reads the mailbox on every tick, so a payment
-// a site asked for arrives in about a minute rather than at the library's next daily
-// sync. Past the window the library's own schedule applies again.
-export const FRESH_REQUEST_SECS = 3600;
-export function freshRequestWaits(schedule, windowSecs = FRESH_REQUEST_SECS) {
+// Whether a receive request this wallet handed out still waits, however long ago: the codes the
+// wallet's payment name leaves with the name service are such requests, handed out to payers up to
+// a day after they were made. While one waits, the host reads the mailbox on every tick in either
+// mode (default mode reads it every few seconds anyway), so a payment to the name or to an older
+// code shows within a tick instead of at the library's next daily sync. A request handed out
+// before requests carried a lapse date (`lapses_at` null) waits, for the library, until it is paid
+// or forgotten; here it counts as waiting for REQUEST_HOLDS_S from when it was handed out, the
+// life every request now has, and after that only the library's daily sync reads for it.
+export const REQUEST_HOLDS_S = 27 * 86400;
+export function requestWaits(schedule) {
   if (!schedule || typeof schedule.now !== 'number') return false;
-  return (schedule.receive_requests || []).some((r) => r.state === 'waiting' && r.owner !== 'restored'
-    && typeof r.asked_at === 'number' && schedule.now - r.asked_at < windowSecs);
+  return (schedule.receive_requests || []).some((r) => {
+    if (!r || r.state !== 'waiting' || r.owner === 'restored') return false;
+    const lapses = typeof r.lapses_at === 'number' ? r.lapses_at : typeof r.asked_at === 'number' ? r.asked_at + REQUEST_HOLDS_S : null;
+    return lapses != null && lapses > schedule.now;
+  });
+}
+
+// A coin paid to a receive request that another store of the phrase handed out (the phrase open in
+// another browser, in Ambra or in the web wallet, or a store this browser held before: the payment
+// name's stock keeps their codes until each is handed out or lapses). Every store of the phrase
+// reads it in its mailbox, and each one that never drew its owner nonce refuses it there, once;
+// only the library's catch-up between stores of one phrase, a step of `sync`, takes it in. The
+// library runs that step at most once every CATCH_UP_EVERY_S of median time (the chain's clock,
+// the `now` of every `schedule`), and the step reads only what the operator has settled, so a
+// catch-up run seconds after the payment can end whole without it (arca #904).
+//
+// So the host keeps the refused coins (`pending`, by leaf id) and syncs for them whenever the
+// library's catch-up is open again, until each one is held: a catch-up restored it, or the
+// wallet's coins list it. Between two attempts at least CATCH_UP_RETRY_MS pass, whatever the
+// library answered or threw, and CATCH_UP_SLOW_MS once CATCH_UP_SLOW_AFTER attempts in a row ran
+// no catch-up (the operator or the node not answering). The wait ends once every coin is held,
+// after CATCH_UP_TRIES whole catch-ups without one of them (about an hour of the library's
+// cadence: an operator settles a payment within seconds to minutes, so a coin six catch-ups do not
+// find is not coming soon, and the library's own catch-ups and daily sync still look for it), or
+// at the latest CATCH_UP_LAST_MS after it began. The library's words for the refusal: "a coin for
+// owner nonce …, which this wallet never drew".
+export const NEVER_DREW = /which this wallet never drew/;
+export const CATCH_UP_EVERY_S = 600;
+export const CATCH_UP_RETRY_MS = 60_000;
+export const CATCH_UP_SLOW_AFTER = 10;
+export const CATCH_UP_SLOW_MS = 10 * 60_000;
+export const CATCH_UP_TRIES = 6;
+export const CATCH_UP_LAST_MS = 24 * 3600_000;
+const listed = (v) => (Array.isArray(v) ? v : []);
+
+// The leaf ids of the coins a mailbox answer refused for that reason.
+export function phraseCoinsRefused(mailbox) {
+  return listed(mailbox && mailbox.refused).filter((r) => r && r.leaf_id && NEVER_DREW.test(String(r.reason || ''))).map((r) => String(r.leaf_id));
+}
+export function phraseCoinRefused(mailbox) {
+  return phraseCoinsRefused(mailbox).length > 0;
+}
+// Whether a sync's catch-up ran to its end: its `caught_up` is the catch-up's answer (null when
+// none ran), `{ error }` when it failed, and carries `more` when its time ran out before the end.
+export function caughtUpWhole(syncResult) {
+  const c = syncResult && syncResult.caught_up;
+  return !!c && typeof c === 'object' && c.error == null && !c.more;
+}
+
+// When the library's catch-up is open next (`openAt`, median-time seconds; 0 open now; null not
+// known), after a sync's answer, `libNow` being the library's median time then (the answer's own
+// `schedule.now` first): a whole catch-up closes it for CATCH_UP_EVERY_S; one cut short (`more`) or
+// failed is open again at once (the library has not stamped it). A sync that ran none while the
+// time was not known says one ran within the last CATCH_UP_EVERY_S: half of it is taken, so a
+// wallet opened again soon after one runs neither a burst of syncs nor the whole wait.
+export function catchUpGate(openAt, syncResult, libNow) {
+  const s = syncResult && syncResult.schedule;
+  const at = s && typeof s.now === 'number' ? s.now : libNow;
+  const c = syncResult && syncResult.caught_up;
+  if (c && typeof c === 'object') {
+    if (c.more || c.error != null) return 0;
+    return typeof at === 'number' ? at + CATCH_UP_EVERY_S : openAt;
+  }
+  if (openAt == null && typeof at === 'number') return at + CATCH_UP_EVERY_S / 2;
+  return openAt;
+}
+
+// The wait: null, or { since, pending: [leaf id], tries, nulls, attemptAt } (`tries`: whole
+// catch-ups since it began; `nulls`: attempts in a row that ran no catch-up; times in ms).
+const ended = (w, now) => !w || !w.pending.length || w.tries >= CATCH_UP_TRIES || now - w.since >= CATCH_UP_LAST_MS;
+// A mailbox answer that refused coins of the phrase adds them (a second refusal keeps the start).
+export function catchUpWait(w, { mailbox = null, now }) {
+  if (w && ended(w, now)) w = null;
+  const ids = phraseCoinsRefused(mailbox);
+  if (!ids.length) return w;
+  const base = w || { since: now, pending: [], tries: 0, nulls: 0, attemptAt: null };
+  return { ...base, pending: [...new Set([...base.pending, ...ids])] };
+}
+// An attempt that threw (the schedule or the sync): it counts towards the cadence.
+export function catchUpAttempt(w, now) {
+  return w ? { ...w, attemptAt: now, nulls: w.nulls + 1 } : w;
+}
+// The coins of `w` the wallet now holds, from `restored` entries or `coins` (a coin the store lists
+// in any state but the operator's word `pending`), as { wait, arrived: [{ leaf_id, asset, value,
+// kind }] }.
+function take(w, found, now) {
+  if (!w) return { wait: null, arrived: [] };
+  const arrived = [];
+  const pending = [];
+  for (const id of w.pending) {
+    const c = found.get(id);
+    if (c) arrived.push({ leaf_id: id, asset: c.asset, value: String(c.value ?? ''), kind: c.kind || 'caught up' });
+    else pending.push(id);
+  }
+  const next = { ...w, pending };
+  return { wait: ended(next, now) ? null : next, arrived };
+}
+// After a sync: its own mailbox's refusals join the wait first (the sync's catch-up runs after its
+// mailbox step, so one sync can refuse a coin and restore it), then what its catch-up restored is
+// taken off, and the attempt is counted.
+export function catchUpAfterSync(w, { sync, now }) {
+  w = catchUpWait(w, { mailbox: sync && sync.mailbox, now });
+  if (!w) return { wait: null, arrived: [] };
+  const c = sync && sync.caught_up;
+  const ran = !!c && typeof c === 'object';
+  const counted = { ...w, attemptAt: now, tries: w.tries + (caughtUpWhole(sync) ? 1 : 0), nulls: ran ? 0 : w.nulls + 1 };
+  const found = new Map(listed(ran ? c.restored : null).filter((r) => r && r.leaf_id).map((r) => [String(r.leaf_id), r]));
+  return take(counted, found, now);
+}
+// After the wallet's coins were read.
+export function catchUpHeld(w, coins, now) {
+  const found = new Map(listed(coins).filter((c) => c && c.leaf_id && c.state !== 'pending').map((c) => [String(c.leaf_id), c]));
+  return take(w, found, now);
+}
+// How long until the host syncs for the wait (0: now; Infinity: no wait): once the library's
+// catch-up is open (`openAt` against `libNow`, the library's median time as last read, counted at
+// one second a second; the host reads the schedule again at every tick and syncs only once it is
+// open), and once the cadence since the last attempt allows.
+export function catchUpSyncIn(w, { now, libNow = null, openAt = null }) {
+  if (ended(w, now)) return Infinity;
+  const gap = w.nulls >= CATCH_UP_SLOW_AFTER ? CATCH_UP_SLOW_MS : CATCH_UP_RETRY_MS;
+  const retry = w.attemptAt == null ? 0 : w.attemptAt + gap - now;
+  const gate = openAt == null || typeof libNow !== 'number' ? 0 : (openAt - libNow) * 1000;
+  return Math.max(0, retry, gate);
 }
 
 // What the wallet does by itself, in either mode, is the library's `care`: after a sync,

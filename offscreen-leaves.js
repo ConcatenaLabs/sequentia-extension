@@ -18,6 +18,19 @@
 // and a schedule that falls due becomes `leafSyncDue`, sent to the service worker,
 // which relays them to connected sites.
 //
+// While a receive request the wallet handed out waits (the receive code, a code of the payment
+// name's stock, however long ago it was made, within the life of a request), it reads the mailbox
+// on every tick in either mode. A coin paid to a code another store of the phrase handed out (the
+// phrase open in another browser, in Ambra or in the web wallet, or a store this browser held
+// before) is refused by this store's mailbox and taken in only by the library's catch-up, a step
+// of `sync` that runs at most once every ten minutes of median time. The host keeps each refused
+// coin and syncs, without the watchtowers' step, once that catch-up is open by the library's own
+// clock (the schedule's `now`; when it opens next is kept for each wallet), until it holds the
+// coin: at least a minute between two attempts, whatever the library answered or threw; at the
+// library's ten minutes once ten attempts in a row ran none; ended after six catch-ups without
+// the coin, or a day (src/leaf-schedule.js, `catchUpWait`). Each such coin becomes `leafArrived`
+// once held. A refusal read between two ticks only brings the next tick forward.
+//
 // After every sync and every command that can change a balance, it reports the library's
 // `balance` as `leafBalance`, which the service worker keeps for the popup, with what of
 // each asset its issuer has frozen for this wallet (`frozen`: held leaves of a supervised
@@ -87,7 +100,7 @@
 // change, `channelsChanged` is sent, and the receive code is made again to name them.
 // The mnemonic is handed to the worker and not kept here.
 
-import { inFlight, nextAskMs, freshRequestWaits, readUntil, syncDecision, careDue, careSummary, careArgs, payThrough, CARE_EVERY_MS, laterMode,
+import { inFlight, nextAskMs, requestWaits, catchUpWait, catchUpAfterSync, catchUpHeld, catchUpAttempt, catchUpGate, catchUpSyncIn, readUntil, syncDecision, careDue, careSummary, careArgs, payThrough, CARE_EVERY_MS, laterMode,
   channelPollMs, channelArrivals, payableChannels } from './src/leaf-schedule.js';
 import { frozenAtoms, holdingRefusal } from './src/leaf-profiles.js';
 import { redoingAtoms } from './vendor/default-arca.js';
@@ -281,21 +294,80 @@ async function takeHome(q) {
 
 // Every coin the library takes in, by whichever read: the service worker told, and the asset kept
 // with when, for takeIn.
-function arrivals(mailbox) {
+// `refusals`: false for a sync's own mailbox, whose refusals the sync's answer handles whole.
+function arrivals(mailbox, refusals = true) {
   for (const c of (Array.isArray(mailbox && mailbox.accepted) ? mailbox.accepted : [])) {
     S.arrived = [...(S.arrived || []).slice(-49), { asset: String(c.asset || '').toLowerCase(), at: Date.now() }];
     emit('leafArrived', { leaf_id: c.leaf_id, asset: c.asset, value: String(c.value ?? ''), kind: c.kind });
   }
+  if (refusals) noteCatchUp(mailbox);
 }
 
-async function sync(by, prio = UPKEEP) {
+// A coin paid to a code another store of the phrase handed out waits for the library's catch-up
+// (src/leaf-schedule.js catchUpWait): the host keeps its leaf id and syncs once the catch-up is
+// open, until the wallet holds it. A refusal read between two ticks only ever brings the next
+// tick forward: the schedule's own sync, what is moving, care, boards and claims keep their times.
+function noteCatchUp(mailbox) {
+  const before = S.catchUp ? S.catchUp.pending.length : 0;
+  setCatchUp(catchUpWait(S.catchUp, { mailbox, now: Date.now() }));
+  if ((S.catchUp ? S.catchUp.pending.length : 0) > before) {
+    const ms = catchUpSyncIn(S.catchUp, { now: Date.now(), libNow: libNow(), openAt: S.catchUpOpenAt });
+    console.info(`[leaves] a payment to a code another wallet of the phrase handed out: the catch-up that takes it in runs in about ${Math.round(ms / 1000)} s`);
+    planEarlier(ms);
+  }
+}
+// The wait, replaced (and kept); a wait that ends with coins still out says so.
+function setCatchUp(w) {
+  const was = S.catchUp;
+  S.catchUp = w;
+  if (JSON.stringify(was) !== JSON.stringify(w)) keepCatchUp();
+  if (was && !w && was.pending.length) {
+    console.info(`[leaves] the wait for the catch-up ends with ${was.pending.length} coin(s) not found after ${was.tries} catch-up(s); the library's own catch-ups and daily sync still look for them`);
+  }
+}
+// The coins of the wait the wallet now holds: each said as an arrival, as a mailbox's coin is.
+function caughtIn(arrived) {
+  for (const c of arrived) {
+    S.arrived = [...(S.arrived || []).slice(-49), { asset: String(c.asset || '').toLowerCase(), at: Date.now() }];
+    emit('leafArrived', c);
+  }
+  if (arrived.length) console.info(`[leaves] ${arrived.length} coin(s) paid to another wallet's code taken in by the catch-up`);
+}
+// The library's median time now, from its last schedule read, counted on at one second a second.
+function libNow() {
+  const n = S.schedule && S.schedule.now;
+  return typeof n === 'number' ? n + Math.floor((Date.now() - (S.scheduleAt || Date.now())) / 1000) : null;
+}
+async function readSchedule() {
+  S.schedule = (await call('run', { command: 'schedule' })).result;
+  S.scheduleAt = Date.now();
+  return S.schedule;
+}
+// The wait and when the library's catch-up is open next, kept for each wallet in this document's
+// storage: a wallet locked and opened again, or a document started again, goes on waiting for the
+// coins it was refused, and one opened again soon after a catch-up knows the library runs none yet.
+const catchUpKey = () => 'ext.leaves.catchUp.' + S.fp;
+function keepCatchUp() {
+  if (!S.fp) return;
+  try { localStorage.setItem(catchUpKey(), JSON.stringify({ wait: S.catchUp || null, openAt: S.catchUpOpenAt ?? null })); } catch {}
+}
+function keptCatchUp() {
+  let v = null;
+  try { v = JSON.parse(localStorage.getItem(catchUpKey()) || 'null'); } catch {}
+  const w = v && v.wait && Array.isArray(v.wait.pending) ? v.wait : null;
+  return { wait: w, openAt: v && typeof v.openAt === 'number' ? v.openAt : null };
+}
+
+async function sync(by, prio = UPKEEP, args = {}) {
   if (S.syncing) return await S.syncing;
-  const p = S.syncing = syncOnce(by, prio);
+  const p = S.syncing = syncOnce(by, prio, args);
   try { return await p; } finally { if (S.syncing === p) S.syncing = null; }
 }
-async function syncOnce(by, prio) {
+async function syncOnce(by, prio, args) {
   const t0 = Date.now();
-  const v = await call('run', { command: 'sync', args: {} }, prio);
+  let v;
+  // Every sync is an attempt at the catch-up a wait holds, one that throws too.
+  try { v = await call('run', { command: 'sync', args }, prio); } catch (e) { setCatchUp(catchUpAttempt(S.catchUp, Date.now())); throw e; }
   S.lastSyncValue = v;
   S.mailReadAt = S.mailReadEnd = Date.now();   // a sync reads the mailbox
   const r = (v && v.result) || {};
@@ -315,12 +387,22 @@ async function syncOnce(by, prio) {
   else if (cu && ((cu.restored || []).length || (cu.given_elsewhere || []).length)) {
     console.info(`[leaves] caught up: ${(cu.restored || []).length} coin(s) taken in, ${(cu.given_elsewhere || []).length} given up by another wallet of the phrase`);
   }
-  arrivals(r.mailbox);
+  arrivals(r.mailbox, false);
+  // The coins of the phrase this sync refused or its catch-up restored (both, in one sync), and
+  // when the library's catch-up is open next.
+  S.catchUpOpenAt = catchUpGate(S.catchUpOpenAt, r, libNow());
+  keepCatchUp();
+  const a = catchUpAfterSync(S.catchUp, { sync: r, now: Date.now() });
+  setCatchUp(a.wait);
+  caughtIn(a.arrived);
   noteUnreachable(unreachableOf(r, 'sync'));
   emit('leafSynced', { by, mailbox: r.mailbox || null });
   try {
     S.coins = (await call('run', { command: 'coins' })).result || [];
     S.participations = (await call('run', { command: 'participations' })).result || [];
+    const h = catchUpHeld(S.catchUp, S.coins, Date.now());
+    setCatchUp(h.wait);
+    caughtIn(h.arrived);
   } catch { /* the next tick reads them again */ }
   reportTakes();
   await readChannels();
@@ -458,7 +540,15 @@ async function watchBond() {
 function plan(ms) {
   clearTimeout(S.timer);
   if (!S.open) return;
+  S.timerAt = Date.now() + ms;
   S.timer = setTimeout(() => { tick().catch(() => {}); }, ms);
+}
+// The next tick no later than `ms` from now, never later than it was planned: a pass under way
+// plans its own next one when it ends.
+function planEarlier(ms) {
+  if (!S.open || ticking) return;
+  if (S.timer && typeof S.timerAt === 'number' && S.timerAt <= Date.now() + ms) return;
+  plan(Math.max(0, ms));
 }
 
 
@@ -592,10 +682,9 @@ async function readMailboxNow() {
     const t0 = Date.now();
     const mb = (await call('run', { command: 'mailbox' })).result;
     S.mailCostMs = Date.now() - t0;
-    if (mb && ((mb.accepted || []).length || (mb.pending || []).length)) {
-      arrivals(mb);
-      await reportBalance();
-    }
+    // Its refusals too: one of a coin paid to another store's code has the host sync for it.
+    arrivals(mb);
+    if (mb && ((mb.accepted || []).length || (mb.pending || []).length)) await reportBalance();
   } catch { /* the next read tries again */ } finally { S.mailReadEnd = Date.now(); }
 }
 // Between two commands of the scheduled pass: the reads that show a payment to this wallet, when
@@ -635,10 +724,10 @@ async function tick() {
   }
   S.deferredSince = 0;
   ticking = true;
+  const tickStart = Date.now();
   let wait = S.tickMs;
   try {
-    const s = (await call('run', { command: 'schedule' })).result;
-    S.schedule = s;
+    const s = await readSchedule();
     const moving = inFlight(S.coins, S.participations);
     if (s && s.due) emit('leafSyncDue', { now: s.now, next_sync_at: s.next_sync_at, why: s.why ?? null });
     let d = syncDecision(s, S.heldFor, moving);
@@ -652,32 +741,40 @@ async function tick() {
     if (!d.sync && S.syncOnOpen) d = { sync: true, why: 'open' };
     // Asked for by a quote that found coins not ready yet (`syncSoon`).
     if (!d.sync && S.syncAsked) d = { sync: true, why: 'asked' };
+    // A payment to a code another store of the phrase handed out, which only the catch-up takes in:
+    // once the library's catch-up is open by its own clock (the schedule's `now`).
+    setCatchUp(catchUpWait(S.catchUp, { now: Date.now() }));
+    if (!d.sync && catchUpSyncIn(S.catchUp, { now: Date.now(), libNow: s && s.now, openAt: S.catchUpOpenAt }) === 0) d = { sync: true, why: 'catch up' };
     await giveWay();
     if (d.sync) {
       S.watchPending = false; S.syncAsked = false;
-      await sync(d.why);
+      // A sync for the catch-up alone leaves out the watchtowers' step, which nobody waits on.
+      await sync(d.why, UPKEEP, d.why === 'catch up' ? { deposits: false } : {});
       S.syncOnOpen = false;
       await giveWay();
       await careIfDue();
       await giveWay();
-      S.schedule = (await call('run', { command: 'schedule' })).result;
+      await readSchedule();
     } else if (careDue(S.careAt, Date.now(), S.careMs)) {
       await careIfDue();
       await giveWay();
-      S.schedule = (await call('run', { command: 'schedule' })).result;
+      await readSchedule();
     } else if (S.bondLater) {
       // The bond's watch a pass gave way before.
       S.bondLater = false;
       await claimsIfDue(true);
       await giveWay();
       await watchBond();
-    } else if (freshRequestWaits(s)) {
-      // A request just handed out: read the mailbox, not the whole sync.
-      const mb = (await call('run', { command: 'mailbox' })).result;
+    } else if (requestWaits(s) && mailboxDue()) {
+      // A request handed out still waits (the receive code, the payment name's codes): read the
+      // mailbox, not the whole sync.
+      S.mailReadAt = Date.now();
+      let mb = null;
+      try { mb = (await call('run', { command: 'mailbox' })).result; } finally { S.mailReadEnd = Date.now(); }
       if (mb && mb.accepted && mb.accepted.length) console.info(`[leaves] mailbox read (a request waits): accepted ${mb.accepted.length}`);
       arrivals(mb);
       if (mb && mb.accepted && mb.accepted.length) await reportBalance();
-      S.schedule = (await call('run', { command: 'schedule' })).result;
+      await readSchedule();
     }
     // A freeze or a lift is read from the node at each coin's landing by `coins`: while
     // the wallet holds a leaf of a supervised asset, read them on every tick.
@@ -695,12 +792,16 @@ async function tick() {
     S.lastError = null;
     wait = inFlight(S.coins, S.participations) ? Math.min(S.tickMs, 30_000) : nextAskMs(S.schedule, S.tickMs);
     if (takeWaits()) wait = Math.min(wait, S.watchMs);
+    wait = Math.min(wait, catchUpSyncIn(S.catchUp, { now: Date.now(), libNow: libNow(), openAt: S.catchUpOpenAt }));
   } catch (e) {
     // Given way to a person: the rest of the pass at the next tick, soon.
     if (e === HELD) wait = 5000;
     else {
       S.lastError = errorOf(e);
       console.warn('[leaves] the scheduled pass failed:', S.lastError.message);
+      // A schedule that threw is an attempt too (a sync that threw counted itself): the wait's
+      // cadence holds while the node does not answer.
+      if (S.catchUp && !(S.catchUp.attemptAt >= tickStart)) setCatchUp(catchUpAttempt(S.catchUp, Date.now()));
     }
   }
   ticking = false;
@@ -781,6 +882,8 @@ async function start(args) {
   }
   S.open = true;
   S.fp = fp;
+  // The wait for another wallet's coins and the library's catch-up time, as this wallet left them.
+  ({ wait: S.catchUp, openAt: S.catchUpOpenAt } = keptCatchUp());
   S.careAt = null;      // care once after the wallet opens,
   S.claimsAt = null; S.vesting = null;
   S.syncOnOpen = true;  // after one sync

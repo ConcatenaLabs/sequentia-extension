@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readRequest, planSend, leafBalancesAnswer } from '../src/leaf-request.js';
-import { inFlight, nextAskMs, freshRequestWaits } from '../src/leaf-schedule.js';
+import { inFlight, nextAskMs } from '../src/leaf-schedule.js';
 
 const hex = (s) => Buffer.from(s, 'utf8').toString('hex');
 const X = 'aa'.repeat(32);
@@ -61,15 +61,6 @@ test('the host syncs on the library\'s schedule, more often while something move
   assert.equal(inFlight([{ state: 'offered' }], []), true, 'a coin held for an in-tree swap is followed until the swap completes');
   assert.equal(inFlight([], [{ state: 'pending', released: false }]), true);
   assert.equal(inFlight([], [{ state: 'released' }]), false);
-});
-
-test('a request just handed out has the mailbox read every tick, for an hour', () => {
-  const s = (asked, state = 'waiting', owner = 'k') => ({ now: 10000, receive_requests: [{ owner, state, asked_at: asked }] });
-  assert.equal(freshRequestWaits(s(9000)), true);
-  assert.equal(freshRequestWaits(s(5000)), false);
-  assert.equal(freshRequestWaits(s(9000, 'lapsed')), false);
-  assert.equal(freshRequestWaits(s(9000, 'waiting', 'restored')), false);
-  assert.equal(freshRequestWaits({ now: 1 }), false);
 });
 
 test('the host syncs when the time the schedule first gave arrives, though the schedule moves it on and is not due', async () => {
