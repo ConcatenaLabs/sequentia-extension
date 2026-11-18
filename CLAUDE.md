@@ -132,8 +132,22 @@ wasm. Read this before changing anything.
 - **A person waiting comes first.** The host keeps one command in the leaf worker at a
   time and holds the rest in its own queue (`src/leaf-queue.js`): a command a person
   started (`run` with `paying`) goes ahead of every upkeep command waiting, and the
-  faucet's coin taken in (`takeIn`) ahead of upkeep too, so each waits at most for the one
-  command already running. A read the trade composer asks while nobody waits on it (it
+  faucet's coin taken in (`takeIn`) and Receive's reads (`leaves.ask`, op `run` with
+  `prompt`: the receive code's `schedule`, the operator's `info`) ahead of upkeep too, so each
+  waits at most for the one command already running. The host's own work (its scheduled
+  pass, every sync, the mailbox and channel reads) goes next, ahead of what the rest of the
+  wallet asks, so a pass waits only for the command running; every pass also stops at its bound (200 of
+  its commands or 3 minutes, checked between two of them), says in which step and command,
+  and the next pass takes up the rest. A read the rest of the wallet asks (`runAny`, a
+  figure, a move, a trade's follow) shares the answer of the same read already waiting and is
+  refused as busy once it has waited two minutes, said once a minute with what was asked most
+  and from where (each request carries `from`, its caller's file, line and function). A
+  caller that wants an answer at once and asks for every figure gets the last reading
+  (`src/kept-read.js`: the Lightning-to-ark move's coins), never a command per figure. The
+  host's `status` carries `diag`, and `leafHostDiag()` in the offscreen document's console
+  answers it at once: the command running with its arguments' shape and caller, what waits by
+  priority and command, the pass under way and the last, the reads, and the payment name's
+  stock (`nameStockDiag()`). A read the trade composer asks while nobody waits on it (it
   follows open trades every few seconds) is the wallet's own work instead: it goes in line
   with the upkeep and does not count as a person asking, so it never keeps the mailbox and
   channel reads off. The scheduled pass gives way between its commands while a

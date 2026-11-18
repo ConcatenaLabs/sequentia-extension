@@ -231,6 +231,10 @@ async function setDefaultWatchtowers() {
 async function leafInfo() {
   return await leaves.runAny('info');
 }
+// The operator's `info` for Receive, which a person waits on: before the wallet's upkeep.
+async function leafInfoNow() {
+  return await leaves.ask('info');
+}
 async function leafOpen() {
   if (!(await leaves.config())) return false;
   try { return !!(await leaves.status()).open; } catch { return false; }
@@ -254,7 +258,8 @@ async function leafCode(fresh, { quick = false } = {}) {
   }
   if (!fresh && kept && kept.text && kept.owner) {
     try {
-      const s = await leaves.runAny('schedule');
+      // A person waits on the code: the read goes before the wallet's upkeep (leaves.ask).
+      const s = await leaves.ask('schedule');
       const r = ((s && s.receive_requests) || []).find((x) => x.owner === kept.owner);
       if (r && r.state === 'waiting' && (r.lapses_at == null || r.lapses_at - ((s && s.now) || 0) > CODE_MARGIN_S)) return kept;
     } catch { /* a new one */ }
@@ -276,7 +281,7 @@ let arkAddress = null;
 // over Lightning (vendor/asset-lightning.js receivableAssets).
 export async function receiveChoices() {
   if (!(await leafOpen())) return ['BTC'];
-  try { return ['BTC', ...receivableAssets(await leafInfo())]; } catch { return ['BTC']; }
+  try { return ['BTC', ...receivableAssets(await leafInfoNow())]; } catch { return ['BTC']; }
 }
 // -> { code, qr, isCode, confidential?, invoiceHash?, invoiceKind? }: the receive code, or the
 // address alone when the wallet holds no coins with the operator yet (nothing is said about why).
@@ -322,7 +327,7 @@ export async function receiveCode({ sats = null, asset = 'BTC', amount = null, f
   const price = A.priceFor(kind === 'BTC' ? 'BTC' : meta(kind).ticker);
   const large = kind === 'BTC' && n > 0n && direct({ sats: n, override: await bandOverride(), price }) != null;
   let info = null;
-  if (n > 0n && open) { try { info = await leafInfo(); } catch { /* the fallback */ } }
+  if (n > 0n && open) { try { info = await leafInfoNow(); } catch { /* the fallback */ } }
   if (await arkOpen()) {
     if (!large) { try { if (!arkAddress || fresh) arkAddress = (await arkHost('run', { command: 'address' })).address; ark = arkAddress; } catch (e) { console.warn('[btc ark] address:', e.message); } }
     if (kind === 'BTC' && n > 0n && !large && lnFits({ info, kind: 'BTC', dir: 'in', atoms: n, price })) {

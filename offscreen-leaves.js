@@ -63,11 +63,14 @@
 // is released (`releasing`) and `leafReleasing` is sent.
 //
 // Messages (scope 'leaf'), answered { ok, value } or { ok: false, error: { kind, message } }:
-//   'status'                                -> { open, lastSync, lastError, schedule }
+//   'status'                                -> { open, lastSync, lastError, schedule, ..., diag }
+//        (`diag`: what a capture of a held-up wallet needs, see diag())
 //   'start' { mnemonic, config?, nodePassword? } -> opens the wallet of that mnemonic
 //        (created against `config` when this browser holds none); answers { created, info? }
-//   'run'   { command, args, paying? }      -> the library's { result, start }; with
-//        `paying`, a command the planned coins cover is made through the next round
+//   'run'   { command, args, paying?, prompt?, from? } -> the library's { result, start }; with
+//        `paying`, a command the planned coins cover is made through the next round; with
+//        `prompt`, a read a person waits on, run before the upkeep; `from`, where the service
+//        worker asked it, kept with the command for the slow and dropped lines and `diag`
 //   'sync'                                  -> runs sync now (events as on the schedule)
 //   'takeIn' { asset, since, ms? }          -> reads the mailbox until a coin of `asset` has
 //        arrived since `since` (ms), or `ms` (45 s) have passed: { arrived }
@@ -98,6 +101,13 @@
 // use, else every 5 s, never while another command runs, and reports the balance as soon as a
 // channel's credit grows (`leafArrived`, kind 'channel'). Whenever the channels a payer can pay
 // change, `channelsChanged` is sent, and the receive code is made again to name them.
+// The library runs one command at a time, and the host keeps the line in front of it
+// (src/leaf-queue.js): a person's commands first, then what a person started waits on (`prompt`),
+// then the host's own work (its scheduled pass, the mailbox and channel reads), then what the rest
+// of the wallet asks. Every pass ends: it waits only for the one command running, and stops at its
+// bound (PASS_MOST_COMMANDS, PASS_MOST_MS), saying where. A read the rest of the wallet asks shares
+// the answer of the same read waiting, and is refused as busy once it has waited
+// OUTSIDE_READ_WAIT_MOST_MS, so the line stays bounded however often it is asked.
 // The mnemonic is handed to the worker and not kept here.
 
 import { inFlight, nextAskMs, requestWaits, catchUpWait, catchUpAfterSync, catchUpHeld, catchUpAttempt, catchUpGate, catchUpSyncIn, readUntil, syncDecision, careDue, careSummary, careArgs, payThrough, CARE_EVERY_MS, laterMode,
@@ -106,7 +116,7 @@ import { frozenAtoms, holdingRefusal } from './src/leaf-profiles.js';
 import { redoingAtoms } from './vendor/default-arca.js';
 import { boardCandidates, boardAll, boardSpent, CLAIMS_EVERY_MS, vestingLots, vestedOpen } from './vendor/default-arca.js';
 import { homeCoins, unreachableOf, homeQuote, homeTake, homeUnderWay } from './vendor/default-arca.js';
-import { createQueue, PERSON, PROMPT, UPKEEP } from './src/leaf-queue.js';
+import { createQueue, PERSON, PROMPT, PASS, UPKEEP } from './src/leaf-queue.js';
 import { LEAF_PAUSE_URL } from './src/config.js';
 
 const TICK_MS = 60_000;
@@ -144,8 +154,29 @@ const Q = createQueue({
   },
   // Every command over ten seconds is named, with what it waited behind: the one long command that
   // holds every other can then be told.
-  onSlow: ({ op, args, prio, ms, waited }) => console.info(`[leaves] slow ${op === 'run' ? args.command : op} ${ms} ms${prio >= PROMPT ? ' (asked by a person)' : ''}${waited > 1000 ? `, after waiting ${waited} ms` : ''}`),
+  onSlow: ({ op, args, prio, ms, waited, from }) => console.info(`[leaves] slow ${op === 'run' ? args.command : op} ${ms} ms${prio >= PROMPT ? ' (asked by a person)' : ''}${waited > 1000 ? `, after waiting ${waited} ms` : ''}${from ? ', asked from ' + from : ''}`),
+  onDropped: (list) => noteDropped(list),
 });
+
+// Reads the rest of the wallet asked (the service worker: a figure, a trade's follow, a move) that
+// waited OUTSIDE_READ_WAIT_MOST_MS behind other work are refused as busy rather than kept: their
+// callers ask again, and the line in front of the library stays bounded in time. Said at most once
+// a minute, with what was asked most and from where.
+const OUTSIDE_READ_WAIT_MOST_MS = 120_000;
+const D = { dropped: 0, droppedSaidAt: 0, droppedSince: new Map() };
+function noteDropped(list) {
+  for (const d of list) {
+    D.dropped += d.callers;
+    const k = d.command + (d.from ? ' from ' + d.from : '');
+    D.droppedSince.set(k, (D.droppedSince.get(k) || 0) + d.callers);
+  }
+  if (Date.now() - D.droppedSaidAt < 60_000) return;
+  const n = [...D.droppedSince.values()].reduce((a, b) => a + b, 0);
+  const most = [...D.droppedSince].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, c]) => `${k} ×${c}`).join(', ');
+  console.warn(`[leaves] ${n} upkeep read(s) asked from outside the host were not run: each waited over ${OUTSIDE_READ_WAIT_MOST_MS / 1000} s behind other work (most: ${most})`);
+  D.droppedSaidAt = Date.now();
+  D.droppedSince = new Map();
+}
 
 function restartWorker(e) {
   try { worker && worker.terminate(); } catch {}
@@ -180,8 +211,12 @@ function ensureWorker() {
   post('pause', { url: LEAF_PAUSE_URL }).catch((e) => console.warn('[leaves] pause:', e && e.message));
 }
 
-function call(op, args = {}, prio = UPKEEP) {
-  return Q.call(op, args, prio);
+// The host's own commands (its scheduled pass, the reads that show a payment, a sync's reads) go at
+// PASS, before what the rest of the wallet asks (UPKEEP): a pass waits at most for the one command
+// running, so it ends. Each command of a pass is counted against its bound (passOver).
+function call(op, args = {}, prio = PASS, opts) {
+  if (ticking && prio === PASS) { P.commands++; P.last = op === 'run' ? String(args.command) : op; }
+  return Q.call(op, args, prio, opts);
 }
 function post(op, args) {
   ensureWorker();
@@ -363,8 +398,10 @@ async function sync(by, prio = UPKEEP, args = {}) {
   const p = S.syncing = syncOnce(by, prio, args);
   try { return await p; } finally { if (S.syncing === p) S.syncing = null; }
 }
-async function syncOnce(by, prio, args) {
+async function syncOnce(by, asked, args) {
   const t0 = Date.now();
+  // The host's own work, whoever asked it: one sync at a time (sync), at PASS or above.
+  const prio = Math.max(asked, PASS);
   let v;
   // Every sync is an attempt at the catch-up a wait holds, one that throws too.
   try { v = await call('run', { command: 'sync', args }, prio); } catch (e) { setCatchUp(catchUpAttempt(S.catchUp, Date.now())); throw e; }
@@ -442,7 +479,7 @@ function watchChannels() {
   if (!S.open || !S.defaultMode) return;
   const usedAt = Math.max(S.lastAsked || 0, S.inUseAt || 0, S.channelIn || 0);
   S.chanTimer = setTimeout(async () => {
-    if (!ticking && !S.running) await readChannelsNow();
+    if (!ticking && !Q.running()) await readChannelsNow();
     watchChannels();
   }, channelPollMs({ visible: S.visible, usedAt, now: Date.now() }));
 }
@@ -504,6 +541,7 @@ async function careIfDue(force = false) {
   // later pass.
   await readsBetween();
   if (yieldNow()) { S.bondLater = true; return S.lastCare; }
+  step('claims and bond');
   await claimsIfDue(true);
   await watchBond();
   return S.lastCare;
@@ -597,12 +635,19 @@ async function coverReceiveKeys() {
   let had = 0;
   try { had = Number(localStorage.getItem(key) || 0); } catch {}
   let n = 0;
-  for (let i = had; i < want; i++) {
-    try { await call('run', { command: 'address' }); } catch (e) { console.warn('[leaves] handing the leaf wallet its keys:', e && e.message); break; }
-    n++;
-    try { localStorage.setItem(key, String(i + 1)); } catch {}
+  step('boards: handing the leaf wallet its keys');
+  try {
+    for (let i = had; i < want; i++) {
+      // One key a command: a person, the mailbox and the pass's bound are looked at between two.
+      if (n) await giveWay();
+      try { await call('run', { command: 'address' }); } catch (e) { console.warn('[leaves] handing the leaf wallet its keys:', e && e.message); break; }
+      n++;
+      try { localStorage.setItem(key, String(i + 1)); } catch {}
+    }
+  } finally {
+    if (n) console.info(`[leaves] the leaf wallet reads its on-chain coins up to key ${had + n + 20} now (${n} key(s) handed to it${had + n < want ? `, ${want - had - n} still to hand` : ''})`);
   }
-  if (n) console.info(`[leaves] the leaf wallet reads its on-chain coins up to key ${had + n + 20} now (${n} key(s) handed to it)`);
+  step('boards');
   return n;
 }
 
@@ -711,7 +756,25 @@ const PERSON_QUIET_MS = 15_000;
 const PASS_DEFER_MOST_MS = 90_000;
 const HELD = Symbol('held');
 const yieldNow = () => upkeepHeld() || Q.personWaits();
-const giveWay = async () => { if (yieldNow()) throw HELD; await readsBetween(); if (yieldNow()) throw HELD; };
+
+// Every pass ends: at most PASS_MOST_COMMANDS commands of its own and PASS_MOST_MS, checked between
+// two of its commands. A pass that reaches its bound stops there, says in which step and command,
+// and the next pass takes up the rest a few seconds later (each step keeps its own place: the keys
+// handed so far, care's and the bond's times). One command running cannot be cut short; the host's
+// HUNG_MS bounds that.
+const PASS_MOST_COMMANDS = 200;
+const PASS_MOST_MS = 180_000;
+const BOUND = Symbol('bound');
+// The pass under way (or the last): when it began, its step, how many commands it made, the last.
+const P = { at: 0, step: null, commands: 0, last: null };
+const passOver = () => ticking && (P.commands >= PASS_MOST_COMMANDS || Date.now() - P.at >= PASS_MOST_MS);
+const step = (name) => { P.step = name; };
+const giveWay = async () => {
+  if (yieldNow()) throw HELD;
+  if (passOver()) throw BOUND;
+  await readsBetween();
+  if (yieldNow()) throw HELD;
+};
 
 let ticking = false;
 async function tick() {
@@ -725,7 +788,8 @@ async function tick() {
   S.deferredSince = 0;
   ticking = true;
   const tickStart = Date.now();
-  let wait = S.tickMs;
+  P.at = tickStart; P.step = 'schedule'; P.commands = 0; P.last = null;
+  let wait = S.tickMs, end = 'done';
   try {
     const s = await readSchedule();
     const moving = inFlight(S.coins, S.participations);
@@ -748,24 +812,32 @@ async function tick() {
     await giveWay();
     if (d.sync) {
       S.watchPending = false; S.syncAsked = false;
+      step('sync (' + d.why + ')');
       // A sync for the catch-up alone leaves out the watchtowers' step, which nobody waits on.
-      await sync(d.why, UPKEEP, d.why === 'catch up' ? { deposits: false } : {});
+      await sync(d.why, PASS, d.why === 'catch up' ? { deposits: false } : {});
       S.syncOnOpen = false;
       await giveWay();
+      step('care');
       await careIfDue();
       await giveWay();
+      step('schedule');
       await readSchedule();
     } else if (careDue(S.careAt, Date.now(), S.careMs)) {
+      step('care');
       await careIfDue();
       await giveWay();
+      step('schedule');
       await readSchedule();
     } else if (S.bondLater) {
       // The bond's watch a pass gave way before.
       S.bondLater = false;
+      step('claims');
       await claimsIfDue(true);
       await giveWay();
+      step('bond');
       await watchBond();
     } else if (requestWaits(s) && mailboxDue()) {
+      step('mailbox (a request waits)');
       // A request handed out still waits (the receive code, the payment name's codes): read the
       // mailbox, not the whole sync.
       S.mailReadAt = Date.now();
@@ -779,15 +851,19 @@ async function tick() {
     // A freeze or a lift is read from the node at each coin's landing by `coins`: while
     // the wallet holds a leaf of a supervised asset, read them on every tick.
     await giveWay();
+    step('claims');
     if (!d.sync) await claimsIfDue();
     if (!d.sync && holdsSupervised()) {
       await giveWay();
+      step('supervised coins');
       S.coins = (await call('run', { command: 'coins' })).result || [];
       await reportBalance();
     }
     await giveWay();
+    step('boards');
     if (S.defaultMode) await boardArrivals();
     await giveWay();
+    step('refresh received');
     if (S.defaultMode) await refreshReceived();
     S.lastError = null;
     wait = inFlight(S.coins, S.participations) ? Math.min(S.tickMs, 30_000) : nextAskMs(S.schedule, S.tickMs);
@@ -795,8 +871,13 @@ async function tick() {
     wait = Math.min(wait, catchUpSyncIn(S.catchUp, { now: Date.now(), libNow: libNow(), openAt: S.catchUpOpenAt }));
   } catch (e) {
     // Given way to a person: the rest of the pass at the next tick, soon.
-    if (e === HELD) wait = 5000;
-    else {
+    if (e === HELD) { wait = 5000; end = 'gave way'; }
+    else if (e === BOUND) {
+      // At its bound: said, with where it was, and the rest at the next tick, soon.
+      wait = 5000; end = 'bound';
+      console.info(`[leaves] the pass stopped at its bound (${P.commands} of its commands in ${Math.round((Date.now() - P.at) / 1000)} s; at most ${PASS_MOST_COMMANDS} and ${PASS_MOST_MS / 1000} s): it was in ${P.step}, its last command ${P.last}; the rest at the next pass, in 5 s`);
+    } else {
+      end = 'failed';
       S.lastError = errorOf(e);
       console.warn('[leaves] the scheduled pass failed:', S.lastError.message);
       // A schedule that threw is an attempt too (a sync that threw counted itself): the wait's
@@ -804,6 +885,7 @@ async function tick() {
       if (S.catchUp && !(S.catchUp.attemptAt >= tickStart)) setCatchUp(catchUpAttempt(S.catchUp, Date.now()));
     }
   }
+  S.lastPass = { at: P.at, ms: Date.now() - P.at, commands: P.commands, step: P.step, last: P.last, end };
   ticking = false;
   plan(Math.max(wait, 1000));
 }
@@ -811,11 +893,11 @@ async function tick() {
 // One command of the library. The node runs one UTXO-set scan at a time, and every wallet
 // sharing it scans: a read refused for that alone is asked again, a little later. A
 // command that signs or moves anything is never repeated here; the caller sees the refusal.
-async function runCommand(command, cargs, prio = UPKEEP) {
+async function runCommand(command, cargs, prio = PASS, opts) {
   S.running++;
   try {
     for (let i = 0; ; i++) {
-      try { return await call('run', { command, args: cargs }, prio); }
+      try { return await call('run', { command, args: cargs }, prio, opts); }
       catch (e) {
         // Refused for what the wallet holds out of round (a large payment just received, such as
         // the faucet's five assets): what it received is given up at the next turn, not after the
@@ -900,6 +982,28 @@ async function start(args) {
   return { created: !has, info };
 }
 
+// What a capture of a stuck wallet needs, read at once (the 'status' op's `diag`, and
+// `leafHostDiag()` in the offscreen document's console, no breakpoint needed): the command running
+// with its arguments' shape and who asked it; what waits, by priority and by command; the pass under
+// way (since when, its step, its commands, its last); the last pass and how it ended; the reads.
+function diag() {
+  const now = Date.now();
+  const ago = (t) => (t ? now - t : null);
+  return {
+    at: new Date(now).toISOString(), open: S.open, defaultMode: S.defaultMode,
+    running: Q.running(), personWaits: Q.personWaits(), queue: Q.stats(), runCommands: S.running, droppedReads: D.dropped,
+    pass: ticking ? { since: new Date(P.at).toISOString(), ms: now - P.at, step: P.step, commands: P.commands, last: P.last } : null,
+    lastPass: S.lastPass || null, nextPassIn: S.timerAt ? S.timerAt - now : null,
+    upkeepHeldMs: Math.max(0, (S.upkeepHoldUntil || 0) - now), sinceAsked: ago(S.lastAsked), sinceMailRead: ago(S.mailReadEnd), mailCostMs: S.mailCostMs ?? null,
+    sinceChanRead: ago(S.chanReadAt), sinceSync: ago(S.lastSync && S.lastSync.at), syncing: !!S.syncing, lastError: S.lastError,
+    releasing: S.releasing, watchPending: !!S.watchPending, syncAsked: !!S.syncAsked, catchUp: S.catchUp || null,
+    requests: ((S.schedule && S.schedule.receive_requests) || []).length,
+    // The payment name's stock, kept beside the Bitcoin ark in this document (offscreen-ark.js).
+    nameStock: (() => { try { return typeof globalThis.nameStockDiag === 'function' ? globalThis.nameStockDiag() : null; } catch { return null; } })(),
+  };
+}
+globalThis.leafHostDiag = diag;
+
 async function handle(op, args) {
   if (op === 'start') {
     const run = starting.then(() => start(args));
@@ -910,7 +1014,7 @@ async function handle(op, args) {
     case 'status':
       return { open: S.open, lastSync: S.lastSync, lastError: S.lastError, schedule: S.schedule, lastCare: S.lastCare, scan: S.scan, releasing: S.releasing,
         bond: S.bond, lastWatch: S.lastWatch, defaultMode: S.defaultMode, lastBoard: S.lastBoard, home: S.open ? homeState() : null,
-        channels: S.channels, payable: payableChannels(S.channels) };
+        channels: S.channels, payable: payableChannels(S.channels), diag: diag() };
     case 'homeQuote':
       if (!S.open) throw { kind: 'refused', message: 'the leaf wallet is not open' };
       S.lastAsked = Date.now();
@@ -931,6 +1035,11 @@ async function handle(op, args) {
     case 'run': {
       if (!S.open) throw { kind: 'refused', message: 'the leaf wallet is not open' };
       const command = String(args.command);
+      // Who in the service worker asked (a file, a line and a function), for the state a capture
+      // reads and the slow and dropped lines.
+      const from = args.from ? String(args.from).slice(0, 120) : null;
+      // A read a person waits on (the receive code's): before the upkeep, as the faucet's coin is.
+      if (args.prompt && READS.has(command)) return await runCommand(command, args.args || {}, PROMPT, { from });
       // A sync asked by the trade composer, which follows open trades with one: while a person
       // waits on a quote or a confirmation it waits for them, and one asked within SYNC_SHARED_MS
       // of the last sync's end (whoever asked it) is answered by that sync instead of another.
@@ -941,12 +1050,15 @@ async function handle(op, args) {
       // would wait for as long as a trade is open. While the popup holds the upkeep (a quote, a
       // confirmation) every command counts as the person's.
       const person = !!args.paying && (!READS.has(command) || upkeepHeld());
-      if (args.paying && !person) return await runCommand(command, args.args || {}, UPKEEP);
+      // Upkeep the rest of the wallet asks: after the host's own work; a read shares the answer of
+      // the same read waiting, and is refused as busy past OUTSIDE_READ_WAIT_MOST_MS.
+      const upkeep = READS.has(command) ? { share: true, dropAfterMs: OUTSIDE_READ_WAIT_MOST_MS, from } : { from };
+      if (args.paying && !person) return await runCommand(command, args.args || {}, UPKEEP, upkeep);
       if (args.paying) S.lastAsked = Date.now();
-      if (!args.paying) return await runCommand(command, args.args || {});
+      if (!args.paying) return await runCommand(command, args.args || {}, UPKEEP, upkeep);
       try {
         return await payThrough(command, args.args || {}, {
-        run: (c, a) => runCommand(c, a, PERSON),
+        run: (c, a) => runCommand(c, a, PERSON, { from }),
         sync: () => sync('release', PERSON),
         coins: async () => (await call('run', { command: 'coins' })).result || [],
         waiting: (st) => {

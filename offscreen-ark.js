@@ -127,6 +127,23 @@ function startName(fp) {
   A.idxTimer = setInterval(readIndices, 10_000);
   readIndices().then(() => A.name && A.name.recover()).then(() => { if (A.name) A.name.start(); });
 }
+// The payment name and its stock as they stand, for a capture of a wallet that is held up
+// (`nameStockDiag()` in this document's console, and the leaf host's `diag`): the name, whether the
+// service said this key holds it and answers, whether the link waits for payers, how many codes the
+// stock holds and when the first lapses, how many indices were handed out, and the indices the
+// service worker last gave.
+globalThis.nameStockDiag = () => {
+  const n = A.name;
+  if (!n) return { mounted: false };
+  let st = null; try { st = n.stock(); } catch {}
+  const untils = st ? Object.values(st.mine || {}).map((c) => Number(c && c.until)).filter((u) => Number.isFinite(u)) : [];
+  return {
+    mounted: true, name: n.name(), verified: n.verified(), unreachable: n.unreachable(), refused: n.refused(), waitingForPayers: n.running(),
+    stock: st ? { codes: Object.keys(st.mine || {}).length, firstLapseInS: untils.length ? Math.min(...untils) - Math.floor(Date.now() / 1000) : null,
+      handed: (st.handed || []).length } : null,
+    indices: A.idx,
+  };
+};
 // A payment to the name is claimed as soon as the server holds it, as Receive's own invoice is.
 function followNameInvoice(inv) {
   (async () => {

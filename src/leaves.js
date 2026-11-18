@@ -133,6 +133,19 @@ export async function address() {
   return all[tag];
 }
 
+// Where in the service worker a command was asked from (`file:line function`, the first frame
+// outside this module): the host keeps it with the command, so a capture of a wallet whose library
+// is held up names who keeps asking (sequentia-extension#219).
+function callerOf() {
+  const lines = String(new Error().stack || '').split('\n').slice(1);
+  for (const l of lines) {
+    if (/\/src\/leaves\.js:/.test(l)) continue;
+    const m = l.match(/at (?:async )?(?:([^\s(]+) \()?(?:[^()]*\/)?([^/()\s]+\.m?js)(?:\?[^:()]*)?:(\d+)/);
+    if (m) return `${m[2]}:${m[3]}${m[1] ? ' ' + m[1] : ''}`;
+  }
+  return null;
+}
+
 // The host's answers come back as messages; the service worker never blocks on one.
 async function host(op, args = {}) {
   await ensureOffscreen();
@@ -214,7 +227,7 @@ export async function requireLeaves() {
 // final (`payThrough`, src/leaf-schedule.js), so the answer can take one round.
 export async function run(command, args = {}) {
   await requireLeaves();
-  return (await host('run', { command, args, paying: true })).result;
+  return (await host('run', { command, args, paying: true, from: callerOf() })).result;
 }
 // One command a person asks for in default mode (a receive code, a payment to a code or an
 // address, a trade): the same path as `run`, through the next round when the planned coins
@@ -224,7 +237,16 @@ export async function runUser(command, args = {}) {
   if (!(await config())) throw new Error(NOT_JOINED);
   if (!(await sessionMnemonic())) throw new Error('the wallet is locked');
   await ensureRunning();
-  return (await host('run', { command, args, paying: true })).result;
+  return (await host('run', { command, args, paying: true, from: callerOf() })).result;
+}
+// A read a person waits on in either mode (the receive code's `schedule`, the assets Receive offers):
+// the host runs it before the wallet's upkeep, as it does the faucet's coin taken in, so it waits
+// at most for the one command running. Reads only: anything else asked this way takes its usual way.
+export async function ask(command, args = {}) {
+  if (!(await config())) throw new Error(NOT_JOINED);
+  if (!(await sessionMnemonic())) throw new Error('the wallet is locked');
+  await ensureRunning();
+  return (await host('run', { command, args, prompt: true, from: callerOf() })).result;
 }
 // Forgets the operator this wallet joined (a join whose wallet named another key than the one
 // pinned), and closes the leaf wallet.
@@ -241,7 +263,7 @@ export async function runAny(command, args = {}) {
   if (!(await config())) throw new Error(NOT_JOINED);
   if (!(await sessionMnemonic())) throw new Error('the wallet is locked');
   await ensureRunning();
-  return (await host('run', { command, args })).result;
+  return (await host('run', { command, args, from: callerOf() })).result;
 }
 
 // Tells the offscreen host default mode's upkeep is on or off, with when the mode was set, whether

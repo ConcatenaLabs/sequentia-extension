@@ -15,6 +15,7 @@ import * as A from './assets.js';
 import * as engine from './engine.js';
 import { mode, walletTag } from './mode.js';
 import { sessionMnemonic } from './vault.js';
+import { keptRead } from './kept-read.js';
 
 const SIGNER_DEFAULT_ATOMS = 10_000_000n;
 
@@ -33,6 +34,7 @@ function closeFee(kind) {
   if (!(r > 0)) return null;
   return (400n * 100_000_000n + BigInt(r) - 1n) / BigInt(r);
 }
+const leafCoins = keptRead(() => leaves.runAny('coins'));
 const move = mountLightningToArk({
   dev: async () => (await mode()) === 'developer',
   personBusy: () => Date.now() - personAt < 20_000,
@@ -55,7 +57,9 @@ const move = mountLightningToArk({
   leaves: {
     isOpen: async () => { try { return !!(await leaves.status()).open; } catch { return false; } },
     info: () => leaves.runAny('info'),
-    coins: () => leaves.runAny('coins'),
+    // The move reads the coins at once for each figure (its `liveMoving`), as well as in its pass:
+    // the last reading, never a command per figure (src/kept-read.js).
+    coins: leafCoins,
     run: (command, args) => leaves.runAny(command, args),
   },
   // The extension sets no Lightning payment limit, so its signer's own default holds every
