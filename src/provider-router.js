@@ -23,70 +23,10 @@ import * as leafSwap from './leaf-swap.js';
 import * as leafResting from './leaf-resting.js';
 import * as siteTrade from './site-trade.js';
 import { ORDER_FEATURES } from './market-plan.js';
+import { requestApproval } from './approvals.js';
 
-// ---- pending approvals ----
-const pending = new Map();
-let reqSeq = 0;
-
-function newRequestId() { return 'req' + (++reqSeq) + '.' + Date.now(); }
-
-export function pendingApproval(id) {
-  const p = pending.get(id);
-  if (!p) return null;
-  return { id, origin: p.origin, method: p.method, display: p.display };
-}
-export function anyPendingApproval() {
-  const first = pending.keys().next();
-  return first.done ? null : pendingApproval(first.value);
-}
-
-// Approvals open as a regular TAB, not a floating popup window: on tiling /
-// Wayland window managers (seen live on COSMIC) a popup created by a freshly
-// reloaded service worker can land invisible, and an approval the user cannot
-// see times out. A tab is always reachable from the tab strip.
-async function openApprovalWindow(id) {
-  await chrome.tabs.create({
-    url: chrome.runtime.getURL('approval/approval.html') + '?id=' + encodeURIComponent(id),
-    active: true,
-  });
-}
-
-// Ask the user. `display` is the serializable summary the approval page renders.
-function requestApproval(origin, method, display, exec) {
-  // `exec(shown)` receives what the approval page says it showed (`decideApproval`).
-  return new Promise((resolve, reject) => {
-    const id = newRequestId();
-    pending.set(id, { origin, method, display, exec, resolve, reject, at: Date.now() });
-    // Expire abandoned approvals after 5 minutes.
-    setTimeout(() => {
-      const p = pending.get(id);
-      if (p) { pending.delete(id); p.reject(new Error('approval timed out')); }
-    }, 300000);
-    openApprovalWindow(id).catch((e) => {
-      pending.delete(id);
-      reject(new Error('could not open the approval window: ' + (e?.message ?? e)));
-    });
-  });
-}
-
-// The approval page decided. On approve the operation runs asynchronously:
-// the approval tab closes immediately (no "Working…" purgatory, and its own
-// message channel cannot outlive Chrome's cap anyway); the outcome flows to
-// the requesting page over the port channel.
-export async function decideApproval(id, approve, shown = null) {
-  const p = pending.get(id);
-  if (!p) throw new Error('this request has expired');
-  pending.delete(id);
-  if (!approve) {
-    p.reject(new Error('the user rejected the request'));
-    return { done: true };
-  }
-  (async () => {
-    try { p.resolve(await p.exec(shown)); }
-    catch (e) { p.reject(e instanceof Error ? e : new Error(String(e))); }
-  })();
-  return { done: true };
-}
+// ---- pending approvals (src/approvals.js) ----
+export { pendingApproval, anyPendingApproval, decideApproval, approvalTabClosed, originGone } from './approvals.js';
 
 // ---- account info ----
 async function accountInfo() {

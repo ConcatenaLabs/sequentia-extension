@@ -44,6 +44,10 @@ restricted assets.
 - Read methods (`getBalances`, `getAddress`) require the origin to be
   connected AND the wallet unlocked; they never prompt.
 - Signing / paying methods additionally open an approval window per request.
+  A request the person does not decide is refused: when they close its window
+  (`the approval window was closed`), when the site's last connection to the
+  wallet goes (`the site that asked is gone`: its tabs closed or navigated
+  away), or after 5 minutes (`approval timed out`).
 - If the wallet is locked when a prompt-worthy request arrives, the approval
   window doubles as an unlock screen.
 
