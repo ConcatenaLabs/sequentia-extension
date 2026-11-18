@@ -76,7 +76,13 @@ wasm. Read this before changing anything.
   moved out of the tree while the popup says so and asks again, `vendor/confidential-pay.js` and
   `src/confidential-send.js`). The leaf host boards on-chain assets
   and reads the mailbox every 10 s in default mode (`defaults`), or twice as long as its last
-  read took when that is longer, so a slow operator never keeps the library busy with reads. The payment name's link with the name service
+  read took when that is longer, so a slow operator never keeps the library busy with reads; in
+  either mode it reads it every tick while a receive request it handed out waits (the receive
+  code, the name's stocked codes: `requestWaits`). A coin paid to a code another store of the
+  phrase handed out is refused by the mailbox and taken in only by the library's catch-up, a step
+  of `sync` at most every ten minutes: on such a refusal the host syncs once that catch-up is due
+  (at once, unless it saw one run in the last nine minutes) and every 30 s until one has run
+  (`catchUpWait`, `catchUpSyncIn`, `src/leaf-schedule.js`). The payment name's link with the name service
   (`vendor/lnaddr.js` `mountLnAddress`) lives in `offscreen-ark.js` beside the ark that makes
   its invoices; it leaves the name's stock of signed receive codes with the service and tops it
   up (`vendor/name-stock.js`), each code made by the service worker at the index the stock picks

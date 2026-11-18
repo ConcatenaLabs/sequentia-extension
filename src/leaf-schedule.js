@@ -39,15 +39,77 @@ export function nextAskMs(schedule, tickMs) {
   return Math.max(0, Math.min(tickMs, (next - now) * 1000));
 }
 
-// Whether a receive request handed out within the last `windowSecs` (median time)
-// still waits. While one does, the host reads the mailbox on every tick, so a payment
-// a site asked for arrives in about a minute rather than at the library's next daily
-// sync. Past the window the library's own schedule applies again.
-export const FRESH_REQUEST_SECS = 3600;
-export function freshRequestWaits(schedule, windowSecs = FRESH_REQUEST_SECS) {
+// Whether a receive request this wallet handed out still waits, however long ago: the codes the
+// wallet's payment name leaves with the name service are such requests, handed out to payers up to
+// a day after they were made. While one waits, the host reads the mailbox on every tick in either
+// mode (default mode reads it every few seconds anyway), so a payment to the name or to an older
+// code shows within a tick instead of at the library's next daily sync.
+export function requestWaits(schedule) {
   if (!schedule || typeof schedule.now !== 'number') return false;
   return (schedule.receive_requests || []).some((r) => r.state === 'waiting' && r.owner !== 'restored'
-    && typeof r.asked_at === 'number' && schedule.now - r.asked_at < windowSecs);
+    && (typeof r.lapses_at !== 'number' || r.lapses_at > schedule.now));
+}
+
+// A coin paid to a receive request that another store of the phrase handed out (the phrase open in
+// another browser, in Ambra or in the web wallet, or a store this browser held before: the payment
+// name's stock keeps their codes until each is handed out or lapses). Every store of the phrase
+// reads it in its mailbox, and each one that never drew its owner nonce refuses it there; only the
+// library's catch-up between stores of one phrase, a step of `sync` that runs at most every ten
+// minutes, takes it in. So such a refusal is the sign that a payment to this wallet waits for a
+// catch-up: the host syncs once the catch-up is due (at once, unless the host saw one run within
+// the last CATCH_UP_EVERY_MS), and again every CATCH_UP_POLL_MS until a sync's catch-up has run to
+// its end, for at most CATCH_UP_WAIT_MS. The library's words for the refusal: "a coin for owner
+// nonce …, which this wallet never drew".
+export const NEVER_DREW = /which this wallet never drew/;
+export const CATCH_UP_POLL_MS = 30_000;
+export const CATCH_UP_WAIT_MS = 15 * 60_000;
+// The library's CATCH_UP_EVERY (600 median-time seconds), less a minute for the median time's
+// steps: before then a sync runs no catch-up.
+export const CATCH_UP_EVERY_MS = 9 * 60_000;
+export function phraseCoinRefused(mailbox) {
+  const refused = mailbox && Array.isArray(mailbox.refused) ? mailbox.refused : [];
+  return refused.some((r) => r && NEVER_DREW.test(String(r.reason || '')));
+}
+// Whether a sync's catch-up ran to its end: its `caught_up` is the catch-up's answer (null when
+// none ran), `{ error }` when it failed, and carries `more` when its time ran out before the end.
+export function caughtUpWhole(syncResult) {
+  const c = syncResult && syncResult.caught_up;
+  return !!c && typeof c === 'object' && c.error == null && !c.more;
+}
+// The host's wait for a catch-up (`w`: null, or { since, syncedAt }), after a mailbox read
+// (`mailbox`) or a sync (`sync`, the library's answer) at `now` (ms): a phrase coin refused starts
+// it (keeping the start of one under way), a sync whose catch-up ran whole ends it, and it ends by
+// itself CATCH_UP_WAIT_MS after it started. A sync's own mailbox step runs before its catch-up, so
+// a coin that sync refused and took in at once leaves nothing to wait for.
+export function catchUpWait(w, { mailbox = null, sync = null, now }) {
+  if (w && now - w.since >= CATCH_UP_WAIT_MS) w = null;
+  if (sync) {
+    if (caughtUpWhole(sync)) return null;
+    if (phraseCoinRefused(sync.mailbox)) return { since: w ? w.since : now, syncedAt: now };
+    return w ? { ...w, syncedAt: now } : null;
+  }
+  if (phraseCoinRefused(mailbox)) return w || { since: now, syncedAt: null };
+  return w;
+}
+// When the host last saw a sync run a catch-up to its end (`ranAt`, ms), after a sync's answer at
+// `now`: the library's ten minutes count from there. One cut short (`more`) reads on at the next
+// sync, so it is due at once again; one that failed is tried again at the next sync too.
+export function catchUpRanAt(ranAt, syncResult, now) {
+  const c = syncResult && syncResult.caught_up;
+  if (!c || typeof c !== 'object') return ranAt;
+  return c.more || c.error != null ? null : now;
+}
+// How long until the host syncs for the catch-up the wait holds (0: now; Infinity: no wait): once
+// the library's catch-up is due again (CATCH_UP_EVERY_MS after `ranAt`, the last one seen run), and
+// every CATCH_UP_POLL_MS after the last sync, until the wait ends.
+export function catchUpSyncIn(w, now, ranAt = null) {
+  if (!w || now - w.since >= CATCH_UP_WAIT_MS) return Infinity;
+  const due = ranAt == null ? 0 : ranAt + CATCH_UP_EVERY_MS - now;
+  const poll = w.syncedAt == null ? 0 : w.syncedAt + CATCH_UP_POLL_MS - now;
+  return Math.max(0, due, poll);
+}
+export function catchUpSyncDue(w, now, ranAt = null) {
+  return catchUpSyncIn(w, now, ranAt) === 0;
 }
 
 // What the wallet does by itself, in either mode, is the library's `care`: after a sync,

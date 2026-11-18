@@ -18,6 +18,16 @@
 // and a schedule that falls due becomes `leafSyncDue`, sent to the service worker,
 // which relays them to connected sites.
 //
+// While a receive request the wallet handed out waits (the receive code, a code of the payment
+// name's stock, however long ago it was made), it reads the mailbox on every tick in either mode.
+// A coin paid to a code another store of the phrase handed out (the phrase open in another
+// browser, in Ambra or in the web wallet, or a store this browser held before) is refused by this
+// store's mailbox and taken in only by the library's catch-up, a step of `sync` that runs at most
+// every ten minutes: a mailbox read that refuses one has the host sync once the catch-up is due (at
+// once, unless it saw one run in the last nine minutes) and every 30 s until a sync's catch-up has
+// run (`catchUpWait`, `catchUpSyncIn`), each without the watchtowers' step; what that catch-up
+// takes in becomes `leafArrived` as well.
+//
 // After every sync and every command that can change a balance, it reports the library's
 // `balance` as `leafBalance`, which the service worker keeps for the popup, with what of
 // each asset its issuer has frozen for this wallet (`frozen`: held leaves of a supervised
@@ -87,7 +97,7 @@
 // change, `channelsChanged` is sent, and the receive code is made again to name them.
 // The mnemonic is handed to the worker and not kept here.
 
-import { inFlight, nextAskMs, freshRequestWaits, readUntil, syncDecision, careDue, careSummary, careArgs, payThrough, CARE_EVERY_MS, laterMode,
+import { inFlight, nextAskMs, requestWaits, catchUpWait, catchUpSyncDue, catchUpSyncIn, catchUpRanAt, readUntil, syncDecision, careDue, careSummary, careArgs, payThrough, CARE_EVERY_MS, laterMode,
   channelPollMs, channelArrivals, payableChannels } from './src/leaf-schedule.js';
 import { frozenAtoms, holdingRefusal } from './src/leaf-profiles.js';
 import { redoingAtoms } from './vendor/default-arca.js';
@@ -286,16 +296,30 @@ function arrivals(mailbox) {
     S.arrived = [...(S.arrived || []).slice(-49), { asset: String(c.asset || '').toLowerCase(), at: Date.now() }];
     emit('leafArrived', { leaf_id: c.leaf_id, asset: c.asset, value: String(c.value ?? ''), kind: c.kind });
   }
+  noteCatchUp({ mailbox });
 }
 
-async function sync(by, prio = UPKEEP) {
+// A coin paid to a code another store of the phrase handed out waits for the library's catch-up
+// (src/leaf-schedule.js catchUpWait): a mailbox read that refused one has the host sync at once,
+// and again every CATCH_UP_POLL_MS until a sync's catch-up has run.
+function noteCatchUp(x) {
+  const was = S.catchUp;
+  S.catchUp = catchUpWait(S.catchUp, { ...x, now: Date.now() });
+  if (!was && S.catchUp) {
+    const ms = catchUpSyncIn(S.catchUp, Date.now(), S.catchUpRanAt);
+    console.info(`[leaves] a payment to a code another wallet of the phrase handed out: the catch-up that takes it in runs in ${Math.round(ms / 1000)} s`);
+    if (!ticking) plan(Math.max(0, ms));
+  }
+}
+
+async function sync(by, prio = UPKEEP, args = {}) {
   if (S.syncing) return await S.syncing;
-  const p = S.syncing = syncOnce(by, prio);
+  const p = S.syncing = syncOnce(by, prio, args);
   try { return await p; } finally { if (S.syncing === p) S.syncing = null; }
 }
-async function syncOnce(by, prio) {
+async function syncOnce(by, prio, args) {
   const t0 = Date.now();
-  const v = await call('run', { command: 'sync', args: {} }, prio);
+  const v = await call('run', { command: 'sync', args }, prio);
   S.lastSyncValue = v;
   S.mailReadAt = S.mailReadEnd = Date.now();   // a sync reads the mailbox
   const r = (v && v.result) || {};
@@ -315,7 +339,17 @@ async function syncOnce(by, prio) {
   else if (cu && ((cu.restored || []).length || (cu.given_elsewhere || []).length)) {
     console.info(`[leaves] caught up: ${(cu.restored || []).length} coin(s) taken in, ${(cu.given_elsewhere || []).length} given up by another wallet of the phrase`);
   }
+  const waited = !!S.catchUp;
   arrivals(r.mailbox);
+  S.catchUpRanAt = catchUpRanAt(S.catchUpRanAt, r, Date.now());
+  noteCatchUp({ sync: r });
+  // What the catch-up took in for a payment the host waited on is said as an arrival, as a mailbox's.
+  if (waited && cu && !cu.error) {
+    for (const c of cu.restored || []) {
+      S.arrived = [...(S.arrived || []).slice(-49), { asset: String(c.asset || '').toLowerCase(), at: Date.now() }];
+      emit('leafArrived', { leaf_id: c.leaf_id, asset: c.asset, value: String(c.value ?? ''), kind: c.kind });
+    }
+  }
   noteUnreachable(unreachableOf(r, 'sync'));
   emit('leafSynced', { by, mailbox: r.mailbox || null });
   try {
@@ -592,10 +626,9 @@ async function readMailboxNow() {
     const t0 = Date.now();
     const mb = (await call('run', { command: 'mailbox' })).result;
     S.mailCostMs = Date.now() - t0;
-    if (mb && ((mb.accepted || []).length || (mb.pending || []).length)) {
-      arrivals(mb);
-      await reportBalance();
-    }
+    // Its refusals too: one of a coin paid to another store's code has the host sync for it.
+    arrivals(mb);
+    if (mb && ((mb.accepted || []).length || (mb.pending || []).length)) await reportBalance();
   } catch { /* the next read tries again */ } finally { S.mailReadEnd = Date.now(); }
 }
 // Between two commands of the scheduled pass: the reads that show a payment to this wallet, when
@@ -652,10 +685,14 @@ async function tick() {
     if (!d.sync && S.syncOnOpen) d = { sync: true, why: 'open' };
     // Asked for by a quote that found coins not ready yet (`syncSoon`).
     if (!d.sync && S.syncAsked) d = { sync: true, why: 'asked' };
+    // A payment to a code another store of the phrase handed out, which only the catch-up takes in.
+    S.catchUp = catchUpWait(S.catchUp, { now: Date.now() });
+    if (!d.sync && catchUpSyncDue(S.catchUp, Date.now(), S.catchUpRanAt)) d = { sync: true, why: 'catch up' };
     await giveWay();
     if (d.sync) {
       S.watchPending = false; S.syncAsked = false;
-      await sync(d.why);
+      // A sync for the catch-up alone leaves out the watchtowers' step, which nobody waits on.
+      await sync(d.why, UPKEEP, d.why === 'catch up' ? { deposits: false } : {});
       S.syncOnOpen = false;
       await giveWay();
       await careIfDue();
@@ -671,9 +708,12 @@ async function tick() {
       await claimsIfDue(true);
       await giveWay();
       await watchBond();
-    } else if (freshRequestWaits(s)) {
-      // A request just handed out: read the mailbox, not the whole sync.
-      const mb = (await call('run', { command: 'mailbox' })).result;
+    } else if (requestWaits(s) && mailboxDue()) {
+      // A request handed out still waits (the receive code, the payment name's codes): read the
+      // mailbox, not the whole sync.
+      S.mailReadAt = Date.now();
+      let mb = null;
+      try { mb = (await call('run', { command: 'mailbox' })).result; } finally { S.mailReadEnd = Date.now(); }
       if (mb && mb.accepted && mb.accepted.length) console.info(`[leaves] mailbox read (a request waits): accepted ${mb.accepted.length}`);
       arrivals(mb);
       if (mb && mb.accepted && mb.accepted.length) await reportBalance();
@@ -695,6 +735,7 @@ async function tick() {
     S.lastError = null;
     wait = inFlight(S.coins, S.participations) ? Math.min(S.tickMs, 30_000) : nextAskMs(S.schedule, S.tickMs);
     if (takeWaits()) wait = Math.min(wait, S.watchMs);
+    wait = Math.min(wait, catchUpSyncIn(S.catchUp, Date.now(), S.catchUpRanAt));
   } catch (e) {
     // Given way to a person: the rest of the pass at the next tick, soon.
     if (e === HELD) wait = 5000;

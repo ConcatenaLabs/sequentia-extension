@@ -707,10 +707,13 @@ Returns the library's answer:
   details: { owner, mailbox, exit_delay_units, until, asset?, value?, … } }
 ```
 `until` is the median time at which the request lapses; nobody pays it after
-that. The payment arrives in the wallet's mailbox. For an hour after a request
-is handed out the wallet reads its mailbox about once a minute; after that the
-library's schedule reads it at least daily until the request is paid or lapses.
-Each coin read fires `leafArrived`.
+that. The payment arrives in the wallet's mailbox. While a request the wallet
+handed out waits, the wallet reads its mailbox about once a minute (every few
+seconds in default mode) until the request is paid or lapses. A payment to a
+request another wallet of the same phrase handed out is taken in by the
+library's catch-up between the phrase's wallets, which the wallet runs as soon
+as its mailbox shows such a payment, within the library's ten minutes between
+catch-ups. Each coin read fires `leafArrived`.
 
 The approval window says the site asks for a receive request for leaves, and
 shows the asset and the amount, or "any" for each left out.
