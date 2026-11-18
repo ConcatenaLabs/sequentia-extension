@@ -16,7 +16,7 @@
 //   node --test test/upkeep-pass-ends.test.mjs
 import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
-import { siteContext, siteLeaves } from '../src/site-context.js';
+import { siteSide } from '../src/site-context.js';
 
 // The library: every command takes `cost(command)` ms of the worker's time, one at a time. Each call
 // records the priority the host ran it at (its `leafHostDiag().running`, when the host has one).
@@ -631,7 +631,7 @@ async function fourRoutes(routes) {
   const t0 = Date.now();
   const asked = [];
   let k = 0, sendAt = null;
-  const end = routes.open ? await routes.open() : null;
+  const end = routes.open ? await routes.open(ask) : null;
   await advance(3 * 60_000, 50, () => {
     asked.push(...routes(ask, k++));
     if (Date.now() - t0 === 120_000) { const t = Date.now(); asked.push(ask('run', { command: 'send', args: { request: 'r' }, paying: true, from: 'default-mode.js:829 confirmSend' }).then((r) => { sendAt = Date.now() - t; return r; })); }
@@ -645,19 +645,22 @@ async function fourRoutes(routes) {
 
 test('a site keeping the four routes of the trade engine and the market full: the person\'s own send answers within its bound', timed(async () => {
   const ORIGIN = 'https://site.example';
-  // As the service worker now asks them: the engine and the review through siteLeaves inside the
-  // site's span (src/site-trade.js), the market's reads with the origin (src/market.js).
-  const ctx = siteContext();
-  let endSpan = null;
+  // As the service worker now asks them: the site's engine and review through its own side, inside
+  // its request (src/site-trade.js, src/site-context.js), the market's reads with the origin.
+  let side = null;
   const now = (ask, k) => {
-    const engine = siteLeaves(ctx, shims(ask, 'site-trade.js:76').runUser);
-    const review = siteLeaves(ctx, shims(ask, 'site-trade.js:113').runUser);
     const market = shims(ask, 'market.js:331');
     const resting = shims(ask, 'leaf-resting.js:250');
-    return [engine.command('take_quote', { k }), review.command('order_quote', { k }),
+    return [side.leaves.command('take_quote', { k }), side.leaves.command('order_quote', { k }),
       market.run('info', { k }, { origin: ORIGIN }), resting.run('order_fill_resting_quote', { order: 'o', k }, { origin: ORIGIN })];
   };
-  now.open = async () => { ctx.site(ORIGIN, () => new Promise((r) => { endSpan = r; })); return () => endSpan(); };
+  // The site's request open throughout (its quote under way).
+  now.open = async (ask) => {
+    side = siteSide(ORIGIN, shims(ask, 'site-trade.js engine').runUser);
+    let end;
+    side.asking(() => new Promise((r) => { end = r; }));
+    return () => end();
+  };
   const after = await fourRoutes(now);
   // As master asked them: the engine's held quote and the review as the person's, the market's
   // reads with no origin.
@@ -669,4 +672,87 @@ test('a site keeping the four routes of the trade engine and the market full: th
   assert.deepEqual(after.prios, [1.5], 'every route at SITE');
   assert.ok(after.mail >= 10);
   assert.ok(before.sendAt > 5000, 'the delay the fix removes');
+}));
+
+// The review of the first span design (one wallet-wide counter): whatever one site asks can never
+// make another site's approved trade, or its quote, its own. Each site has its own side.
+const GOOD = 'https://good.example', EVIL = 'https://evil.example';
+// The engine's confirmation as the vendored engine runs it: inside its hold, for as long as it goes
+// on (a settle, a purchase), the review answering the site after SITE_ANSWER_MS meanwhile.
+const confirmLike = (side, steps, ms) => side.leaves.hold(async () => {
+  const out = [];
+  for (const [cmd, args] of steps) { out.push(await side.leaves.command(cmd, args)); await new Promise((r) => setTimeout(r, ms)); }
+  return out;
+});
+
+test('an evil site\'s full line cannot refuse or demote the person\'s approved trade for another site', timed(async () => {
+  const L = library({ cost: (c) => (c === 'take_quote' ? 200 : c === 'sync' ? 2000 : 40) });
+  const { ask } = await opened({ L });
+  const opts = [];
+  // As src/leaves.js runUser: the library's answer, or its refusal thrown.
+  const shim = (from) => (command, args, o = {}) => { opts.push({ command, args, ...o }); return ask('run', { command, args, paying: true, person: o.person || undefined, site: o.origin || undefined, from }).then((r) => { if (!r.ok) throw r.error; return r.value.result; }); };
+  const evil = siteSide(EVIL, shim('evil'));
+  const good = siteSide(GOOD, shim('good'));
+  // Evil keeps a quote's request open and its line full, refilling as each is answered.
+  let open = true, k = 0;
+  // Refilled at once when answered, 50 ms after a refusal.
+  const fill = () => { if (!open) return; evil.leaves.command('take_quote', { k: k++ }).then(fill, () => setTimeout(fill, 50)); };
+  let endEvil;
+  const span = evil.asking(() => new Promise((r) => { endEvil = r; }));
+  for (let i = 0; i < 20; i++) fill();
+  await advance(10_000, 50);
+  // The person approves a trade for good.example: the review places, the engine confirms (its
+  // hold), and the review answers the site before the confirmation ends.
+  const t0 = Date.now();
+  const approved = good.approving(async () => {
+    const place = await good.leaves.command('order_place', { k: 'g' });
+    const confirming = confirmLike(good, [['orders', {}], ['take', { k: 'g' }], ['coins', { k: 'later' }]], 5000);
+    await Promise.race([confirming, new Promise((r) => setTimeout(r, 1000))]);
+    return { place, confirming };
+  });
+  const r = await within(approved, 30_000);
+  assert.ok(r.done && r.value && r.value.confirming, `the approved step answered, not refused: ${r.value && r.value.error ? JSON.stringify(r.value.error) : ''}`);
+  const c = await within(r.value.confirming, 60_000);
+  open = false; endEvil();
+  await within(span, 5000);
+  const mine = L.calls.filter((x) => x.at >= t0 && ['order_place', 'orders', 'take'].includes(x.command) || (x.command === 'coins' && x.args && x.args.k === 'later'));
+  const asked = opts.filter((o) => ['order_place', 'orders', 'take'].includes(o.command) || (o.command === 'coins' && o.args.k === 'later'));
+  say(`evil's full line: the person's approved trade for good ran ${mine.map((x) => x.command + ':' + x.prio).join(', ')}, asked as ${JSON.stringify(asked.map((o) => o.person ? 'person' : o.origin || 'own'))}; ${c.done && Array.isArray(c.value) ? 'answered' : 'refused: ' + JSON.stringify(c.value)} in ${Date.now() - t0} ms; evil refused ${opts.filter((o) => o.origin === EVIL).length - L.calls.filter((x) => x.command === 'take_quote').length} times`);
+  assert.ok(c.done && Array.isArray(c.value), 'the whole confirmation ran, nothing of it refused');
+  assert.ok(asked.length === 4 && asked.every((o) => o.person && !o.origin), 'every step of it the person\'s, the steps after the site was answered included');
+  assert.ok(mine.length === 4 && mine.every((x) => x.prio === 3), 'at PERSON, never SITE');
+  await within(ask('stop'), 10_000);
+}));
+
+test('a site polling while its own approved order goes on cannot demote it; another site\'s quote never shares an open site\'s key', timed(async () => {
+  const L = library({ cost: (c) => (c === 'sync' ? 2000 : 40) });
+  const { ask } = await opened({ L });
+  const opts = [];
+  const shim = (from) => (command, args, o = {}) => { opts.push({ command, args, ...o, side: from }); return ask('run', { command, args, paying: true, person: o.person || undefined, site: o.origin || undefined, from }).then((r) => { if (!r.ok) throw r.error; return r.value.result; }); };
+  const good = siteSide(GOOD, shim('good'));
+  const evil = siteSide(EVIL, shim('evil'));
+  const other = siteSide('https://other.example', shim('other'));
+  // Good's own approved order goes on (its confirmation's hold) while good polls what it can spend.
+  let polling = true;
+  const poll = async () => { while (polling) { await good.asking(() => good.leaves.command('coins', { brief: true })); await new Promise((r) => setTimeout(r, 300)); } };
+  const p = poll();
+  const confirming = good.approving(() => confirmLike(good, [['order_place', {}], ['orders', {}], ['participations', {}]], 2000));
+  // Evil has a request open throughout; another site's quote meanwhile (its own request and hold).
+  let endEvil;
+  const evilSpan = evil.asking(() => new Promise((r) => { endEvil = r; }));
+  evil.leaves.command('take_quote', { e: 1 });
+  const quote = other.asking(() => other.leaves.hold(async () => other.leaves.command('take_quote', { g: 1 })));
+  await within(Promise.all([confirming, quote]), 30_000);
+  polling = false; endEvil();
+  await within(Promise.all([p, evilSpan]), 5000);
+  const steps = opts.filter((o) => o.side === 'good' && ['order_place', 'orders', 'participations'].includes(o.command));
+  const goodQuote = opts.find((o) => o.side === 'other' && o.command === 'take_quote');
+  const evilQuote = opts.find((o) => o.side === 'evil' && o.command === 'take_quote');
+  const polls = opts.filter((o) => o.side === 'good' && o.command === 'coins');
+  say(`good polling during its approved order: the order's steps asked as ${JSON.stringify(steps.map((o) => o.person ? 'person' : o.origin))}; its polls as ${[...new Set(polls.map((o) => o.person ? 'person' : o.origin))].join(',')}; another site's quote beside evil's open request as ${goodQuote.origin}, evil's as ${evilQuote.origin}`);
+  assert.ok(steps.length === 3 && steps.every((o) => o.person && !o.origin), 'the approved order the person\'s throughout');
+  assert.equal(goodQuote.origin, 'https://other.example', 'another site\'s quote under its own origin, never evil\'s');
+  assert.equal(evilQuote.origin, EVIL);
+  assert.ok(!opts.some((o) => o.origin === 'several sites'), 'no shared key');
+  await within(ask('stop'), 10_000);
 }));

@@ -248,10 +248,11 @@ test('a read the trade composer asks while nobody waits is the wallet’s own wo
   assert.match(pr, /return await leaves\.run\('send', \{ request: text, asset: plan\.asset, amount: plan\.amount \}\);/);
   const popup = readFileSync(new URL('../popup/popup.js', import.meta.url), 'utf8');
   assert.match(popup, /rpc\('default\.leaf', \{ command: cmd, args: args \|\| \{\}, person: tradeHolds > 0 \}\)/);
-  // A site's trade engine and review: whose each command is comes from the site's request's span
+  // A site's trade engine and review: whose each command is comes from that site's own side
   // (src/site-context.js, test/site-context.test.mjs).
   const site = readFileSync(new URL('../src/site-trade.js', import.meta.url), 'utf8');
-  assert.equal((site.match(/leaves: siteLeaves\(ctx, leaves\.runUser\)/g) || []).length, 2);
+  assert.match(site, /leaves: side\.leaves,/, 'each site\'s engine asks through its own side');
+  assert.match(site, /leaves: \{ command: side\.leaves\.command \},/, 'and its review');
   const dm = readFileSync(new URL('../src/default-mode.js', import.meta.url), 'utf8');
   assert.match(dm, /async function leafInfo\(\) \{\n  return await leaves\.ask\('info'\);/);
   assert.match(dm, /const b = await leaves\.ask\('balance'\);/, 'what the tree holds, before a send');
