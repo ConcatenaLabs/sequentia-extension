@@ -13,14 +13,32 @@
 //                              learns the preimage from it, and claims. The wallet then hands
 //                              the preimage to the operator too, so its own payment is settled
 //                              even if the maker never claims.
-//   buying an asset with BTC   the maker makes a Bitcoin invoice; the wallet asks to receive the
-//                              asset under its hash; the maker's leaf pays it; once the wallet's
-//                              leaf has come and is final, with its home date far enough off, the
-//                              wallet pays the maker's invoice, learns the preimage, hands it to
-//                              the operator at once (so any device of the wallet claims, the page
-//                              open or not), and claims.
-// Neither side can take what it gets before paying: the leaf received under the hash opens only
-// with the preimage, and the preimage comes out only when the BTC is paid.
+//   buying an asset with BTC   the maker makes a Bitcoin invoice; the wallet asks for the asset
+//                              under its hash, two ways at once, and the maker takes one:
+//                              - a lock straight to the wallet (`htlc-2`, the library's
+//                                `lock_request`), when the maker offers it (its firm answer's
+//                                `lock`), the operator co-signs locks and the lock fits the
+//                                wallet's instant limit: the maker's coins move into a leaf the
+//                                wallet claims with the preimage and the maker takes back by
+//                                script from its timeout. It is the wallet's at once, out of
+//                                round, so the wallet pays once `lock_ready` says it is held (its
+//                                record the request's, its rounds final, its home date far
+//                                enough off): no round is waited for. Just before it pays, the
+//                                library marks the lock paid (`lock_paid`), so it is taken home
+//                                at its home date unless claimed;
+//                              - a receive through the operator (`htlc-1`), which the maker's leaf
+//                                pays: the wallet's leaf is made in the operator's next round, and
+//                                the wallet pays once that leaf is held and final, with its home
+//                                date far enough off.
+//                              Either way the wallet then pays the maker's invoice, learns the
+//                              preimage, hands it to the operator at once (so any device of the
+//                              wallet claims, the page open or not), and claims.
+// Neither side can take what it gets before paying: the lock or the leaf received under the hash
+// opens to the wallet only with the preimage (a lock comes back to the maker by script from its
+// timeout), and the preimage comes out only when the BTC is paid.
+//
+// deps.refAtoms(asset, atoms), when given: what `atoms` of `asset` are worth in reference atoms at the
+// node's fee rate (null when the node gives none), the measure of the library's instant limit.
 //
 // deps.btc, the wallet's Bitcoin Lightning (null when it has none): balance(), invoice({sats}),
 // decode(invoice), invoiceStatus(hash), cancelInvoice(hash), pay({invoice, maxFeeSats, maxDelay}),
@@ -48,11 +66,58 @@ export const REACTION_SECONDS = 3600
 export const MAKER_LOCK_MS = 5 * 60 * 1000
 // A Bitcoin invoice the wallet pays must have at least this long to run.
 export const INVOICE_LEFT_SECONDS = 600
+// Buying with BTC on a lock straight from the maker, the wait the page states before the library's
+// first answer: what the maker's lock usually takes, and the wallet's read of it. No rule bounds it:
+// past MAKER_LOCK_MS the trade comes back.
+export const LOCK_WAIT_MS = 60 * 1000
+// What a lock's timeout leaves beyond the earliest the wallet's payment can use it, for the time
+// between asking for the lock and paying (the maker's lock landing, the wallet reading it).
+export const LOCK_PAY_SLACK_SECONDS = 1800
+// What the maker adds to the earliest timeout the wallet takes (the desk's LOCK_SPARE_SECONDS).
+export const LOCK_SPARE_SECONDS = 3600
+// A purchase found ready longer ago than this, its BTC not paid yet (the page closed, the wallet's
+// Lightning did not answer), is checked to be held still before the BTC goes out.
+export const RECHECK_MS = 10 * 1000
 
 // The seconds of median time the leaf received under the hash must keep before its home date,
 // for a Bitcoin payment of an invoice whose final delta is `minFinalCltv` blocks.
 export function needSeconds (minFinalCltv) {
   return (Number(minFinalCltv || 18) + EXTRA_BLOCKS) * BITCOIN_BLOCK_SECONDS + REACTION_SECONDS
+}
+
+// Whether the operator, by its `info` (the leaf library's `server_info`), co-signs locks between two
+// holders (`htlc-2`).
+export function operatorLocks (serverInfo) {
+  const l = serverInfo && serverInfo.templates && serverInfo.templates.list
+  return Array.isArray(l) && l.includes('htlc-2')
+}
+
+// The earliest timeout (a median time) the wallet takes for a lock it pays for with a Bitcoin
+// payment that needs `need` seconds (needSeconds): its home date, the timeout less the unroll of its
+// path (the library allows the larger of two blocks a step and the operator's unroll; twice the
+// unroll is taken here), its exit delay and ten minutes, still `need` and the slack away. `info` is
+// the leaf library's `info`. -> the median time, or null when the lock would run past the
+// operator's furthest with the maker's spare hour.
+export function lockMinTimeout (info, need, nowSeconds) {
+  const median = Number(info && info.tip && info.tip.median_time) || nowSeconds
+  const si = (info && info.server_info) || {}
+  const exit = Number((info && info.exit_delay_units) || 0) * 512
+  const unroll = Number(si.locks && si.locks.unroll_seconds) || 3600
+  const t = median + Number(need) + exit + 2 * unroll + 600 + LOCK_PAY_SLACK_SECONDS
+  const most = Number(si.locks && si.locks.max_seconds) || 14 * 86400
+  return t + LOCK_SPARE_SECONDS <= median + most ? t : null
+}
+
+// Whether a lock of `atoms` of `asset` fits the wallet's instant room now, by the library's
+// `coin_places` (`instant_limit.room`, in reference atoms) and the asset's worth (`refAtoms`): always
+// while the wallet sets no limit; never while the asset has no rate. A lock goes into no round, so
+// one past the room would never be held: it is not asked for. Nine tenths of the room, for the
+// coins that arrive meanwhile.
+export function lockFits (places, worth) {
+  const lim = places && places.instant_limit
+  if (!lim) return true
+  if (worth == null) return false
+  return big(worth) * 10n <= big(lim.room) * 9n
 }
 
 export function btcTrades ({ run, deps, put, log, now, settleStep, maxFeePpm, firmMarginMs }) {
@@ -200,16 +265,76 @@ export function btcTrades ({ run, deps, put, log, now, settleStep, maxFeePpm, fi
     const r = await run('lightning_receive', { asset: rec.receiveAsset, amount: choice.btc.receiveQuote.amount, hash: rec.hash, max_fee_ppm: maxFeePpm })
     if (r.fee !== choice.btc.receiveQuote.fee || r.value !== choice.btc.receiveQuote.value) throw new Error('the receive changed since it was shown')
     rec.invoiceX = r.invoice
-    // Nothing of the wallet's is locked until it pays the BTC, which waits for its leaf. From here
-    // the trade is under way whatever the maker answers now: a lock it refused is asked for again
-    // as the trade is followed, and a receive it never pays lapses and the trade comes back.
-    rec.state = 'waiting'; rec.waitingSince = now()
-    // What the page says the wait is before the library's first answer: the library's own figure for
-    // a leaf made by the operator's next round (settleMinutes, its step "round").
-    rec.waitFirstBy = rec.waitingSince + settleMinutesOf(await run('info').catch(() => null)) * 60_000
     put(rec)
-    try { await post(rec.maker + '/v1/btc/lock', { swap: rec.swap, invoice: r.invoice }) } catch (e) { log('[user trade] the maker did not lock yet:', e.message) }
+    // The asset as a lock straight from the maker too, when it offers one: the receive stays, for a
+    // maker that locks through the operator instead.
+    const info = await run('info').catch(() => null)
+    const lockReq = await askLock(rec, o, info, choice.btc.receiveQuote.amount)
+    // Nothing of the wallet's is locked until it pays the BTC, which waits for its asset to be held.
+    // From here the trade is under way whatever the maker answers now: a lock it refused is asked for
+    // again as the trade is followed, and one it never makes lapses and the trade comes back.
+    rec.state = 'waiting'; rec.waitingSince = now()
+    // What the page says the wait is before the library's first answer: on a lock straight from the
+    // maker, the maker's lock (LOCK_WAIT_MS); through the operator, the library's own figure for a
+    // leaf made by the operator's next round (settleMinutes, its step "round").
+    rec.waitFirstBy = rec.waitingSince + (lockReq ? LOCK_WAIT_MS : settleMinutesOf(info) * 60_000)
+    put(rec)
+    try { await post(rec.maker + '/v1/btc/lock', lockBody(rec)) } catch (e) { log('[user trade] the maker did not lock yet:', e.message) }
     return rec
+  }
+
+  // What the wallet asks the maker to lock: the receive's invoice, and the lock request when it made one.
+  const lockBody = (rec) => ({ swap: rec.swap, invoice: rec.invoiceX, ...(rec.leg === 'htlc-2' && rec.lockRequest ? { lock: rec.lockRequest } : {}) })
+
+  // The wallet's lock request for a purchase (`lock_request`), when the maker's offer `o` locks that
+  // way, the operator co-signs locks, the lock fits the instant room and its timeout the operator's
+  // furthest: kept on the record (`leg` 'htlc-2'). -> the request, or null (the purchase then waits
+  // for its leaf through the operator, as before).
+  async function askLock (rec, o, info, amount) {
+    if (!(Array.isArray(o.lock) && o.lock.includes('htlc-2'))) return null
+    try {
+      if (!info || !operatorLocks(info.server_info)) return null
+      const worth = deps.refAtoms ? deps.refAtoms(rec.receiveAsset, amount) : null
+      if (!lockFits(await run('coin_places'), worth)) { log('[user trade] a lock of', String(amount), 'would not fit the instant room: through the operator'); return null }
+      const min = lockMinTimeout(info, needSeconds(rec.routeDelay || rec.minFinalCltv), Math.floor(now() / 1000))
+      if (min == null) return null
+      const req = await run('lock_request', { asset: rec.receiveAsset, amount: String(amount), hash: rec.hash, min_timeout: min })
+      rec.leg = 'htlc-2'; rec.lockRequest = req; put(rec)
+      return req
+    } catch (e) { log('[user trade] no lock asked:', e.message); return null }
+  }
+
+  // Buying on a lock straight from the maker, while waiting: -> 'pay' once the lock is held (the
+  // record is then 'sent'), 'wait' while it is not yet, 'htlc-1' when the maker paid the receive
+  // through the operator instead (the record goes on as such).
+  async function waitLock (rec, rcv) {
+    let r
+    try { r = await run('lock_ready', { hash: rec.hash, need_seconds: needSeconds(rec.routeDelay || rec.minFinalCltv) }) } catch (e) {
+      // Only the library's refusal says the lock will never do (nothing of the wallet's has left);
+      // an operator that does not answer now is asked again.
+      if (!(e && (e.kind === 'refused' || /^refused\b/i.test(String(e.message))))) { log('[user trade] not ready yet:', e.message); return 'wait' }
+      log('[user trade] the lock will not do:', e.message); rec.state = 'returned'; rec.returnedAt = now(); rec.why = e.message; return 'wait'
+    }
+    if (r.ready) { rec.receiveState = 'held'; rec.state = 'sent'; rec.sentAt = now(); rec.paying = true; put(rec); return 'pay' }
+    if (/has not come/.test(String(r.why || ''))) {
+      // The maker paid the receive through the operator instead: the purchase goes on that way.
+      if (rcv.state && rcv.state !== 'waiting' && rcv.state !== 'failed') { rec.leg = 'htlc-1'; log('[user trade] the maker locked through the operator'); return 'htlc-1' }
+      // A maker that has not locked by now is not going to: nothing of the wallet's has moved, so
+      // the trade comes back and the maker lets its offer go.
+      if (now() - (rec.waitingSince ?? rec.at ?? now()) >= MAKER_LOCK_MS) {
+        release(rec.maker, rec.swap)
+        rec.state = 'returned'; rec.returnedAt = now(); rec.why = 'the maker did not lock its side in time'; return 'wait'
+      }
+      post(rec.maker + '/v1/btc/lock', lockBody(rec)).catch(() => {})
+      rec.waitBy = { finalBy: (rec.waitingSince ?? rec.at) + MAKER_LOCK_MS, step: 'payment' }
+      return 'wait'
+    }
+    // The lock has come and is not held yet (the round its coins rest on is not final): a round's
+    // wait at most, as the library's settle states it.
+    rec.receiveState = 'held'
+    if (rec.notReady !== (r.why || '')) { rec.notReady = r.why || ''; log('[user trade] the lock is not held yet:', rec.notReady) }
+    if (!rec.waitBy || rec.waitBy.step === 'payment') rec.waitBy = { finalBy: now() + settleMinutesOf(await run('info').catch(() => null)) * 60_000, step: 'round' }
+    return 'wait'
   }
 
   async function advance (rec) {
@@ -250,7 +375,12 @@ export function btcTrades ({ run, deps, put, log, now, settleStep, maxFeePpm, fi
   // Buying: wait for the leaf, then pay the BTC, then claim and settle the leaf.
   async function advanceBuy (rec) {
     const rcv = ((await run('lightning_receives')) || {})[rec.hash] || {}
-    rec.receiveState = rcv.state || null
+    if (rec.leg !== 'htlc-2') rec.receiveState = rcv.state || null
+    if (rec.state === 'waiting' && rec.leg === 'htlc-2') {
+      const next = await waitLock(rec, rcv)
+      if (next === 'wait') return put(rec)
+      if (next === 'htlc-1') rec.receiveState = rcv.state || null
+    }
     if (rec.state === 'waiting') {
       if (rcv.state === 'failed') { rec.state = 'returned'; rec.returnedAt = now(); return put(rec) }
       // A maker that has not paid the asset in by now is not going to: nothing of the wallet's has
@@ -297,6 +427,7 @@ export function btcTrades ({ run, deps, put, log, now, settleStep, maxFeePpm, fi
           return put(rec)
         }
       }
+      if (st.state === 'none' && (await beforePay(rec)) !== 'pay') return put(rec)
       if (st.state === 'none') st = await B().pay({ invoice: rec.invoiceBtc, maxFeeSats: big(rec.routeFee), maxDelay: Number(rec.routeDelay || rec.minFinalCltv || 18) + EXTRA_BLOCKS })
       if (st.state === 'failed') {
         // Nothing was paid: the leaf stays unclaimed and goes back to the maker.
@@ -309,24 +440,83 @@ export function btcTrades ({ run, deps, put, log, now, settleStep, maxFeePpm, fi
       // this page staying open: the operator serves it, and the wallet on any device (one restored
       // from the phrase included) claims the asset at its next sync. Safe to hand on: it opens the
       // wallet's leaf only with the wallet's own key, and the maker, paid, knows it already.
-      await postPreimage(rec)
-      await run('lightning_receive_preimage', { hash: rec.hash, preimage: st.preimage })
+      // On a lock straight from the maker, `lock_preimage` does all of it: the preimage kept, handed
+      // to the operator and the wallet's watchtowers, and the lock claimed out of round.
+      if (rec.leg === 'htlc-2') await handLock(rec)
+      else {
+        await postPreimage(rec)
+        await run('lightning_receive_preimage', { hash: rec.hash, preimage: st.preimage })
+      }
       await run('sync').catch((e) => log('[user trade] sync:', e.message))
     }
     // Handed on once more while the claim has not run, should the first try have failed.
-    if (rec.preimage && !rec.posted && rec.receiveState !== 'received') await postPreimage(rec)
+    if (rec.preimage && !rec.posted && rec.receiveState !== 'received') await (rec.leg === 'htlc-2' ? handLock(rec) : postPreimage(rec))
     if (rec.preimage) {
-      const r2 = ((await run('lightning_receives')) || {})[rec.hash] || {}
-      rec.receiveState = r2.state || null
-      if (r2.state !== 'received') return put(rec)
+      let leaf = null
+      if (rec.leg === 'htlc-2') {
+        const l = ((await run('locks').catch(() => null)) || []).find((x) => x && x.role === 'payee' && x.hash === rec.hash) || {}
+        rec.receiveState = l.state === 'claimed' ? 'received' : 'held'
+        // The claim is the library's (`lock_preimage` above, and every sync): read until it is made.
+        if (l.state !== 'claimed') return put(rec)
+        leaf = Array.isArray(l.claimed_into) ? l.claimed_into[0] : null
+      } else {
+        const r2 = ((await run('lightning_receives')) || {})[rec.hash] || {}
+        rec.receiveState = r2.state || null
+        if (r2.state !== 'received') return put(rec)
+        leaf = r2.leaf
+      }
       // The coin the claim made is the one settled, named by its id: its value is the quote's only
       // while the operator's fee rates hold, and a coin looked for by a value it no longer has is
       // never found.
-      if (r2.leaf && (rec.settleTargets || []).length === 1 && !rec.settleTargets[0].leaf_id) { rec.settleTargets = [{ ...rec.settleTargets[0], leaf_id: r2.leaf }]; put(rec) }
+      if (leaf && (rec.settleTargets || []).length === 1 && !rec.settleTargets[0].leaf_id) { rec.settleTargets = [{ ...rec.settleTargets[0], leaf_id: leaf }]; put(rec) }
       // The claimed coin is settled in the next round, at no more than the ticket's fee.
       if ((await settleStep(rec)) === 'settled') { rec.state = 'settled'; rec.settledAt = now() }
     }
     return put(rec)
+  }
+
+  // Just before the BTC goes out. A purchase found ready a while ago (RECHECK_MS: the page closed, or
+  // the wallet's Lightning did not answer, since) is checked to be held still, as when it was found
+  // ready: a lock or a leaf that will never do returns the trade, nothing paid; one not held yet
+  // sends it back to waiting. On a lock the library then marks it paid (`lock_paid`), kept before
+  // the BTC goes out: from the lock's home date the wallet takes it on the chain unless claimed,
+  // even if the page never learns the preimage and the operator neither co-signs the claim nor
+  // serves it. A library that cannot mark it never sees the BTC paid. -> 'pay', or 'wait' (the
+  // record says why).
+  async function beforePay (rec) {
+    const refused = (e) => !!e && (e.kind === 'refused' || e.kind === 'parse' || /^refused\b/i.test(String(e.message)))
+    if (now() - (rec.sentAt ?? rec.at ?? 0) > RECHECK_MS) {
+      const need = needSeconds(rec.routeDelay || rec.minFinalCltv)
+      let r
+      try { r = await run(rec.leg === 'htlc-2' ? 'lock_ready' : 'lightning_receive_ready', { hash: rec.hash, need_seconds: need }) } catch (e) {
+        if (!refused(e)) { log('[user trade] not checked again yet:', e.message); return 'wait' }
+        log('[user trade] no longer held:', e.message)
+        release(rec.maker, rec.swap)
+        rec.state = 'returned'; rec.returnedAt = now(); rec.why = e.message; return 'wait'
+      }
+      if (!r.ready) {
+        log('[user trade] not held any more, waiting again:', r.why || '')
+        rec.state = 'waiting'; rec.paying = false; rec.notReady = r.why || ''; return 'wait'
+      }
+      rec.sentAt = now(); put(rec)
+    }
+    if (rec.leg === 'htlc-2' && !rec.markedPaid) {
+      try { await run('lock_paid', { hash: rec.hash }); rec.markedPaid = true; put(rec) } catch (e) {
+        if (!refused(e)) { log('[user trade] the lock is not marked paid yet:', e.message); return 'wait' }
+        log('[user trade] the lock cannot be marked paid, so nothing is paid:', e.message)
+        release(rec.maker, rec.swap)
+        rec.state = 'returned'; rec.returnedAt = now(); rec.why = 'the wallet could not mark its lock paid: ' + e.message; return 'wait'
+      }
+    }
+    return 'pay'
+  }
+
+  // Hands the library the preimage of a purchase on a lock whose BTC is paid (`lock_preimage`: kept,
+  // posted to the operator and the watchtowers, the lock claimed); `rec.posted` once it took it. A
+  // claim that failed (the operator away) is made again by the library's sync, and asked again here.
+  async function handLock (rec) {
+    try { await run('lock_preimage', { hash: rec.hash, preimage: rec.preimage }); rec.posted = true; put(rec) }
+    catch (e) { log('[user trade] lock preimage:', e.message); if (/holds no lock/.test(String(e.message))) { rec.posted = true; put(rec) } }
   }
 
   // Hands the operator the preimage of a purchase whose BTC is paid; `rec.posted` once it took it.
