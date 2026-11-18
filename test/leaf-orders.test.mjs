@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { alreadyListed, takeStage, takeWaitsOnWallet, takeDone, takesToWatch, takeAnswer, postParams, postDue, offerTtl } from '../src/leaf-orders.js';
+import { alreadyListed, takeStage, takeWaitsOnWallet, takeDone, takesToWatch, takeAnswer, postParams, postDue, offerTtl, orderMargin } from '../src/leaf-orders.js';
+import { readFileSync } from 'node:fs';
 import { orderFromCovenantTerms } from '../vendor/covenant-order.js';
 
 const part = (state, extra = {}) => ({ participation: 't1', state, round: null, released: false, gives: [], new_leaves: [], ...extra });
@@ -60,4 +61,15 @@ test('the relay lists an order until its refund opens, within the relay\'s bound
 test('the relay\'s answer to a second post of a listed offer counts as listed', () => {
   assert.equal(alreadyListed('submit: offer 03ab/e3bb: offer already resting'), true);
   assert.equal(alreadyListed('is not an unspent output at the tip'), false);
+});
+
+test('an order is posted only once the operator\'s margin is known: a failed read of its info posts nothing', () => {
+  assert.equal(orderMargin(null), null, 'not read: unknown, not 0');
+  assert.equal(orderMargin(undefined), null);
+  assert.equal(orderMargin({ server_info: { fills: { order_margin_seconds: 3600 } } }), 3600);
+  assert.equal(orderMargin({ server_info: {} }), 0, 'read, and the operator states none: 0');
+  const src = readFileSync(new URL('../src/leaf-trade.js', import.meta.url), 'utf8');
+  const run = src.slice(src.indexOf('export function progressOrders()'), src.indexOf('for (const rec of recs)', src.indexOf('export function progressOrders()')));
+  assert.match(run, /const margin = R\.orderMargin\(info\);\n    if \(margin == null\) return;/);
+  assert.doesNotMatch(run, /let margin = 0;/);
 });

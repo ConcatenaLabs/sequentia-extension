@@ -317,7 +317,8 @@ export async function watchBondNow() {
   await requireLeaves();
   return await host('watchBond');
 }
+// Developer mode's Sync now: a person waits on it.
 export async function syncNow() {
   await requireLeaves();
-  return (await host('sync')).result;
+  return (await host('sync', { person: true })).result;
 }

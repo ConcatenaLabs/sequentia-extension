@@ -133,15 +133,29 @@ wasm. Read this before changing anything.
   time and holds the rest in its own queue (`src/leaf-queue.js`), by priority: a person's
   commands (PERSON), what a person started waits on (PROMPT: the faucet's coin taken in,
   `takeIn`; a read asked with `leaves.ask`), the host's own work (PASS: its scheduled pass,
-  every sync, the mailbox and channel reads), then what the rest of the wallet asks (UPKEEP).
-  So a person's command waits at most for the one command already running. A person's
+  every sync, the mailbox and channel reads), then what the rest of the wallet asks (UPKEEP),
+  and fairly: a priority with work waiting that three commands of higher priorities have gone
+  past (`FAIR_TURN`) is served next. So a person's command waits at most for the command
+  running and one command of each lower priority whose turn has come (three at most), and
+  however a caller asks, every lower priority with work waiting still gets at least one
+  command in four: no stream of persons' commands keeps the pass, the mailbox read or the
+  upkeep from their turns. A person's
   command is every command a site or the developer page asks (`leaves.run`, reads
   included), every command that moves coins, and a read whose caller says a person waits on
   it: `runUser` with `person` (a quote or a confirmation of the popup's composer or a site's
   engine, inside its `hold`; a site order's review; a payment out of the tree being quoted),
   and `leaves.ask` (Receive's `schedule` and `info`, the tree's `balance` and `info` before a
-  send, the Trade tab's `info`). Taking the coins home (`homeQuote`, `takeHome`) and a
-  payment's release (its sync, the sync's reads, its polls of the coins) run at PERSON too.
+  send, the Trade tab's `info`). A person's read does not make the wallet's own work step aside
+  (only a person's other commands, and the popup's hold, do): the order already serves it
+  first. The same person's read waiting is shared (a site polling one read adds one command,
+  not one per poll), and one caller has at most 16 different reads waiting; one more is
+  refused at once as busy, which the caller sees and the host says once a minute. Taking the
+  coins home (`homeQuote`, `takeHome`, to the balance it reports) and a payment's release (its
+  sync, the sync's reads, its polls of the coins) run at PERSON too; a home quote is made from
+  a reading of the coins and channels made then, and a refusal of either is the answer. A sync
+  a person asks for (a site's, developer mode's Sync now) runs at once at PERSON; one asked
+  otherwise waits for a person at most a minute. The faucet's coin taken in reports the balance
+  at PROMPT before the popup says Received.
   A read of a trade's background follow (the composer or a site's engine with no hold, no
   `person`) is the wallet's own work instead: it goes in line with the upkeep and does not
   count as a person asking, so it never keeps the mailbox and channel reads off. A person's

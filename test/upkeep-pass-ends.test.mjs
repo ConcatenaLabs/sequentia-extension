@@ -22,10 +22,13 @@ import assert from 'node:assert/strict';
 // `boards`: that many assets the operator serves, each with coins at the wallet's address to board.
 // `planned`: the first `send` is refused for coins a plan holds, until they are released.
 function library({ cost = (c) => (c === 'coins' ? 90 : c === 'sync' ? 2000 : 40), boards = 0, planned = false } = {}) {
-  const L = { calls: [], cost, onchain: new Map(), released: !planned };
+  // `refuse`: commands refused as busy; `accept`: coins the next mailbox read takes in.
+  const L = { calls: [], cost, onchain: new Map(), released: !planned, refuse: new Set(), accept: [] };
   for (let i = 0; i < boards; i++) L.onchain.set(i.toString(16).padStart(64, '0'), 1000n);
   L.run = (command, args, prio) => {
     L.calls.push({ at: Date.now(), command, prio, args });
+    if (L.refuse.has(command)) throw { kind: 'busy', message: 'the wallet was busy' };
+    if (command === 'mailbox' && L.accept.length) return { accepted: L.accept.splice(0), refused: [], waiting: [] };
     switch (command) {
       case 'info': return { operator: 'op', server_info: { assets: [...L.onchain.keys()].map((asset) => ({ asset, min_leaf: '10' })) } };
       case 'balance': return { assets: {}, sequentia_onchain: Object.fromEntries([...L.onchain].filter(([, v]) => v > 0n).map(([a, v]) => [a, String(v)])) };
@@ -339,5 +342,123 @@ test('a pass with a hundred assets to board stops at its bound between two whole
     assert.equal(seq[i - 1].args.asset, seq[i].args.asset, 'a board follows its own quote');
   }
   assert.equal(boarded, 100, 'every asset boarded, pass after pass');
+  await within(ask('stop'), 10_000);
+}));
+
+test('a site polling a read back to back starves nothing: the pass, the mailbox and the upkeep keep their turns', timed(async () => {
+  // The review's probe: an `orders` read every 100 ms, each taking 100 ms, for two minutes.
+  const L = library({ cost: (c) => (c === 'orders' ? 100 : c === 'coins' ? 90 : c === 'sync' ? 2000 : 40) });
+  const { ask } = await opened({ L });
+  const t0 = Date.now();
+  const polls = [];
+  let i = 0;
+  const outside = ask('run', { command: 'coins', args: { once: 1 } });
+  let person = null, personAt = null;
+  await advance(2 * 60_000, 50, () => {
+    if (i % 2 === 0) polls.push(ask('run', { command: 'orders', args: {}, paying: true, person: true, from: 'provider-router.js:615 handle' }));
+    // A minute in, the person's own read from another caller (the popup).
+    if (i === 1200) { const t = Date.now(); person = ask('run', { command: 'balance', args: { mine: 1 }, paying: true, person: true, from: 'popup' }).then((r) => { personAt = Date.now() - t; return r; }); }
+    i++;
+  });
+  const mail = since(L, t0, 'mailbox').length;
+  const passes = since(L, t0, 'schedule').length;
+  const orders = since(L, t0, 'orders').length;
+  const up = L.calls.filter((c) => c.command === 'coins' && c.args && c.args.once);
+  say(`site polling back to back: ${polls.length} polls, ${orders} ran; mailbox reads ${mail}, pass schedule reads ${passes}, the outside read ran ${up.length ? 'at +' + (up[0].at - t0) + ' ms' : 'never'}; the person's own read answered in ${personAt} ms`);
+  assert.ok(mail >= 6, `${mail} mailbox reads in two minutes`);
+  assert.ok(passes >= 2, `${passes} passes in two minutes`);
+  assert.equal(up.length, 1, 'the upkeep read had its turn');
+  assert.ok(personAt != null && personAt <= 450, `a person's read waited ${personAt} ms: the command running and at most one of each lower kind`);
+  const all = await within(Promise.all([...polls, outside, person]), 10_000);
+  assert.ok(all.done && all.value.every((r) => r.ok), 'every poll answered, none dropped');
+  await within(ask('stop'), 10_000);
+}));
+
+test('a site asking ever more different reads is refused visibly past its share, never silently', timed(async () => {
+  const L = library({ cost: (c) => (c === 'orders' ? 100 : c === 'sync' ? 2000 : 40) });
+  const { ask, logs } = await opened({ L });
+  const t0 = Date.now();
+  const polls = [];
+  let k = 0;
+  await advance(60_000, 50, () => { polls.push(ask('run', { command: 'orders', args: { k: k++ }, paying: true, person: true, from: 'site.js:1 poll' })); });
+  const all = await within(Promise.all(polls), 30_000);
+  assert.ok(all.done, 'every read answered or refused within 30 s of the last ask');
+  const refused = all.value.filter((r) => !r.ok);
+  say(`different reads from one caller: ${polls.length} asked, ${all.value.length - refused.length} answered, ${refused.length} refused (${refused[0] ? refused[0].error.kind + ': ' + refused[0].error.message : '-'}); mailbox reads ${since(L, t0, 'mailbox').length}`);
+  assert.ok(refused.length > 0 && refused.every((r) => r.error.kind === 'busy' && /already wait/.test(r.error.message)), 'each refusal says why');
+  assert.ok(logs.some((l) => /read\(s\) refused as busy: their caller already had 16 waiting/.test(l.line)), 'and the host says so');
+  assert.ok(since(L, t0, 'mailbox').length >= 3);
+  await within(ask('stop'), 10_000);
+}));
+
+test('a home quote is made from a reading made now, or refused: never from an older one', timed(async () => {
+  const L = library();
+  const run = L.run;
+  L.run = (command, args, prio) => (command === 'coins' ? (run(command, args, prio), [{ leaf_id: 'h1', asset: 'aa'.repeat(32), value: '5', state: 'live' }]) : run(command, args, prio));
+  const { ask } = await opened({ L });
+  // Refused the first time it is asked: the person sees the refusal, not a quote of the coins read at open.
+  L.refuse.add('coins');
+  let q = (await within(ask('homeQuote', {}), 5000)).value;
+  say(`home quote, coins refused: ${q.ok ? 'quoted ' + q.value.quotes.length + ' coin(s)' : 'refused: ' + q.error.message}`);
+  assert.equal(q.ok, false);
+  assert.equal(q.error.kind, 'busy');
+  L.refuse.delete('coins');
+  q = (await within(ask('homeQuote', {}), 5000)).value;
+  assert.ok(q.ok && q.value.quotes.length === 1, 'quoted from a reading made now');
+  // Refused later: the earlier quote's reading is not used again.
+  L.refuse.add('coins');
+  q = (await within(ask('homeQuote', {}), 5000)).value;
+  assert.equal(q.ok, false, 'a later refusal is refused too');
+  L.refuse.delete('coins');
+  L.refuse.add('channels');
+  q = (await within(ask('homeQuote', {}), 5000)).value;
+  assert.equal(q.ok, false, 'and so is a refused read of the channels');
+  await within(ask('stop'), 10_000);
+}));
+
+test('taking coins home runs at a person\'s priority to its end, the balance it reports included', timed(async () => {
+  const L = library({ cost: (c) => (c === 'orders' ? 100 : c === 'sync' ? 2000 : 40) });
+  const { ask } = await opened({ L });
+  const t = Date.now();
+  const take = await within(ask('takeHome', { quote: { quotes: [{ coin: { leaf_id: 'h1', asset: 'aa'.repeat(32), value: '5' }, quote: { unroll: {} } }], channels: [] } }), 5000);
+  assert.ok(take.done && take.value.ok);
+  const takeReads = L.calls.filter((c) => c.at >= t && ['exit', 'coins', 'balance'].includes(c.command) && c.prio === PERSON_P).map((c) => c.command);
+  say(`take home ran at PERSON: ${takeReads.join(', ')}`);
+  for (const cmd of ['exit', 'coins', 'balance']) assert.ok(takeReads.includes(cmd), `take home's ${cmd} at PERSON`);
+  await within(ask('stop'), 10_000);
+}));
+
+test('the faucet\'s coin taken in reports the balance at PROMPT before it answers', timed(async () => {
+  const L = library();
+  const { ask } = await opened({ L });
+  const t = Date.now();
+  const asset = 'cc'.repeat(32);
+  L.accept.push({ leaf_id: 'f1', asset, value: '7', kind: 'mailbox' });
+  const tin = await within(ask('takeIn', { asset, since: t - 1, ms: 10_000 }), 15_000);
+  assert.ok(tin.done && tin.value.ok && tin.value.value.arrived);
+  const bal = L.calls.filter((c) => c.at >= t && c.command === 'balance');
+  say(`the faucet's coin taken in: its balance read at ${bal.map((c) => c.prio).join(',')}`);
+  // Other work's balance reads may run around it; the one takeIn waits on before it answers is PROMPT.
+  assert.ok(bal.some((c) => c.prio === PROMPT_P), 'the balance it reports before Received, at PROMPT');
+  await within(ask('stop'), 10_000);
+}));
+
+test('a person\'s sync runs at once at PERSON while a site polls back to back', timed(async () => {
+  const L = library({ cost: (c) => (c === 'orders' ? 100 : c === 'sync' ? 2000 : 40) });
+  const { ask } = await opened({ L });
+  let t;
+  const polls = [];
+  let i = 0;
+  await advance(15_000, 50, () => { if (i++ % 2 === 0) polls.push(ask('run', { command: 'orders', args: {}, paying: true, person: true, from: 'site' })); });
+  t = Date.now();
+  const sync = ask('run', { command: 'sync', args: {}, paying: true, person: true });
+  let r = null;
+  await advance(10_000, 50, () => { if (i++ % 2 === 0) polls.push(ask('run', { command: 'orders', args: {}, paying: true, person: true, from: 'site' })); });
+  r = await within(sync, 1000);
+  const syncs = L.calls.filter((c) => c.at >= t && ['sync', 'coins', 'participations'].includes(c.command));
+  say(`a person's sync under a site's polling: ${r.done && r.value.ok ? 'answered' : 'not answered in 10 s'}; ran at ${syncs.map((c) => c.command + ':' + c.prio).join(', ')}`);
+  assert.ok(r.done && r.value.ok, 'answered while the site polls');
+  assert.ok(syncs.filter((c) => c.command === 'sync').every((c) => c.prio === PERSON_P) && syncs.some((c) => c.command === 'sync'), 'the sync at PERSON');
+  await within(Promise.all(polls), 10_000);
   await within(ask('stop'), 10_000);
 }));
