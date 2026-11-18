@@ -223,7 +223,7 @@ test('the scheduled pass gives way to a person between its commands, and starts 
 });
 
 test('a sync asked for a trade waits for a person and shares the last one', () => {
-  assert.match(host, /if \(command === 'sync'\) return await syncForCaller\(!!args\.paying, !!args\.paying && !!args\.person, !!site\);/);
+  assert.match(host, /if \(command === 'sync'\) return await syncForCaller\(!!args\.paying, !!args\.paying && \(!!args\.person \|\| !!site\), !!site\);/);
   assert.match(host, /while \(stepAside\(\) && Date\.now\(\) < until\) await/, 'waits for a person, at most SYNC_WAITS_MOST_MS (and the step-aside bound)');
   assert.match(host, /Date\.now\(\) - S\.lastSync\.at < SYNC_SHARED_MS\) return S\.lastSyncValue/);
 });
@@ -248,9 +248,11 @@ test('a read the trade composer asks while nobody waits is the wallet’s own wo
   assert.match(pr, /return await leaves\.run\('send', \{ request: text, asset: plan\.asset, amount: plan\.amount \}\);/);
   const popup = readFileSync(new URL('../popup/popup.js', import.meta.url), 'utf8');
   assert.match(popup, /rpc\('default\.leaf', \{ command: cmd, args: args \|\| \{\}, person: tradeHolds > 0 \}\)/);
+  // A site's trade engine and review: whose each command is comes from that site's own side
+  // (src/site-context.js, test/site-context.test.mjs).
   const site = readFileSync(new URL('../src/site-trade.js', import.meta.url), 'utf8');
-  assert.match(site, /leaves\.runUser\(String\(cmd\), args \|\| \{\}, \{ person: held > 0 \}\)/);
-  assert.match(site, /hold: async \(f\) => \{ held\+\+; try \{ return await f\(\); \} finally \{ held--; \} \}/);
+  assert.match(site, /leaves: side\.leaves,/, 'each site\'s engine asks through its own side');
+  assert.match(site, /leaves: reviewLeaves\(side, /, 'and its review');
   const dm = readFileSync(new URL('../src/default-mode.js', import.meta.url), 'utf8');
   assert.match(dm, /async function leafInfo\(\) \{\n  return await leaves\.ask\('info'\);/);
   assert.match(dm, /const b = await leaves\.ask\('balance'\);/, 'what the tree holds, before a send');

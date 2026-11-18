@@ -50,6 +50,18 @@ import { USER_WORDS, costLine, heldAlready, tradeStateWord, OFFERED_AGAIN_MS, OF
 import { settleWords } from './default-arca.js'
 
 const HEX64 = /^[0-9a-f]{64}$/
+// The asset a library order sells, as the wallet names assets: its terms carry it (`asset_a`) in the
+// library's own byte order, the reverse of the name. null when the terms do not say.
+const soldAssetOf = (x) => { const h = x && x.terms && x.terms.asset_a; return typeof h === 'string' && /^[0-9a-f]{64}$/i.test(h) ? h.toLowerCase().match(/../g).reverse().join('') : null }
+// Whether a library order is the one a placement record (`placing`) asked for: the same asset sold,
+// the same amount, and, where both say it, the same price.
+export function samePlacement (x, rec) {
+  if (!x || !rec || String(x.amount ?? x.holds ?? '') !== String(rec.sold)) return false
+  if (soldAssetOf(x) !== String(rec.sell || '').toLowerCase()) return false
+  const t = x.terms || {}
+  if (rec.rate_num != null && t.rate_num != null && (String(t.rate_num) !== String(rec.rate_num) || String(t.rate_den) !== String(rec.rate_den))) return false
+  return true
+}
 const big = (v) => { try { return BigInt(v ?? 0) } catch { return 0n } }
 const ceilDiv = (a, b) => (a + b - 1n) / b
 const KEY = 'swk.siteorders'
@@ -482,12 +494,13 @@ export function makeSiteOrders (d) {
     let ids = Object.entries(v.orders).filter(([, o]) => o.origin === origin)
     let lib = []
     if (ids.length || placing.length) { try { lib = (await d.leaves.command('orders', {})) || [] } catch (e) { log('[site orders] orders:', e && e.message) } }
-    // An order placed while its page closed: the library's order of the same amount sold, made after
-    // the record and named by no other record, is it.
+    // An order placed while its page closed: the library's order of the same asset sold, amount and
+    // price, made after the record and named by no other record, is it. An order of another asset (a
+    // placement of the same amount elsewhere) is never taken for it.
     if (placing.length && lib.length) {
       const known = new Set(Object.keys(v.orders))
       for (const [pid, rec] of placing) {
-        const o = lib.find((x) => !known.has(x.order) && String(x.amount ?? x.holds ?? '') === String(rec.sold))
+        const o = lib.find((x) => !known.has(x.order) && samePlacement(x, rec))
         if (!o) continue
         known.add(o.order); v.orders[o.order] = rec; delete v.placing[pid]
       }

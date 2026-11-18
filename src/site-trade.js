@@ -4,6 +4,9 @@
 // wallet's coins are boarded into the operator's tree within a minute, so this is how a site
 // sees and trades them: getBalances counts the leaves, and placeOrder takes from them.
 //
+// Each site has its own engine and review, over its own records, and whose each of their leaf
+// commands is comes from that site's side (src/site-context.js): the site's until the person
+// approves, then the person's for as long as what they approved runs.
 // The engine asks the leaf library through `leaves.runUser` (the popup's `default.leaf`), BTC
 // over the Bitcoin ark's Lightning (`default.ark`), and reads the relay, the makers and the
 // chain as the popup does. Its records are kept in chrome.storage under `ext.siteTrade`. An
@@ -23,6 +26,7 @@ import { walletTag } from './mode.js';
 import * as engineMod from './engine.js';
 import { servedPairs, supervisedAssets } from './leaf-profiles.js';
 import { chainGenesis } from './chain-genesis.js';
+import { siteSide, keptSide, siteTag, keptRecords, sitesWithRecords, recordedElsewhere, reviewLeaves } from './site-context.js';
 
 // The kit wallet's own balances, for the figures.
 async function engineBalances() { const b = await engineMod.balances(); return { seq: b.seq, btc: b.btc }; }
@@ -63,19 +67,23 @@ async function relayPairBook(base, quote) {
 let pairs = null, pairsAt = 0, genesis = null, arkUp = false, sup = [], supAt = 0;
 const arkBtc = new Proxy({}, { get: (_, method) => (arg) => dm.arkLightning(String(method), arg) });
 
-let S = null;
-async function siteOrders() {
-  if (S) return S;
-  const st = await store();
-  const tag = await walletTag();
-  // A site's quote or confirmation is a person waiting (the engine runs it inside `hold`): its reads
-  // go at a person's priority; the engine's background follow of trades stays upkeep.
-  let held = 0;
+// One trade engine and one order review for each site, each over its own records and asking the
+// leaf library through its own side (src/site-context.js): what one site's engine asks is that site's
+// (a quote, its orders, what it can spend) or the person's (what they approved for it, for as long
+// as it runs), never another site's. The engine guards a trade from being moved on twice only within
+// itself, so no two engines share records: each site's are kept under its own tag. The records kept
+// before each site had its own (under the wallet's tag alone) are served by one more engine, `kept`,
+// as long as they are there: it follows their trades, lists their orders and takes them back.
+const sites = new Map();     // origin -> { side, engine, orders }
+let kept;                    // the engine over the records kept before, null when there are none
+const owners = new Map();    // a quote's id -> the engine and review that made it
+let base = null;             // { st, tag }
+
+// `walletTag`: the wallet's tag; `tag`: this engine's and review's (the site's, or the wallet's alone
+// for the records kept before).
+function makeTrades(st, walletTag, tag, side) {
   const engine = createEngine({
-    leaves: {
-      command: (cmd, args) => leaves.runUser(String(cmd), args || {}, { person: held > 0 }),
-      hold: async (f) => { held++; try { return await f(); } finally { held--; } },
-    },
+    leaves: side.leaves,
     fetchJson,
     makers: () => LEAF_MAKERS,
     relayBook: (pay, receive) => relayPairBook(receive, pay),
@@ -104,53 +112,102 @@ async function siteOrders() {
       return BigInt((f.total || {})[a] || 0);
     },
     prepare: () => { leaves.hostOp('syncSoon').catch(() => {}); },
-    store: st, tag: () => tag || 'default',
+    store: st, tag: () => tag,
     log: (...a) => console.log(...a),
   });
   const orders = makeSiteOrders({
-    engine, store: st, tag: () => tag || 'default',
-    // Every command of a site's order review (its schedule, quote and placing) is a person's.
-    leaves: { command: (cmd, args) => leaves.runUser(String(cmd), args || {}, { person: true }) },
+    engine, store: st, tag: () => tag,
+    // The library's orders another review records are never this review's to take for a placement.
+    leaves: reviewLeaves(side, () => recordedElsewhere(Object.keys(mem || {}), (k) => st.getItem(k), walletTag, tag)),
     assetMeta: (h) => A.assetMeta(h),
     fmtAtoms: (atoms, p) => fmtAtoms(atoms, p),
     log: (...a) => console.log(...a),
   });
-  S = { engine, orders, tag };
-  return S;
+  return { side, engine, orders };
 }
 // Another wallet opened (or this one removed): its records are another's.
-export async function reset() { S = null; mem = null; genesis = null; sup = []; supAt = 0; }
+export async function reset() { sites.clear(); kept = undefined; owners.clear(); base = null; mem = null; genesis = null; sup = []; supAt = 0; }
 
 async function fresh() {
-  const s = await siteOrders();
-  if (s.tag !== (await walletTag())) { await reset(); return await siteOrders(); }
+  const tag = (await walletTag()) || 'default';
+  if (base && base.tag !== tag) await reset();
+  if (!base) base = { st: await store(), tag };
   try { arkUp = await dm.arkIsOpen(); } catch { arkUp = false; }
+  return base;
+}
+async function forSite(origin) {
+  const b = await fresh();
+  const key = String(origin || '');
+  let s = sites.get(key);
+  if (!s) { s = makeTrades(b.st, b.tag, siteTag(b.tag, key), siteSide(key, leaves.runUser)); sites.set(key, s); }
   return s;
 }
+async function keptTrades() {
+  const b = await fresh();
+  if (kept === undefined) kept = keptRecords(b.st, b.tag) ? makeTrades(b.st, b.tag, b.tag, keptSide(leaves.runUser)) : null;
+  return kept;
+}
+// A site's request into one engine: its own, or (`kept`) the one over the records kept before.
+const asking = (t, origin, f) => (t === kept ? t.side.asking(origin, f) : t.side.asking(f));
 
 // -> { id, display } for the approval window.
-export async function quote(params, origin) { return await (await fresh()).orders.quote(params, origin); }
-export async function drop(id) { if (S) S.orders.drop(id); }
+export async function quote(params, origin) {
+  const s = await forSite(origin);
+  const q = await s.side.asking(() => s.orders.quote(params, origin));
+  if (q && q.id != null) owners.set(q.id, s);
+  return q;
+}
+export async function drop(id) { const o = owners.get(id); owners.delete(id); if (o) o.orders.drop(id); }
 // Settles an approved order; an order that rests is handed to the listing of orders placed
-// from leaves (leaf-trade.js progressOrders), which posts it once it rests.
+// from leaves (leaf-trade.js progressOrders), which posts it once it rests. The whole of it is the
+// person's, the engine's confirmation included for as long as it goes on (its hold).
 export async function confirm(id, origin) {
-  const s = await fresh();
-  const r = await s.orders.confirm(id);
+  const s = owners.get(id) || (await forSite(origin));
+  owners.delete(id);
+  const r = await s.side.approving(() => s.orders.confirm(id));
   if (r.order) {
     const hex = (b) => [...b].map((x) => x.toString(16).padStart(2, '0')).join('');
     await R.rememberOrder({ order: r.order, origin, offer_id: hex(crypto.getRandomValues(new Uint8Array(16))), amount: null, at: Date.now() });
   }
   return r;
 }
+// A site's orders and trades: those of its own engine, and those kept before.
 export async function orders(origin) {
-  const s = await fresh();
+  const s = await forSite(origin);
   s.orders.follow().catch(() => {});
-  return await s.orders.orders(origin);
+  const mine = await s.side.asking(() => s.orders.orders(origin));
+  const k = await keptTrades();
+  if (!k) return mine;
+  const old = await asking(k, origin, () => k.orders.orders(origin)).catch(() => ({ orders: [], trades: [] }));
+  return { orders: [...(mine.orders || []), ...(old.orders || [])], trades: [...(mine.trades || []), ...(old.trades || [])] };
 }
-export async function quoteCancel(params, origin) { return await (await fresh()).orders.quoteCancel(params, origin); }
-export async function confirmCancel(id) { return await (await fresh()).orders.confirmCancel(id); }
-// Moves open site trades on (called after each leaf sync and on the minute alarm).
-export async function follow() { if (S) await S.orders.follow().catch(() => {}); }
+export async function quoteCancel(params, origin) {
+  const s = await forSite(origin);
+  let q, by = s;
+  try { q = await s.side.asking(() => s.orders.quoteCancel(params, origin)); } catch (e) {
+    const k = /no such order of this site/.test(String(e && e.message)) ? await keptTrades() : null;
+    if (!k) throw e;
+    q = await asking(k, origin, () => k.orders.quoteCancel(params, origin));
+    by = k;
+  }
+  if (q && q.id != null) owners.set(q.id, by);
+  return q;
+}
+export async function confirmCancel(id) {
+  const o = owners.get(id);
+  owners.delete(id);
+  if (!o) throw new Error('this request has expired');
+  return await o.side.approving(() => o.orders.confirmCancel(id));
+}
+// Moves open site trades on (called after each leaf sync and on the minute alarm): those of every
+// site with records, whether or not it has asked anything since the service worker started, and
+// those kept before.
+export async function follow() {
+  const b = await fresh();
+  for (const origin of sitesWithRecords(Object.keys(mem || {}), b.tag)) await forSite(origin);
+  const k = await keptTrades();
+  for (const s of [...sites.values(), ...(k ? [k] : [])]) await s.orders.follow().catch(() => {});
+}
 
 // What of each Sequentia asset the wallet holds as leaves and can spend now, as the leaf host
 // last reported it (getBalances' `leaves`).
@@ -194,9 +251,10 @@ export async function figures(bal, developer) {
 
 // What a trade can pay from now, per asset (getBalances' `spendable`): the leaves the engine can
 // spend, and BTC on the Bitcoin ark, less what is still arriving there.
-export async function spendable() {
+// `origin`: the site asking (getBalances), whose reads they are.
+export async function spendable(origin = null) {
   const out = {};
-  try { const s = await fresh(); for (const [a, v] of await s.engine.spendable()) if (v > 0n) out[a] = v.toString(); } catch {}
+  if (origin) { try { const s = await forSite(origin); for (const [a, v] of await s.side.asking(() => s.engine.spendable())) if (v > 0n) out[a] = v.toString(); } catch {} }
   try { const ark = await dm.arkSum(); const v = BigInt((ark && ark.total) || 0) - BigInt((ark && ark.arriving) || 0); if (v > 0n) out.BTC = v.toString(); } catch {}
   return out;
 }
