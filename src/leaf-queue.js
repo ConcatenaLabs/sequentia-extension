@@ -10,12 +10,14 @@
 //     prio: PERSON (a person waits on it), PROMPT (something a person started waits on it, such as
 //     the faucet's coin taken in, or the receive code), PASS (a step of the host's scheduled pass,
 //     and the reads that show a payment), UPKEEP (work the rest of the wallet asks for, the default).
-//     opts: { share, dropAfterMs, from }
-//       share        a read: one asked while the same read (same command, same arguments) waits at
-//                    the same priority gets that one's answer, so a caller asking the same thing
-//                    over and over adds nothing to the line;
-//       dropAfterMs  a read nobody inside the host waits on: refused with kind 'busy' once it has
+//     opts: { share, dropAfterMs, from }, for UPKEEP only (a command at any other priority is
+//     never shared and never dropped: a person, and the host's own work, always get their own answer)
+//       share        a read: one asked while the same read (same command, same arguments) waits
+//                    gets that one's answer, so a caller asking the same thing over and over adds
+//                    nothing to the line;
+//       dropAfterMs  a read whose caller asks again by itself: refused with kind 'busy' once it has
 //                    waited that long, so the line cannot grow without end behind a slow library;
+//                    a sharer that gives none keeps the read whatever its first asker gave;
 //       from         who asked (for the state a capture reads), kept with the command.
 //
 // The scheduled pass's own commands go before the rest of the upkeep: a pass waits at most for the
@@ -100,14 +102,18 @@ export function createQueue({ send, now = () => Date.now(), hungAfter = () => 10
   return {
     call(op, args = {}, prio = UPKEEP, { share = false, dropAfterMs = null, from = null } = {}) {
       counts.asked++;
+      // Sharing and dropping are the upkeep's alone.
+      if (prio !== UPKEEP) { share = false; dropAfterMs = null; }
       return new Promise((ok, no) => {
         const key = share ? op + '\n' + JSON.stringify(args) : null;
         const same = key && waiting.find((w) => w.key === key && w.prio === prio);
         if (same) {
           counts.shared++;
           same.subs.push({ ok, no });
-          // Someone still wants it: its bound counts from the latest ask.
-          if (same.dropAfterMs != null) same.at = now();
+          // A caller that cannot take a refusal keeps the read; else someone still wants it, and
+          // its bound counts from the latest ask.
+          if (dropAfterMs == null) same.dropAfterMs = null;
+          else if (same.dropAfterMs != null) same.at = now();
           return;
         }
         waiting.push({ op, args, prio, subs: [{ ok, no }], at: now(), seq: seq++, key, dropAfterMs, from });

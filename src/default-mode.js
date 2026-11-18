@@ -228,11 +228,10 @@ async function setDefaultWatchtowers() {
 }
 
 // ---- the receive code ----
+// The operator's `info` and what the tree holds are read here only for what a person waits on
+// (Receive, a payment being prepared, a pool join): before the wallet's upkeep (leaves.ask), never
+// shared with its reads and never refused as busy.
 async function leafInfo() {
-  return await leaves.runAny('info');
-}
-// The operator's `info` for Receive, which a person waits on: before the wallet's upkeep.
-async function leafInfoNow() {
   return await leaves.ask('info');
 }
 async function leafOpen() {
@@ -281,7 +280,7 @@ let arkAddress = null;
 // over Lightning (vendor/asset-lightning.js receivableAssets).
 export async function receiveChoices() {
   if (!(await leafOpen())) return ['BTC'];
-  try { return ['BTC', ...receivableAssets(await leafInfoNow())]; } catch { return ['BTC']; }
+  try { return ['BTC', ...receivableAssets(await leafInfo())]; } catch { return ['BTC']; }
 }
 // -> { code, qr, isCode, confidential?, invoiceHash?, invoiceKind? }: the receive code, or the
 // address alone when the wallet holds no coins with the operator yet (nothing is said about why).
@@ -327,7 +326,7 @@ export async function receiveCode({ sats = null, asset = 'BTC', amount = null, f
   const price = A.priceFor(kind === 'BTC' ? 'BTC' : meta(kind).ticker);
   const large = kind === 'BTC' && n > 0n && direct({ sats: n, override: await bandOverride(), price }) != null;
   let info = null;
-  if (n > 0n && open) { try { info = await leafInfoNow(); } catch { /* the fallback */ } }
+  if (n > 0n && open) { try { info = await leafInfo(); } catch { /* the fallback */ } }
   if (await arkOpen()) {
     if (!large) { try { if (!arkAddress || fresh) arkAddress = (await arkHost('run', { command: 'address' })).address; ark = arkAddress; } catch (e) { console.warn('[btc ark] address:', e.message); } }
     if (kind === 'BTC' && n > 0n && !large && lnFits({ info, kind: 'BTC', dir: 'in', atoms: n, price })) {
@@ -491,7 +490,7 @@ const meta = (asset) => (asset === 'BTC' ? { ticker: 'BTC', precision: 8 } : A.a
 // What the tree holds of an asset, and of it what is still arriving (the library's balance).
 async function treeHeld(asset) {
   if (!(await leafOpen())) return { held: 0n, arriving: 0n, balance: null };
-  const b = await leaves.runAny('balance');
+  const b = await leaves.ask('balance');
   return { held: big(leafPerAsset(b)[asset]), arriving: arrivingAtoms(b, asset), balance: b };
 }
 
@@ -592,7 +591,7 @@ export async function prepareSend({ to, amtS, asset }) {
   }
   if (route === 'tree' || (route === 'chain' && held - arriving >= atoms)) {
     let q;
-    try { q = await leaves.runUser('offboard_quote', { asset, amount: String(atoms), address }); }
+    try { q = await leaves.runUser('offboard_quote', { asset, amount: String(atoms), address }, { person: true }); }
     catch (e) { console.warn('[default] offboard quote:', e.message); throw new Error(DEFAULT_WORDS.addressShort); }
     const info = await leafInfo().catch(() => null);
     const f = info && info.server_info && info.server_info.fills;
@@ -659,7 +658,7 @@ async function confidentialSend({ address, asset, atoms, amt }) {
   let offboards = [];
   if (records.some((r) => r.asset === asset)) {
     // A move asked before: the wallet reads where it stands, and the chain again for its coins.
-    try { offboards = (await leaves.runAny('offboards')) || []; } catch (e) { console.warn('[default] moves under way:', e.message); }
+    try { offboards = (await leaves.ask('offboards')) || []; } catch (e) { console.warn('[default] moves under way:', e.message); }
     await engine.sync().catch(() => {});
     leaves.hostOp('sync').catch(() => {});
   }
@@ -702,7 +701,7 @@ async function confidentialSend({ address, asset, atoms, amt }) {
   if (plan.move > 0n) {
     const own = engine.freshAddress();
     let q, live = null;
-    try { q = await leaves.runUser('offboard_quote', { asset, amount: String(plan.move), address: own }); }
+    try { q = await leaves.runUser('offboard_quote', { asset, amount: String(plan.move), address: own }, { person: true }); }
     catch (e) {
       console.warn('[default] moving out, quote:', e.message);
       // Part of what is held may not be movable now (a channel's balance, a coin not final yet): the
@@ -711,7 +710,7 @@ async function confidentialSend({ address, asset, atoms, amt }) {
       if (live != null && live > 0n) {
         plan = confidentialPlan({ amount: atoms, margin, onchain, instant: live, minLeaf, precision: prec });
         if (plan.move > 0n) {
-          try { q = await leaves.runUser('offboard_quote', { asset, amount: String(plan.move), address: own }); }
+          try { q = await leaves.runUser('offboard_quote', { asset, amount: String(plan.move), address: own }, { person: true }); }
           catch (e2) { console.warn('[default] moving out, quote of what can move:', e2.message); }
         }
       }

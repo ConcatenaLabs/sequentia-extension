@@ -225,19 +225,24 @@ export async function requireLeaves() {
 // unplanned coins cannot cover and planned ones can is made through the next round, by
 // itself: the host gives the planned coins up in that round and asks again once it is
 // final (`payThrough`, src/leaf-schedule.js), so the answer can take one round.
+// A person or a site waits on every command asked this way, reads included: the host runs it at a
+// person's priority (`person`), never shared with the wallet's own reads and never refused as busy.
 export async function run(command, args = {}) {
   await requireLeaves();
-  return (await host('run', { command, args, paying: true, from: callerOf() })).result;
+  return (await host('run', { command, args, paying: true, person: true, from: callerOf() })).result;
 }
 // One command a person asks for in default mode (a receive code, a payment to a code or an
 // address, a trade): the same path as `run`, through the next round when the planned coins
 // cover it, without the developer-mode gate. Its refusals reach the person only in default
 // mode's words (src/default-mode.js userRefusal).
-export async function runUser(command, args = {}) {
+// A read asked this way is a person's when `person` says so (a quote or a confirmation the person
+// waits on, the reads of a payment being prepared); without it, a read is the wallet's own work (a
+// trade's background follow) and goes in line with the upkeep. Every other command is a person's.
+export async function runUser(command, args = {}, { person = false } = {}) {
   if (!(await config())) throw new Error(NOT_JOINED);
   if (!(await sessionMnemonic())) throw new Error('the wallet is locked');
   await ensureRunning();
-  return (await host('run', { command, args, paying: true, from: callerOf() })).result;
+  return (await host('run', { command, args, paying: true, person: !!person || undefined, from: callerOf() })).result;
 }
 // A read a person waits on in either mode (the receive code's `schedule`, the assets Receive offers):
 // the host runs it before the wallet's upkeep, as it does the faucet's coin taken in, so it waits
@@ -259,11 +264,13 @@ export async function unjoin() {
 // One command of the library in either mode, for the work the wallet carries on by
 // itself (a take's forfeits, an order's listing): what was started in developer mode
 // must finish whatever the mode is now. Nothing reaches a site through it.
-export async function runAny(command, args = {}) {
+// `keep`: the caller acts on the answer and cannot take a refusal for being busy (the read is never
+// dropped from the host's line; a read without it, asked again by its caller anyway, may be).
+export async function runAny(command, args = {}, { keep = false } = {}) {
   if (!(await config())) throw new Error(NOT_JOINED);
   if (!(await sessionMnemonic())) throw new Error('the wallet is locked');
   await ensureRunning();
-  return (await host('run', { command, args, from: callerOf() })).result;
+  return (await host('run', { command, args, keep: !!keep || undefined, from: callerOf() })).result;
 }
 
 // Tells the offscreen host default mode's upkeep is on or off, with when the mode was set, whether

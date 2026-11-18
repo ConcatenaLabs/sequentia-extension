@@ -652,11 +652,14 @@ const uiMethods = {
   'default.joined': async () => ({ joined: !!(await leaves.config()), open: !!((await leaves.status().catch(() => ({}))).open), ark: await dm.arkIsOpen(),
     boardConfirmations: Number(((await dm.arkInfo()) || {}).required_board_confirmations) || null }),
   // The trade composer (popup) asks the leaf library and the ark through these.
-  'default.leaf': async ({ command, args }) => {
-    try { return await leaves.runUser(String(command), args || {}); }
+  // `person`: the popup's composer asks while a person waits on a quote or a confirmation.
+  'default.leaf': async ({ command, args, person }) => {
+    try { return await leaves.runUser(String(command), args || {}, { person: !!person }); }
     catch (e) { throw ((await leaves.mode()) === 'developer' ? e : dm.userRefusal(e)); }
   },
-  'default.leafInfo': async () => await leaves.runAny('info'),
+  // The Trade tab's reads of the operator's `info` (its anchor depth, the assets it supervises): a
+  // person opened the tab.
+  'default.leafInfo': async () => await leaves.ask('info'),
   // The composer asks for this when an asset is held but not payable yet: the leaf host syncs,
   // which boards what is on the chain.
   'default.prepare': async () => { leaves.hostOp('syncSoon').catch(() => {}); return { ok: true }; },

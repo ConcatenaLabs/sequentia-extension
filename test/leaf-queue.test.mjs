@@ -80,6 +80,30 @@ test('a read nobody inside waits on is refused as busy past its bound, and said'
   assert.equal(q.stats().dropped, 1);
 });
 
+test('a person\'s command and the host\'s own are never shared nor dropped; a caller that keeps a read keeps it', async () => {
+  let t = 0;
+  let release;
+  const ran = [];
+  const q = createQueue({ send: (op, a) => { ran.push(a.command + ':' + JSON.stringify(a.k ?? null)); return a.command === 'sync' ? new Promise((r) => { release = r; }) : Promise.resolve(a.command); }, now: () => t });
+  const sync = q.call('run', { command: 'sync' });
+  const outside = q.call('run', { command: 'balance', k: 1 }, UPKEEP, { share: true, dropAfterMs: 1000 });
+  const person = q.call('run', { command: 'balance', k: 1 }, PERSON, { share: true, dropAfterMs: 1000 });
+  const own = q.call('run', { command: 'balance', k: 1 }, PASS, { share: true, dropAfterMs: 1000 });
+  const kept = q.call('run', { command: 'coins', k: 2 }, UPKEEP, { share: true, dropAfterMs: 1000 });
+  const keeper = q.call('run', { command: 'coins', k: 2 }, UPKEEP, { share: true });
+  await sleep(1);
+  t = 5000;
+  release(1);
+  await sync;
+  assert.equal(await person, 'balance', 'a person\'s read, past the bound, answered');
+  assert.equal(await own, 'balance');
+  await assert.rejects(outside, (e) => e.kind === 'busy', 'the outside read alone is dropped');
+  assert.equal(await kept, 'coins', 'a read a caller keeps is kept for every sharer');
+  assert.equal(await keeper, 'coins');
+  assert.deepEqual(ran, ['sync:null', 'balance:1', 'balance:1', 'coins:2'], 'the person\'s and the host\'s reads each ran by themselves');
+  assert.equal(q.stats().shared, 1);
+});
+
 test('the shape of a command\'s arguments names its keys and kinds, never its values', () => {
   assert.deepEqual(argsShape({ request: 'sq1secret', amount: '5', orders: ['a', 'b'], shown: { fee: 1 }, n: null }),
     { request: 'string', amount: 'string', orders: 'array(2)', shown: '{fee}', n: 'null' });
@@ -144,12 +168,27 @@ test('a hung library is started again rather than holding every command after it
 });
 
 test('a read the trade composer asks while nobody waits is the wallet’s own work, not a person’s', () => {
-  assert.match(host, /const person = !!args\.paying && \(!READS\.has\(command\) \|\| upkeepHeld\(\)\);/);
+  assert.match(host, /const asks = !!args\.paying && \(!READS\.has\(command\) \|\| upkeepHeld\(\)\);\n      const person = asks \|\| \(!!args\.paying && !!args\.person\);/);
   assert.match(host, /if \(args\.paying && !person\) return await runCommand\(command, args\.args \|\| \{\}, UPKEEP, upkeep\);/);
-  assert.match(host, /const upkeep = READS\.has\(command\) \? \{ share: true, dropAfterMs: OUTSIDE_READ_WAIT_MOST_MS, from \} : \{ from \};/);
+  assert.match(host, /const upkeep = READS\.has\(command\) \? \{ share: true, dropAfterMs: args\.keep \? null : OUTSIDE_READ_WAIT_MOST_MS, from \} : \{ from \};/);
+  // Who says a read is a person's: every `run` of a site or the developer page, a quote held by the
+  // popup or a site, a payment being prepared; and a trade's background follow says it is not.
+  const sw = readFileSync(new URL('../src/leaves.js', import.meta.url), 'utf8');
+  assert.match(sw, /host\('run', \{ command, args, paying: true, person: true, from: callerOf\(\) \}\)/);
+  const popup = readFileSync(new URL('../popup/popup.js', import.meta.url), 'utf8');
+  assert.match(popup, /rpc\('default\.leaf', \{ command: cmd, args: args \|\| \{\}, person: tradeHolds > 0 \}\)/);
+  const site = readFileSync(new URL('../src/site-trade.js', import.meta.url), 'utf8');
+  assert.match(site, /leaves\.runUser\(String\(cmd\), args \|\| \{\}, \{ person: held > 0 \}\)/);
+  assert.match(site, /hold: async \(f\) => \{ held\+\+; try \{ return await f\(\); \} finally \{ held--; \} \}/);
+  const dm = readFileSync(new URL('../src/default-mode.js', import.meta.url), 'utf8');
+  assert.match(dm, /async function leafInfo\(\) \{\n  return await leaves\.ask\('info'\);/);
+  assert.match(dm, /const b = await leaves\.ask\('balance'\);/, 'what the tree holds, before a send');
+  assert.equal((dm.match(/leaves\.runUser\('offboard_quote', [^\n]*\{ person: true \}\)/g) || []).length, 3, 'every quote of a payment out of the tree');
+  const bg = readFileSync(new URL('../background.js', import.meta.url), 'utf8');
+  assert.match(bg, /'default\.leafInfo': async \(\) => await leaves\.ask\('info'\),/);
   // Only a person's command moves lastAsked, which keeps the mailbox read off for 20 s.
   const run = host.slice(host.indexOf("case 'run': {"), host.indexOf("case 'sync':"));
-  assert.ok(run.indexOf('if (args.paying && !person)') < run.indexOf('if (args.paying) S.lastAsked = Date.now();'));
+  assert.ok(run.indexOf('if (args.paying && !person)') < run.indexOf('if (asks) S.lastAsked = Date.now();'));
 });
 
 test('the mailbox is read no oftener than twice what the last read took', () => {

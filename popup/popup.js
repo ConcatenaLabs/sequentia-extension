@@ -1817,7 +1817,8 @@ async function renderTrade() {
       leaves: { command: async (cmd, args) => {
         const t = Date.now();
         console.log(`[trade] ${cmd} asked`);
-        try { return await rpc('default.leaf', { command: cmd, args: args || {} }); }
+        // While a quote or a confirmation holds (tradeHolds), the person waits on its reads.
+        try { return await rpc('default.leaf', { command: cmd, args: args || {}, person: tradeHolds > 0 }); }
         finally { console.log(`[trade] ${cmd}: ${Date.now() - t} ms`); }
       },
       // The wallet's upkeep starts nothing new while a person waits on a quote or a confirmation

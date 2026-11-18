@@ -17,11 +17,25 @@
 import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
 
-// The library: every command takes `cost(command)` ms of the worker's time, one at a time.
-function library({ cost = (c) => (c === 'coins' ? 90 : c === 'sync' ? 2000 : 40) } = {}) {
-  const L = { calls: [], cost };
-  L.run = (command) => {
-    L.calls.push({ at: Date.now(), command });
+// The library: every command takes `cost(command)` ms of the worker's time, one at a time. Each call
+// records the priority the host ran it at (its `leafHostDiag().running`, when the host has one).
+// `boards`: that many assets the operator serves, each with coins at the wallet's address to board.
+// `planned`: the first `send` is refused for coins a plan holds, until they are released.
+function library({ cost = (c) => (c === 'coins' ? 90 : c === 'sync' ? 2000 : 40), boards = 0, planned = false } = {}) {
+  const L = { calls: [], cost, onchain: new Map(), released: !planned };
+  for (let i = 0; i < boards; i++) L.onchain.set(i.toString(16).padStart(64, '0'), 1000n);
+  L.run = (command, args, prio) => {
+    L.calls.push({ at: Date.now(), command, prio, args });
+    switch (command) {
+      case 'info': return { operator: 'op', server_info: { assets: [...L.onchain.keys()].map((asset) => ({ asset, min_leaf: '10' })) } };
+      case 'balance': return { assets: {}, sequentia_onchain: Object.fromEntries([...L.onchain].filter(([, v]) => v > 0n).map(([a, v]) => [a, String(v)])) };
+      case 'board_quote': return { fee: { asset: args.asset, amount: '1' } };
+      case 'board': L.onchain.set(args.asset, 0n); return { txid: 'b'.repeat(64) };
+      case 'send':
+        if (!L.released) throw { kind: 'planned', message: 'the coins it needs are planned', asset: 'aa', release: ['c1'] };
+        return { sent: true };
+      case 'plan_release': L.released = true; return { released: ['c1'] };
+    }
     switch (command) {
       case 'schedule': return { now: Math.floor(Date.now() / 1000), due: false, next_sync_at: Math.floor(Date.now() / 1000) + 86400, why: null,
         receive_requests: [{ owner: 'k', state: 'waiting', asked_at: Math.floor(Date.now() / 1000) - 60, lapses_at: Math.floor(Date.now() / 1000) + 80000 }] };
@@ -55,10 +69,12 @@ async function host(L, storage) {
     postMessage({ id, op, args }) {
       this.chain = this.chain.then(() => new Promise((done) => {
         const ms = op === 'run' ? L.cost(args.command) : 0;
+        let prio;
+        try { prio = globalThis.leafHostDiag ? (globalThis.leafHostDiag().running || {}).prio : undefined; } catch {}
         setTimeout(() => {
           let m;
-          try { m = { id, ok: true, value: op === 'exists' ? true : op === 'run' ? { result: L.run(args.command, args.args || {}) } : true }; }
-          catch (e) { m = { id, ok: false, error: { message: String(e.message) } }; }
+          try { m = { id, ok: true, value: op === 'exists' ? true : op === 'run' ? { result: L.run(args.command, args.args || {}, prio) } : true }; }
+          catch (e) { m = { id, ok: false, error: e && e.kind ? e : { message: String(e.message) } }; }
           this.onmessage({ data: m });
           done();
         }, ms);
@@ -70,6 +86,7 @@ async function host(L, storage) {
     const was = console[k];
     console[k] = (...a) => { logs.push({ at: Date.now(), line: a.join(' ') }); if (process.env.VERBOSE) was(...a); };
   }
+  delete globalThis.leafHostDiag;
   await import('../offscreen-leaves.js?run=' + Math.random());
   const ask = (op, args) => new Promise((ok) => listener({ scope: 'leaf', op, args }, { id: 'test' }, ok));
   return { events, logs, ask };
@@ -184,5 +201,143 @@ test('a pass with a long step stops at its bound, says where, and the next passe
   assert.ok(mail.length >= 8, `${mail.length} mailbox reads in four minutes`);
   assert.ok(keys > 100, 'the keys keep being handed, pass after pass');
   assert.ok(bound.length >= 1 && /address/.test(bound[0].line), 'the bound names the command it stopped in');
+  await within(ask('stop'), 10_000);
+}));
+
+// The priorities the host's queue gives (src/leaf-queue.js): PERSON 3, PROMPT 2, PASS 1, UPKEEP 0.
+const PERSON_P = 3, PROMPT_P = 2;
+
+test('every read a person asks for answers within the command running, never shared, never dropped', timed(async () => {
+  // Later, a sync that holds the library 150 s: past the 120 s after which an outside read is
+  // refused as busy.
+  let longSync = false;
+  const L = library({ cost: (c) => (c === 'coins' ? 90 : c === 'sync' ? (longSync ? 150_000 : 2000) : 40) });
+  const { ask } = await opened({ L });
+  let k = 0, flood = true;
+  const pending = [];
+  // A flood of different reads, and the same `balance` an outside caller keeps asking.
+  const spin = () => { if (flood) { pending.push(ask('run', { command: 'coins', args: { k: k++ } })); pending.push(ask('run', { command: 'balance', args: {} })); } };
+  await advance(30_000, 50, spin);
+  // Each way a person's read reaches the host: a site's or the developer page's (`run`, person), a
+  // quote held by the popup or a site (`runUser` with person), Receive and Send (`ask`, prompt).
+  const reads = [
+    ['site or developer page', { command: 'balance', args: {}, paying: true, person: true }],
+    ['a quote a person waits on', { command: 'take_quote', args: { x: 1 }, paying: true, person: true }],
+    ['Receive or Send', { command: 'balance', args: {}, prompt: true }],
+  ];
+  for (const [who, a] of reads) {
+    const t = Date.now();
+    const r = await within(ask('run', a), 1000, 10);
+    const ran = L.calls.filter((c) => c.at >= t && c.command === a.command);
+    say(`${who}: ${r.done ? 'answered in ' + (Date.now() - t) + ' ms' : 'not answered in 1 s'}, ran at ${ran.map((c) => c.prio).join(',')}`);
+    assert.ok(r.done && r.value.ok, `${who}: answered within the command running`);
+    assert.ok(ran.some((c) => c.prio >= PROMPT_P), `${who}: ran at a person's priority, by itself`);
+  }
+  // The composer's background follow (no hold, no person): still the wallet's own work.
+  const bg = ask('run', { command: 'swaps', args: {}, paying: true });
+  await advance(2000, 50, spin);
+  const bgRan = L.calls.filter((c) => c.command === 'swaps');
+  assert.ok(bgRan.every((c) => c.prio === 0), 'a trade\'s background read stays upkeep');
+  // A person's read asked while the pass's 150 s sync runs: answered after it, never refused as busy.
+  flood = false;
+  await within(Promise.all(pending), 400_000);
+  longSync = true;
+  const t = Date.now();
+  const sync = ask('sync', {});
+  await advance(200, 50);
+  const slow = ask('run', { command: 'balance', args: { n: 1 }, paying: true, person: true });
+  const r = await within(slow, 200_000);
+  say(`a person's read behind a 150 s command: ${r.done ? (r.value.ok ? 'answered' : 'refused: ' + JSON.stringify(r.value.error)) : 'not answered'} after ${Date.now() - t} ms`);
+  assert.ok(r.done && r.value.ok, 'never dropped as busy');
+  await within(sync, 200_000);
+  await within(bg, 10_000);
+  await within(ask('stop'), 10_000);
+}));
+
+test('a site polling its orders at a person\'s priority does not keep the mailbox read off', timed(async () => {
+  const { L, ask } = await opened();
+  const t0 = Date.now();
+  const polls = [];
+  let i = 0;
+  await advance(2 * 60_000, 50, () => { if (i++ % 100 === 0) polls.push(ask('run', { command: 'orders', args: {}, paying: true, person: true })); });
+  const mail = since(L, t0, 'mailbox');
+  const ran = since(L, t0, 'orders');
+  say(`a site polling every 5 s: ${ran.length} polls at ${[...new Set(ran.map((c) => c.prio))].join(',')}; mailbox reads in 2 min: ${mail.length}`);
+  assert.ok(ran.length >= 20 && ran.every((c) => c.prio === PERSON_P), 'each poll at a person\'s priority');
+  assert.ok(mail.length >= 8, `${mail.length} mailbox reads in two minutes`);
+  await within(Promise.all(polls), 10_000);
+  await within(ask('stop'), 10_000);
+}));
+
+test('taking the coins home runs at a person\'s priority', timed(async () => {
+  const L = library({ planned: true });
+  // One coin to take home, which the quote asks an exit for.
+  const run = L.run;
+  L.run = (command, args, prio) => (command === 'coins' ? (run(command, args, prio), [{ leaf_id: 'h1', asset: 'aa'.repeat(32), value: '5', state: 'live' }]) : run(command, args, prio));
+  const { ask } = await opened({ L });
+  let k = 0;
+  const pending = [];
+  const spin = () => { pending.push(ask('run', { command: 'coins', args: { k: k++ } })); };
+  const t0 = Date.now();
+  const q = await within(ask('homeQuote', {}), 5000, 50);
+  assert.ok(q.done && q.value.ok, 'quoted');
+  const home = L.calls.filter((c) => c.at >= t0 && ['channels', 'coins', 'exit_quote'].includes(c.command));
+  say(`home quote ran at ${home.map((c) => c.command + ':' + c.prio).join(', ')}`);
+  for (const cmd of ['channels', 'exit_quote']) {
+    assert.ok(home.some((c) => c.command === cmd) && home.filter((c) => c.command === cmd).every((c) => c.prio === PERSON_P), `the home quote's ${cmd} at PERSON`);
+  }
+  assert.ok(home.some((c) => c.command === 'coins' && c.prio === PERSON_P), 'its coins read at PERSON');
+  await within(Promise.all(pending), 60_000);
+  await within(ask('stop'), 10_000);
+}));
+
+test('a payment\'s release, its sync and its polls run at a person\'s priority', timed(async () => {
+  const L = library({ planned: true });
+  const { ask } = await opened({ L });
+  let k = 0;
+  const pending = [];
+  const spin = () => { pending.push(ask('run', { command: 'coins', args: { k: k++ } })); };
+  const t1 = Date.now();
+  const pay = ask('run', { command: 'send', args: { request: 'r' }, paying: true });
+  const r = await within(pay, 120_000, 50);
+  await advance(1000, 50, spin);
+  // From the release's sync to the payment asked again: the sync, its reads and the poll of the coins.
+  const calls = L.calls.filter((c) => c.at >= t1);
+  const rel = calls.findIndex((c) => c.command === 'plan_release');
+  const from = calls.findIndex((c, i) => i > rel && c.command === 'sync');
+  const again = calls.findIndex((c, i) => i > from && c.command === 'send');
+  const poll = calls.slice(from, again);
+  say(`release: send ${r.done && r.value.ok ? 'made' : 'not made'}; from its sync to the send again: ${poll.map((c) => c.command + ':' + c.prio).join(', ')}`);
+  assert.ok(r.done && r.value.ok, 'made through the release');
+  assert.ok(rel >= 0 && from > rel && again > from, 'released, synced, asked again');
+  // Other work may run between two of the person's commands (each then waits for that one only),
+  // but every command of the release is the person's: its sync, the sync's reads, and the poll of
+  // the coins that let the payment go again (the last read before it).
+  assert.equal(poll[0].prio, PERSON_P, 'the release\'s sync at PERSON');
+  for (const cmd of ['coins', 'participations', 'channels', 'balance']) assert.ok(poll.some((c) => c.command === cmd && c.prio === PERSON_P), `the sync's ${cmd} at PERSON`);
+  const lastPoll = poll.filter((c) => c.command === 'coins').at(-1);
+  assert.equal(lastPoll && lastPoll.prio, PERSON_P, 'the poll that let the payment go again at PERSON');
+  await within(Promise.all(pending), 60_000);
+  await within(ask('stop'), 10_000);
+}));
+
+test('a pass with a hundred assets to board stops at its bound between two whole boards', timed(async () => {
+  const L = library({ boards: 100 });
+  const { ask, logs } = await opened({ L });
+  await advance(3 * 60_000, 100);
+  const bound = logs.filter((l) => /the pass stopped at its bound/.test(l.line));
+  const counts = bound.map((l) => Number((l.line.match(/\((\d+) of its commands/) || [])[1]));
+  const boarded = [...L.onchain.values()].filter((v) => v === 0n).length;
+  say(`boards: ${boarded} of 100 boarded in 3 min; bound lines ${bound.length}, their counts ${counts.join(',')}${bound[0] ? '; first: ' + bound[0].line : ''}`);
+  assert.ok(bound.length >= 1, 'the pass stopped at its bound');
+  assert.ok(counts.every((n) => n <= 200 + 12), `every stop within one board of the bound (${counts.join(',')})`);
+  assert.ok(bound.every((l) => /it was in boards/.test(l.line)));
+  // Never inside one board: each board's quote and the board itself, together.
+  const seq = L.calls.filter((c) => c.command === 'board_quote' || c.command === 'board');
+  for (let i = 0; i < seq.length; i++) {
+    if (seq[i].command !== 'board') continue;
+    assert.equal(seq[i - 1].args.asset, seq[i].args.asset, 'a board follows its own quote');
+  }
+  assert.equal(boarded, 100, 'every asset boarded, pass after pass');
   await within(ask('stop'), 10_000);
 }));
