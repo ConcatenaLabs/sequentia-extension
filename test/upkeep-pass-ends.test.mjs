@@ -462,3 +462,90 @@ test('a person\'s sync runs at once at PERSON while a site polls back to back', 
   await within(Promise.all(polls), 10_000);
   await within(ask('stop'), 10_000);
 }));
+
+// Round 4 (sequentia-extension#221, #222).
+
+test('a person stream of writes back to back holds the mailbox and the pass off only for a bounded time', timed(async () => {
+  // The review's probe: a distinct person `receive` every 100 ms, each taking 100 ms, for two minutes.
+  const L = library({ cost: (c) => (c === 'receive' ? 100 : c === 'sync' ? 2000 : 40) });
+  const { ask } = await opened({ L });
+  const t0 = Date.now();
+  const writes = [];
+  let i = 0, mine = null, mineAt = null;
+  await advance(2 * 60_000, 50, () => {
+    if (i % 2 === 0) writes.push(ask('run', { command: 'receive', args: { k: i }, paying: true, from: 'provider-router.js:643 handle' }));
+    // A minute in, the person's own write from another caller (Receive's New code).
+    if (i === 1200) { const t = Date.now(); mine = ask('run', { command: 'receive', args: { mine: 1 }, paying: true, from: 'default-mode.js:266 leafCode' }).then((r) => { mineAt = Date.now() - t; return r; }); }
+    i++;
+  });
+  const mail = since(L, t0, 'mailbox');
+  const passes = since(L, t0, 'schedule').length;
+  const st = (await within(ask('status'), 1000)).value.value;
+  const last = st.diag && st.diag.lastPass;
+  say(`person writes back to back: ${writes.length} asked, ${since(L, t0, 'receive').length} ran; mailbox reads ${mail.length} (first at +${mail[0] ? mail[0].at - t0 : '-'} ms), pass schedule reads ${passes}, last pass ${last ? last.end + ' at +' + (Date.parse(last.at) || last.at) : '-'}; the person's own write answered in ${mineAt} ms`);
+  assert.ok(mail.length >= 6, `${mail.length} mailbox reads in two minutes`);
+  assert.ok(mail[0] && mail[0].at - t0 <= 35_000, 'the mailbox read gives way at most about 30 s');
+  assert.ok(passes >= 1, `${passes} passes in two minutes`);
+  assert.ok(last && last.at > t0 && (last.end === 'done' || last.end === 'bound'), 'a pass ran to its end');
+  const behind = (st.diag && st.diag.queue && st.diag.queue.byPrio && st.diag.queue.byPrio[1]) || 0;
+  say(`after two minutes: ${behind} of the host's own commands waiting`);
+  assert.ok(behind <= 3, 'the reads after each write are one round at a time, not three reads a write');
+  const all = await within(Promise.all([...writes, mine]), 30_000);
+  assert.ok(all.done, 'every write answered or refused');
+  const refused = all.value.filter((r) => !r.ok);
+  assert.ok(refused.every((r) => r.error.kind === 'busy' && /already wait/.test(r.error.message)), 'a write past its caller\'s share is refused visibly');
+  assert.ok(mineAt != null && mineAt <= 2500, `the person's own write waited ${mineAt} ms: behind at most its own caller's share of the stream`);
+  await within(ask('stop'), 10_000);
+}));
+
+test('a person\'s sync that joins a background sync carries its priority into the sync\'s remaining steps', timed(async () => {
+  // The review's probe: a 1,000 ms sync of the wallet's own under way, a person's reads back to back.
+  const L = library({ cost: (c) => (c === 'sync' ? 1000 : c === 'orders' ? 100 : 40) });
+  const { ask } = await opened({ L });
+  const polls = [];
+  let i = 0;
+  const spin = () => { if (i++ % 2 === 0) polls.push(ask('run', { command: 'orders', args: {}, paying: true, person: true, from: 'site' })); };
+  await advance(2000, 50, spin);
+  const t = Date.now();
+  const bg = ask('sync', {});
+  await advance(100, 50, spin);
+  let at = null;
+  const mine = ask('run', { command: 'sync', args: {}, paying: true, person: true }).then((r) => { at = Date.now() - t; return r; });
+  await advance(4000, 50, spin);
+  const steps = L.calls.filter((c) => c.at >= t && ['sync', 'coins', 'participations', 'channels', 'balance'].includes(c.command));
+  const after = steps.slice(steps.findIndex((c) => c.command === 'sync') + 1, steps.findIndex((c) => c.command === 'balance') + 1);
+  say(`a person's sync joining a background one: answered after ${at} ms; its remaining steps ran at ${after.map((c) => c.command + ':' + c.prio).join(', ')}`);
+  assert.equal(steps.filter((c) => c.command === 'sync').length, 1, 'one sync, joined');
+  assert.ok(after.length >= 4 && after.every((c) => c.prio === PERSON_P), 'every remaining step at PERSON');
+  assert.ok(at != null && at <= 1000 + 4 * 300, `answered after ${at} ms`);
+  await within(Promise.all([bg, mine, ...polls]), 10_000);
+  await within(ask('stop'), 10_000);
+}));
+
+test('a payment\'s release that joins a background sync carries its priority into the sync\'s remaining steps', timed(async () => {
+  const L = library({ planned: true, cost: (c) => (c === 'sync' ? 1000 : c === 'orders' ? 100 : 40) });
+  const { ask } = await opened({ L });
+  const polls = [];
+  let i = 0;
+  const spin = () => { if (i++ % 2 === 0) polls.push(ask('run', { command: 'orders', args: {}, paying: true, person: true, from: 'site' })); };
+  // The payment is refused for planned coins; while its release is asked, a sync of the wallet's own starts.
+  const run = L.run;
+  let bg = null;
+  L.run = (command, args, prio) => { const v = run(command, args, prio); if (command === 'plan_release') bg = ask('sync', {}); return v; };
+  const t = Date.now();
+  const pay = ask('run', { command: 'send', args: { request: 'r' }, paying: true });
+  await advance(6000, 50, spin);
+  const r = await within(pay, 10_000);
+  const calls = L.calls.filter((c) => c.at >= t);
+  const s = calls.findIndex((c) => c.command === 'sync');
+  const again = calls.findIndex((c, k) => k > s && c.command === 'send');
+  // Between the sync and the payment asked again: the sync's steps, and other work's reads around
+  // them (the reads after the release was asked, at PASS).
+  const steps = calls.slice(s + 1, again).filter((c) => ['coins', 'participations', 'channels', 'balance'].includes(c.command));
+  say(`a release joining a background sync: ${calls.filter((c) => c.command === 'sync').length} sync(s); reads between it and the payment again: ${steps.map((c) => c.command + ':' + c.prio).join(', ')}; the payment ${r.done && r.value.ok ? 'made' : 'not made'}`);
+  assert.ok(r.done && r.value.ok, 'made');
+  assert.equal(calls.filter((c) => c.command === 'sync').length, 1, 'the release joined the sync under way');
+  for (const cmd of ['coins', 'participations', 'channels', 'balance']) assert.ok(steps.some((c) => c.command === cmd && c.prio === PERSON_P), `the sync's ${cmd} after the join at PERSON`);
+  await within(Promise.all([bg, ...polls].filter(Boolean)), 10_000);
+  await within(ask('stop'), 10_000);
+}));

@@ -147,14 +147,27 @@ wasm. Read this before changing anything.
   and `leaves.ask` (Receive's `schedule` and `info`, the tree's `balance` and `info` before a
   send, the Trade tab's `info`). A person's read does not make the wallet's own work step aside
   (only a person's other commands, and the popup's hold, do): the order already serves it
-  first. The same person's read waiting is shared (a site polling one read adds one command,
-  not one per poll), and one caller has at most 16 different reads waiting; one more is
-  refused at once as busy, which the caller sees and the host says once a minute. Taking the
+  first. The wallet's own work (the pass, the mailbox and channel reads, a sync the rest of the
+  wallet asks) steps aside for those for at most 30 s at a stretch (`STEP_ASIDE_MOST_MS`; the
+  popup's hold, which it lets go when the person's step ends, up to 3 minutes), and a stream of
+  a person's commands holds the mailbox read and the next pass back for at most as long; past
+  that the wallet's own work takes its fair turns among the person's commands, which still go
+  first. The reads after a command that moves coins (coins, participations, balance) run one
+  round at a time: a command that ends while a round is under way has one more round after it,
+  never one of its own, so a stream of commands adds one round to the line. The same person's
+  read waiting is shared (a site polling one read adds one command, not one per poll), and one
+  caller has at most 16 different reads, and 16 other commands, waiting; one more is refused at
+  once as busy, which the caller sees and the host says once a minute. So a person's own
+  command waits at most for its turn among those of the caller it came from, the command
+  running and the lower turns due. Taking the
   coins home (`homeQuote`, `takeHome`, to the balance it reports) and a payment's release (its
   sync, the sync's reads, its polls of the coins) run at PERSON too; a home quote is made from
   a reading of the coins and channels made then, and a refusal of either is the answer. A sync
   a person asks for (a site's, developer mode's Sync now) runs at once at PERSON; one asked
-  otherwise waits for a person at most a minute. The faucet's coin taken in reports the balance
+  otherwise waits for a person at most a minute. One sync runs at a time, and a caller asking
+  while one is under way joins it: the sync then goes at the highest priority of its callers for
+  its remaining steps, the command it waits on in the queue included, so a person or a payment's
+  release that joins a sync of the wallet's own is not held at that sync's lower priority. The faucet's coin taken in reports the balance
   at PROMPT before the popup says Received.
   A read of a trade's background follow (the composer or a site's engine with no hold, no
   `person`) is the wallet's own work instead: it goes in line with the upkeep and does not
@@ -177,8 +190,9 @@ wasm. Read this before changing anything.
   document's console answers it at once: the command running with its arguments' shape and
   caller, what waits by priority and command, the pass under way and the last, the reads, and
   the payment name's stock (`nameStockDiag()`). The scheduled pass gives way between its
-  commands while a person waits, starts no sooner than 15 s after a person's last command
-  (put off 90 s at most, never while a take waits), and leaves the bond's watch to a later
+  commands while a person waits (within the bound above), starts no sooner than 15 s after a
+  person's last command (a stream of them puts it off 30 s at most, anything 90 s at most,
+  never while a take waits), and leaves the bond's watch to a later
   pass when a person is waiting. While the popup's trade composer prices or confirms a trade
   it also holds the upkeep (`default.holdUpkeep`, op `holdUpkeep`, at most two minutes, let go
   when the step ends). A sync the composer asks for (it follows open trades with one) waits

@@ -149,6 +149,26 @@ test('a person\'s reads do not make the wallet\'s own work step aside; the same 
   assert.equal(st.capped, 1);
 });
 
+test('a command still waiting can be raised to a higher priority; one running cannot', async () => {
+  let release;
+  const w = [];
+  const q = createQueue({ send: (op, a) => { w.push(a.command); return a.command === 'first' ? new Promise((r) => { release = r; }) : Promise.resolve(a.command); } });
+  const first = q.call('run', { command: 'first' }, PASS, { ticket: {} });
+  const t1 = {}, t0 = {};
+  const later = q.call('run', { command: 'person' }, PERSON);
+  const mine = q.call('run', { command: 'step' }, PASS, { ticket: t1 });
+  const up = q.call('run', { command: 'up' }, UPKEEP, { ticket: t0, share: true, dropAfterMs: 1 });
+  assert.equal(q.raise(t1, PERSON), true, 'raised while it waits');
+  assert.equal(q.raise(t1, PASS), false, 'never lowered');
+  assert.equal(q.raise({}, PERSON), false);
+  assert.equal(q.raise(t0, PROMPT), true, 'an upkeep read raised is no longer dropped or shared');
+  await sleep(1);
+  assert.equal(q.raise({ job: null }, PERSON), false);
+  release('f');
+  assert.deepEqual(await Promise.all([first, later, mine, up]), ['f', 'person', 'step', 'up']);
+  assert.deepEqual(w, ['first', 'person', 'step', 'up'], 'the raised step went with the person\'s commands, ahead of PASS');
+});
+
 test('the shape of a command\'s arguments names its keys and kinds, never its values', () => {
   assert.deepEqual(argsShape({ request: 'sq1secret', amount: '5', orders: ['a', 'b'], shown: { fee: 1 }, n: null }),
     { request: 'string', amount: 'string', orders: 'array(2)', shown: '{fee}', n: 'null' });
@@ -184,7 +204,7 @@ const host = readFileSync(new URL('../offscreen-leaves.js', import.meta.url), 'u
 
 test('the host sends every command through the queue, a person’s at PERSON', () => {
   assert.match(host, /function call\(op, args = \{\}, prio = PASS, opts\) \{[\s\S]{0,160}return Q\.call\(op, args, prio, opts\);/);
-  assert.match(host, /run: \(c, a\) => runCommand\(c, a, PERSON, READS\.has\(c\) && !asks \? personRead\(from\) : \{ from \}\)/);
+  assert.match(host, /run: \(c, a\) => runCommand\(c, a, PERSON, READS\.has\(c\) \? \(asks \? \{ from \} : personRead\(from\)\) : personWrite\(from\)\)/);
   assert.match(host, /command: 'mailbox' \}, PROMPT\)/, "the faucet's coin taken in goes before upkeep");
   // Only post() talks to the worker.
   assert.equal((host.match(/worker\.postMessage/g) || []).length, 1);
@@ -203,7 +223,7 @@ test('the scheduled pass gives way to a person between its commands, and starts 
 
 test('a sync asked for a trade waits for a person and shares the last one', () => {
   assert.match(host, /if \(command === 'sync'\) return await syncForCaller\(!!args\.paying, !!args\.paying && !!args\.person\);/);
-  assert.match(host, /while \(\(upkeepHeld\(\) \|\| Q\.personWaits\(\)\) && Date\.now\(\) < until\) await/, 'waits for a person, at most SYNC_WAITS_MOST_MS');
+  assert.match(host, /while \(stepAside\(\) && Date\.now\(\) < until\) await/, 'waits for a person, at most SYNC_WAITS_MOST_MS (and the step-aside bound)');
   assert.match(host, /Date\.now\(\) - S\.lastSync\.at < SYNC_SHARED_MS\) return S\.lastSyncValue/);
 });
 
@@ -233,7 +253,7 @@ test('a read the trade composer asks while nobody waits is the wallet’s own wo
   assert.match(bg, /'default\.leafInfo': async \(\) => await leaves\.ask\('info'\),/);
   // Only a person's command moves lastAsked, which keeps the mailbox read off for 20 s.
   const run = host.slice(host.indexOf("case 'run': {"), host.indexOf("case 'sync':"));
-  assert.ok(run.indexOf('if (args.paying && !person)') < run.indexOf('if (asks) S.lastAsked = Date.now();'));
+  assert.ok(run.indexOf('if (args.paying && !person)') < run.indexOf('if (asks) noteAsked();'));
 });
 
 test('the mailbox is read no oftener than twice what the last read took', () => {

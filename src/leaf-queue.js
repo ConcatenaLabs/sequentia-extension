@@ -21,7 +21,10 @@
 //                    when `most` reads of the same key (one caller) already wait;
 //       read         a person's read: it goes at its priority but does not make the wallet's own
 //                    work step aside (personWaits), which only a person's other commands do;
+//       ticket       an object the queue keeps the command in while it waits, for raise();
 //       from         who asked (for the state a capture reads), kept with the command.
+//   raise(ticket, prio): a command still waiting goes at `prio` from now on, when that is higher (a
+//     caller of a higher priority now waits on it); one running already runs.
 //
 // The order: the highest priority waiting, first asked first, except that a priority with work
 // waiting that FAIR_TURN commands of higher priorities have gone past is served next (the highest
@@ -121,7 +124,7 @@ export function createQueue({ send, now = () => Date.now(), hungAfter = () => 10
   }
 
   return {
-    call(op, args = {}, prio = UPKEEP, { share = false, dropAfterMs = null, cap = null, read = false, from = null } = {}) {
+    call(op, args = {}, prio = UPKEEP, { share = false, dropAfterMs = null, cap = null, read = false, from = null, ticket = null } = {}) {
       counts.asked++;
       // Dropping is the upkeep's alone.
       if (prio !== UPKEEP) dropAfterMs = null;
@@ -131,6 +134,7 @@ export function createQueue({ send, now = () => Date.now(), hungAfter = () => 10
         if (same) {
           counts.shared++;
           same.subs.push({ ok, no });
+          if (ticket) ticket.job = same;
           // A caller that cannot take a refusal keeps the read; else someone still wants it, and
           // its bound counts from the latest ask.
           if (dropAfterMs == null) same.dropAfterMs = null;
@@ -143,7 +147,9 @@ export function createQueue({ send, now = () => Date.now(), hungAfter = () => 10
           no({ kind: 'busy', message: `${cap.most} reads asked by the same caller already wait for the wallet; ask again once they are answered` });
           return;
         }
-        waiting.push({ op, args, prio, subs: [{ ok, no }], at: now(), seq: seq++, key, dropAfterMs, from, read: !!read, capKey: cap ? cap.key : null });
+        const job = { op, args, prio, subs: [{ ok, no }], at: now(), seq: seq++, key, dropAfterMs, from, read: !!read, capKey: cap ? cap.key : null };
+        if (ticket) ticket.job = job;
+        waiting.push(job);
         pump();
       });
     },
@@ -153,6 +159,15 @@ export function createQueue({ send, now = () => Date.now(), hungAfter = () => 10
     running: () => (running ? { op: running.op, command: commandOf(running.op, running.args), shape: argsShape(running.op === 'run' ? running.args.args : running.args),
       prio: running.prio, ms: now() - running.started, waited: running.started - running.at, from: running.from } : null),
     waiting: () => waiting.length,
+    raise(ticket, prio) {
+      const job = ticket && ticket.job;
+      if (!job || !(prio > job.prio) || !waiting.includes(job)) return false;
+      job.prio = prio;
+      // A raised command is no longer an upkeep read anyone may drop or share at its old priority.
+      job.dropAfterMs = null;
+      job.key = null;
+      return true;
+    },
     // What the line holds, for a capture: how many wait at each priority, the commands most asked
     // (with who asked them), the oldest wait, and the counts since the start.
     stats() {
