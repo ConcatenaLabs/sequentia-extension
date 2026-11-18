@@ -186,13 +186,24 @@ export function catchUpSyncIn(w, { now, libNow = null, openAt = null }) {
 // The web wallet's leaves.js holds the same rules.
 export const CARE_EVERY_MS = 10 * 60_000;
 
-// The arguments `care` runs with: the claim scan, and the wallet's channels cared for (each read
-// and its credit folded, and one opened in each asset the operator makes channels of, from half of
-// the wallet's leaves of it). Its planning reach is the library's own.
-export function careArgs(scan) {
-  const a = { channels: true };
+// The arguments `care` runs with: the claim scan, and, in developer mode, the wallet's channels
+// cared for (each read and its credit folded, and one opened in each asset the operator makes
+// channels of, from half of the wallet's leaves of it). In default mode (`channels` false) care
+// neither opens nor folds a channel: the wallet keeps its money in coins, which every payment and
+// trade can spend, and closes any channel it still holds into a coin at the next round
+// (`channelsToClose`), as the web wallet's contract says (its docs/DEFAULT_MODE.md). Its planning
+// reach is the library's own.
+export function careArgs(scan, { channels = true } = {}) {
+  const a = { channels: !!channels };
   if (scan) a.scan = scan;
   return a;
+}
+
+// The channel coins default mode closes into plain coins at the next round: each live one that no
+// participation holds yet. The web wallet's leaves.js channelsToClose.
+export function channelsToClose(channels, coins = []) {
+  const held = new Set((coins || []).filter((c) => c && c.state !== 'live').map((c) => c.leaf_id));
+  return (channels || []).filter((c) => c && c.coin_state === 'live' && c.leaf_id && !held.has(c.leaf_id)).map((c) => c.leaf_id);
 }
 
 // How often the host reads the wallet's channels from the operator in default mode: every
@@ -279,15 +290,80 @@ export function plannedCoins(plans) {
   return out;
 }
 
-// One command asked through the next round when it needs a planned coin. `io` gives
-// `run(command, args)` (the library's answer, or a throw of its refusal `{kind, message,
-// asset?, release?}`), `sync()`, `coins()`, `sleep(ms)`, `now()` (ms) and, optionally,
-// `waiting(state | null)`, told what is released while the wallet waits for the round.
+// How often a payment that waits for the wallet's own round asks whether it is through. The web
+// wallet's ROUND_POLL_MS.
+export const ROUND_POLL_MS = 5_000;
+// A payment whose coins waited for RELEASE_TRIES rounds and still cannot go: said in plain words,
+// never the library's own text (it names the asset by its id). The web wallet's settleGaveUp.
+export const SETTLE_GAVE_UP = 'This payment could not go through yet: nothing was sent, and your money stays in your wallet.';
+
+// One command asked through the next round when the wallet's own coins need one first, never
+// refused for it (the web wallet's leaves.js `paying`):
+//   `planned`      the unplanned coins fall short and the planned ones it names cover it: they are
+//                  given up in the next round for leaves no plan names (`plan_release`);
+//   `settle_first` what the wallet shows is held back only for want of a round (coins at the
+//                  operator's depth limit, received and not settled, in a round of the wallet's own
+//                  whose new coins it has not taken yet): those coins go through the next round
+//                  (`settle_first`, which gives up nothing twice), asked again until it answers
+//                  ready;
+//   `in_channel`   the wallet's side of a channel would cover it: the channels it names are closed
+//                  into the next round (`quote`, then `participate`), each giving back a leaf of the
+//                  wallet's own, and `channelsHeld(asset)` is told so care opens none meanwhile.
+// Then the same command is asked again; at most RELEASE_TRIES rounds for one command. `io` gives
+// `run(command, args)` (the library's answer, or a throw of its refusal `{kind, message, asset?,
+// release?, coins?, close?}`), `sync()`, `coins()`, `sleep(ms)`, `now()` (ms) and, optionally,
+// `waiting(state | null)`, told what goes through a round while the wallet waits for it, and
+// `channelsHeld(asset | null)`.
 export async function payThrough(command, args, io) {
   const sleep = io.sleep || ((ms) => new Promise((r) => setTimeout(r, ms)));
   const now = io.now || (() => Date.now());
+  const result = (v) => (v && typeof v === 'object' && 'result' in v ? v.result : v);
   for (let i = 0; ; i++) {
     try { return await io.run(command, args); } catch (e) {
+      // An offboard's quote answers at once, as the library gave it: the payment is reviewed then,
+      // and the offboard made on that review waits for its round.
+      if (e && e.kind === 'settle_first' && command !== 'offboard_quote') {
+        if (i >= RELEASE_TRIES) throw { kind: 'refused', code: 'settle_gave_up', message: SETTLE_GAVE_UP };
+        const coins = Array.isArray(e.coins) && e.coins.length ? e.coins : null;
+        const ask = coins ? { coins } : { asset: e.asset };
+        const state = { command, coins: coins || [], asset: e.asset || null, since: now(), why: 'settle' };
+        if (io.waiting) io.waiting(state);
+        try {
+          const until = now() + RELEASE_WAIT_MS;
+          for (let first = true; ; first = false) {
+            if (!first) { try { await io.sync(); } catch { /* asked again at the next poll */ } }
+            let v = null;
+            try { v = result(await io.run('settle_first', ask)); } catch (s) {
+              // A library without the command: the refusal stands.
+              if (/no command|unknown command/i.test(String((s && s.message) || ''))) throw e;
+            }
+            if (v && v.ready) break;
+            if (now() >= until) throw { kind: 'refused', code: 'settle_gave_up', message: SETTLE_GAVE_UP };
+            await sleep(ROUND_POLL_MS);
+          }
+        } finally { if (io.waiting) io.waiting(null); }
+        continue;
+      }
+      if (e && e.kind === 'in_channel' && Array.isArray(e.close) && e.close.length && i < RELEASE_TRIES) {
+        const state = { command, coins: e.close, asset: e.asset || null, since: now(), why: 'channel' };
+        if (io.waiting) io.waiting(state);
+        if (io.channelsHeld) io.channelsHeld(e.asset || true);
+        try {
+          const q = result(await io.run('quote', { leaves: e.close }));
+          state.answer = result(await io.run('participate', { leaves: e.close, shown: q && q.coins }));
+          if (io.waiting) io.waiting(state);
+          const until = now() + RELEASE_WAIT_MS;
+          for (;;) {
+            try { await io.sync(); } catch { /* the next poll syncs again */ }
+            let cs = null;
+            try { cs = await io.coins(); } catch { /* read again at the next poll */ }
+            if (cs && releaseDone(cs, e.close)) break;
+            if (now() >= until) throw { kind: 'refused', message: RELEASE_TIMEOUT };
+            await sleep(ROUND_POLL_MS);
+          }
+        } finally { if (io.waiting) io.waiting(null); if (io.channelsHeld) io.channelsHeld(null); }
+        continue;
+      }
       if (!e || e.kind !== 'planned' || !Array.isArray(e.release) || !e.release.length || i >= RELEASE_TRIES) throw e;
       const state = { command, coins: e.release, asset: e.asset || null, since: now() };
       if (io.waiting) io.waiting(state);

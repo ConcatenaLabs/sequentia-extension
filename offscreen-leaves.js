@@ -96,8 +96,10 @@
 //   'holdReads' { ms }                      -> no channel read for `ms` (0 lets them go on): while
 //        a person reviews a payment, so it never waits behind one
 //
-// Channels (default mode): `care` runs with `channels`, so the library opens a channel leaf in
-// each asset the operator makes them of, reads it and folds its credit by itself. A payment from
+// Channels: in developer mode `care` runs with `channels`, so the library opens a channel leaf in
+// each asset the operator makes them of, reads it and folds its credit by itself; default mode
+// keeps its money in coins, opens none and closes each it holds at the next round
+// (`closeChannels`). While the wallet holds a channel, a payment from
 // another wallet's channel into this one is final for this wallet at once, with no round: the
 // host reads the channels (`channel_sync`) every 300 ms while the popup is open and the wallet in
 // use, else every 5 s, never while another command runs, and reports the balance as soon as a
@@ -117,7 +119,7 @@
 // own are never shared and never refused as busy.
 // The mnemonic is handed to the worker and not kept here.
 
-import { inFlight, nextAskMs, requestWaits, catchUpWait, catchUpAfterSync, catchUpHeld, catchUpAttempt, catchUpGate, catchUpSyncIn, readUntil, syncDecision, careDue, careSummary, careArgs, payThrough, CARE_EVERY_MS, laterMode,
+import { inFlight, nextAskMs, requestWaits, catchUpWait, catchUpAfterSync, catchUpHeld, catchUpAttempt, catchUpGate, catchUpSyncIn, readUntil, syncDecision, careDue, careSummary, careArgs, channelsToClose, payThrough, CARE_EVERY_MS, RELEASE_WAIT_MS, laterMode,
   channelPollMs, channelArrivals, payableChannels } from './src/leaf-schedule.js';
 import { frozenAtoms, holdingRefusal } from './src/leaf-profiles.js';
 import { redoingAtoms } from './vendor/default-arca.js';
@@ -574,12 +576,35 @@ async function readChannelsNow() {
   } catch { /* the next read tries again */ }
 }
 
+// While a payment closes a channel to spend its side (payThrough's `in_channel`), care leaves
+// channels alone, so it never puts half of the side just freed back into a channel.
+const channelsHeld = () => S.channelsHeldUntil != null && Date.now() < S.channelsHeldUntil;
+// Default mode keeps no channel (the web wallet's docs/DEFAULT_MODE.md): each live channel coin is
+// given up in the next round for a plain coin of the wallet's side, once (one a participation
+// already holds is left alone). A wallet that opened channels before keeps nothing on a side that a
+// trade, a swap or a payment in the tree cannot spend.
+async function closeChannels() {
+  let chans = S.channels || [];
+  try { chans = (await call('run', { command: 'channels' })).result || chans; } catch { /* the last reading */ }
+  const ids = channelsToClose(chans, S.coins);
+  if (!ids.length) return;
+  try {
+    const q = (await call('run', { command: 'quote', args: { leaves: ids } })).result;
+    await call('run', { command: 'participate', args: { leaves: ids, shown: q && q.coins } });
+    console.info(`[leaves] closing ${ids.length} channel(s) into coins at the next round`);
+    try { S.coins = (await call('run', { command: 'coins' })).result || S.coins; } catch { /* the next sync reads them */ }
+    await readChannels();
+  } catch (e) { console.warn('[leaves] closing channels:', (e && e.message) || e); }
+}
+
 // `care`, when it is due (or `force`d): the wallet's own upkeep, with no prompt.
 async function careIfDue(force = false) {
   if (!S.open || (!force && !careDue(S.careAt, Date.now(), S.careMs))) return null;
   S.careAt = Date.now();
   try {
-    const v = (await call('run', { command: 'care', args: careArgs(S.scan) })).result;
+    // Default mode keeps its money in coins: care opens and folds no channel there, and so does no
+    // care while a payment closes one to spend its side (`channelsHeldUntil`).
+    const v = (await call('run', { command: 'care', args: careArgs(S.scan, { channels: !S.defaultMode && !channelsHeld() }) })).result;
     const sum = careSummary(v);
     S.lastCare = { at: Date.now(), value: v, summary: sum };
     console.info(`[leaves] care: ${sum.taken} claim(s) taken up, ${sum.planned} plan(s) signed, ${sum.cancelled} cancelled, ${sum.refreshing} sent to a round, ${sum.later} not yet near`);
@@ -595,6 +620,7 @@ async function careIfDue(force = false) {
       await readChannels();
       await reportBalance();
     }
+    if (S.defaultMode && !channelsHeld()) await closeChannels();
     // A claim taken up arrives as any coin does: the asset is its coin's.
     for (const c of (v && Array.isArray(v.claims) ? v.claims : [])) {
       if (!c || !c.taken_up || c.error) continue;
@@ -1212,10 +1238,13 @@ async function handle(op, args) {
         sync: () => sync('release', level),
         // The release's polls are the person's payment waiting.
         coins: async () => (await call('run', { command: 'coins' }, level)).result || [],
+        channelsHeld: (asset) => { S.channelsHeldUntil = asset ? Date.now() + RELEASE_WAIT_MS : null; },
         waiting: (st) => {
           const first = !!st && !S.releasing;
-          S.releasing = st ? { command: st.command, coins: st.coins, asset: st.asset, since: st.since } : null;
-          if (first) console.info(`[leaves] ${st.command}: the unplanned leaves fall short; ${st.coins.length} planned leaf(s) given up in the next round, the payment asked again once it is final`);
+          S.releasing = st ? { command: st.command, coins: st.coins, asset: st.asset, since: st.since, why: st.why || 'planned' } : null;
+          if (first) console.info(st.why === 'settle' ? `[leaves] ${st.command}: the coins it needs go through the next round first; paid once through`
+            : st.why === 'channel' ? `[leaves] ${st.command}: ${st.coins.length} channel(s) closed into the next round; paid once it is final`
+            : `[leaves] ${st.command}: the unplanned leaves fall short; ${st.coins.length} planned leaf(s) given up in the next round, the payment asked again once it is final`);
           emit('leafReleasing', S.releasing);
         },
         });

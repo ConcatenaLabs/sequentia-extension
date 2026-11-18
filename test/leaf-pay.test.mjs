@@ -2,7 +2,7 @@
 // planning reach. The host (offscreen-leaves.js) runs these rules over the library.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { careArgs, releaseDone, plannedCoins, payThrough, RELEASE_POLL_MS, RELEASE_WAIT_MS, RELEASE_TRIES, RELEASE_TIMEOUT } from '../src/leaf-schedule.js';
+import { careArgs, channelsToClose, releaseDone, plannedCoins, payThrough, RELEASE_POLL_MS, RELEASE_WAIT_MS, RELEASE_TRIES, RELEASE_TIMEOUT, ROUND_POLL_MS, SETTLE_GAVE_UP } from '../src/leaf-schedule.js';
 
 const X = 'aa'.repeat(32);
 
@@ -101,4 +101,95 @@ test('at most three releases for one payment, then the library\'s refusal', asyn
   await assert.rejects(payThrough('send', {}, f.io), (e) => e.kind === 'planned');
   assert.equal(f.log.filter((l) => l[0] === 'plan_release').length, RELEASE_TRIES);
   assert.equal(f.sends, RELEASE_TRIES + 1);
+});
+
+// RB6 (2026-11-18): two default-mode payments by name from the browser were said "declined" while
+// the wallet held about 250,000 of the asset: once on its channel's side (`in_channel`), once in a
+// round of its own whose coins it had not taken yet (`settle_first`). The web wallet pays both after
+// the round (its leaves.js `paying`); so does this host now.
+test('a payment whose coins wait for a round settles them first and goes, never declined', async () => {
+  const log = [];
+  let clock = 0, sends = 0, asks = 0;
+  const io = {
+    now: () => clock,
+    sleep: async (ms) => { clock += ms; log.push(['sleep', ms]); },
+    sync: async () => { log.push(['sync']); },
+    coins: async () => [],
+    waits: [],
+    waiting: (st) => io.waits.push(st && { ...st }),
+    run: async (command, args) => {
+      log.push([command, args]);
+      if (command === 'send') {
+        sends++;
+        if (sends === 1) throw { kind: 'settle_first', asset: X, coins: ['r1'], final_in_seconds: 240, message: 'refused: … settle them first (settle_first) …' };
+        return { result: { sent: { value: '100000000' } }, start: {} };
+      }
+      if (command === 'settle_first') { asks++; return { result: asks < 3 ? { ready: false, settling: ['r1'] } : { ready: true, settling: [] }, start: {} }; }
+      throw new Error('no command ' + command);
+    },
+  };
+  const v = await payThrough('send', { request: 'r', amount: '100000000', asset: X }, io);
+  assert.deepEqual(v.result, { sent: { value: '100000000' } });
+  assert.equal(sends, 2, 'asked again once the coins were through');
+  assert.deepEqual(log.find((l) => l[0] === 'settle_first'), ['settle_first', { coins: ['r1'] }], 'the coins the refusal named');
+  assert.equal(asks, 3, 'asked until ready');
+  assert.ok(log.some((l) => l[0] === 'sleep' && l[1] === ROUND_POLL_MS));
+  assert.equal(io.waits[0].why, 'settle');
+  assert.equal(io.waits.at(-1), null);
+  // No coins named: the asset's.
+  let n = 0;
+  const io2 = { ...io, waiting: null };
+  io2.run = async (c, a) => { if (c === 'send' && n++ === 0) throw { kind: 'settle_first', asset: X, coins: [], message: 'm' }; if (c === 'settle_first') { io2.asked = a; return { ready: true }; } return { result: 'ok' }; };
+  assert.equal((await payThrough('send', {}, io2)).result, 'ok');
+  assert.deepEqual(io2.asked, { asset: X });
+});
+
+test('a settle that never ends, or that keeps the payment short, is said in plain words with nothing sent', async () => {
+  let clock = 0;
+  const base = { now: () => clock, sleep: async (ms) => { clock += ms; }, sync: async () => {}, coins: async () => [] };
+  const never = { ...base, run: async (c) => { if (c === 'send') throw { kind: 'settle_first', asset: X, message: 'm' }; return { ready: false }; } };
+  await assert.rejects(payThrough('send', {}, never), (e) => e.code === 'settle_gave_up' && e.message === SETTLE_GAVE_UP);
+  assert.ok(clock >= RELEASE_WAIT_MS);
+  let sends = 0;
+  const always = { ...base, run: async (c) => { if (c === 'send') { sends++; throw { kind: 'settle_first', asset: X, message: 'm' }; } return { ready: true }; } };
+  await assert.rejects(payThrough('send', {}, always), (e) => e.code === 'settle_gave_up');
+  assert.equal(sends, RELEASE_TRIES + 1);
+  assert.match(SETTLE_GAVE_UP, /nothing was sent/);
+  // An offboard's quote answers at once, as the library gave it.
+  const r = { kind: 'settle_first', asset: X, message: 'm' };
+  await assert.rejects(payThrough('offboard_quote', {}, { ...base, run: async () => { throw r; } }), (e) => e === r);
+});
+
+test('a payment the channel side covers closes the channel into the next round, then pays', async () => {
+  const log = [];
+  let clock = 0, sends = 0, syncs = 0;
+  const held = [];
+  const io = {
+    now: () => clock,
+    sleep: async (ms) => { clock += ms; },
+    sync: async () => { syncs++; },
+    coins: async () => [{ leaf_id: 'ch1', state: syncs >= 2 ? 'spent' : 'given' }],
+    channelsHeld: (a) => held.push(a),
+    run: async (command, args) => {
+      log.push([command, args]);
+      if (command === 'send') { sends++; if (sends === 1) throw { kind: 'in_channel', asset: X, close: ['ch1'], side: '24998266207313', message: 'refused: … closing 1 of them into the next round …' }; return { result: 'paid' }; }
+      if (command === 'quote') return { result: { coins: [{ leaf: 'ch1', fee: '3' }] } };
+      if (command === 'participate') return { result: { participation: 'p1' } };
+      throw new Error('no command ' + command);
+    },
+  };
+  assert.equal((await payThrough('send', { asset: X }, io)).result, 'paid');
+  assert.deepEqual(log.find((l) => l[0] === 'quote'), ['quote', { leaves: ['ch1'] }]);
+  assert.deepEqual(log.find((l) => l[0] === 'participate'), ['participate', { leaves: ['ch1'], shown: [{ leaf: 'ch1', fee: '3' }] }], 'the fee the quote showed');
+  assert.ok(syncs >= 2, 'followed until the channel coin is spent');
+  assert.deepEqual(held, [X, null], 'care holds its channels while the payment waits, then lets go');
+});
+
+test('default mode keeps its money in coins: care opens no channel, and each live one is closed', () => {
+  assert.deepEqual(careArgs(21, { channels: false }), { channels: false, scan: 21 });
+  assert.deepEqual(careArgs(21, { channels: true }), { channels: true, scan: 21 });
+  const chans = [{ leaf_id: 'a', coin_state: 'live' }, { leaf_id: 'b', coin_state: 'given' }, { leaf_id: 'c', coin_state: 'live' }, { coin_state: 'live' }];
+  assert.deepEqual(channelsToClose(chans), ['a', 'c']);
+  assert.deepEqual(channelsToClose(chans, [{ leaf_id: 'c', state: 'given' }]), ['a'], 'one already in a round is left alone');
+  assert.deepEqual(channelsToClose(null), []);
 });
