@@ -203,8 +203,9 @@ test('a slow command is named with what it waited', async () => {
 const host = readFileSync(new URL('../offscreen-leaves.js', import.meta.url), 'utf8');
 
 test('the host sends every command through the queue, a person’s at PERSON', () => {
-  assert.match(host, /function call\(op, args = \{\}, prio = PASS, opts\) \{[\s\S]{0,160}return Q\.call\(op, args, prio, opts\);/);
-  assert.match(host, /run: \(c, a\) => runCommand\(c, a, PERSON, READS\.has\(c\) \? \(asks \? \{ from \} : personRead\(from\)\) : personWrite\(from\)\)/);
+  assert.match(host, /function call\(op, args = \{\}, prio = PASS, opts\) \{[\s\S]{0,400}return Q\.call\(op, args, prio, opts\);/);
+  assert.match(host, /run: \(c, a\) => runCommand\(c, a, level, site \? \(READS\.has\(c\) \? siteRead\(site, from\) : siteWrite\(site, from\)\)\n\s+: READS\.has\(c\) \? \(asks \? \{ from \} : personRead\(from\)\) : personWrite\(from\)\)/);
+  assert.match(host, /const level = site \? SITE : PERSON;/, 'a site\'s unapproved commands after the person\'s own');
   assert.match(host, /command: 'mailbox' \}, PROMPT\)/, "the faucet's coin taken in goes before upkeep");
   // Only post() talks to the worker.
   assert.equal((host.match(/worker\.postMessage/g) || []).length, 1);
@@ -222,7 +223,7 @@ test('the scheduled pass gives way to a person between its commands, and starts 
 });
 
 test('a sync asked for a trade waits for a person and shares the last one', () => {
-  assert.match(host, /if \(command === 'sync'\) return await syncForCaller\(!!args\.paying, !!args\.paying && !!args\.person\);/);
+  assert.match(host, /if \(command === 'sync'\) return await syncForCaller\(!!args\.paying, !!args\.paying && !!args\.person, !!site\);/);
   assert.match(host, /while \(stepAside\(\) && Date\.now\(\) < until\) await/, 'waits for a person, at most SYNC_WAITS_MOST_MS (and the step-aside bound)');
   assert.match(host, /Date\.now\(\) - S\.lastSync\.at < SYNC_SHARED_MS\) return S\.lastSyncValue/);
 });
@@ -233,13 +234,18 @@ test('a hung library is started again rather than holding every command after it
 });
 
 test('a read the trade composer asks while nobody waits is the wallet’s own work, not a person’s', () => {
-  assert.match(host, /const asks = !!args\.paying && \(!READS\.has\(command\) \|\| upkeepHeld\(\)\);\n      const person = asks \|\| \(!!args\.paying && !!args\.person\);/);
+  assert.match(host, /const asks = !site && !!args\.paying && \(!READS\.has\(command\) \|\| upkeepHeld\(\)\);\n      const person = asks \|\| \(!!args\.paying && \(!!args\.person \|\| !!site\)\);/);
   assert.match(host, /if \(args\.paying && !person\) return await runCommand\(command, args\.args \|\| \{\}, UPKEEP, upkeep\);/);
   assert.match(host, /const upkeep = READS\.has\(command\) \? \{ share: true, dropAfterMs: args\.keep \? null : OUTSIDE_READ_WAIT_MOST_MS, from \} : \{ from \};/);
   // Who says a read is a person's: every `run` of a site or the developer page, a quote held by the
   // popup or a site, a payment being prepared; and a trade's background follow says it is not.
   const sw = readFileSync(new URL('../src/leaves.js', import.meta.url), 'utf8');
-  assert.match(sw, /host\('run', \{ command, args, paying: true, person: true, from: callerOf\(\) \}\)/);
+  assert.match(sw, /host\('run', \{ command, args, paying: true, person: true, site: origin \|\| undefined, from: callerOf\(\) \}\)/);
+  // A site's commands name their origin, but none it asks inside an approval: those are the person's.
+  const pr = readFileSync(new URL('../src/provider-router.js', import.meta.url), 'utf8');
+  assert.match(pr, /const o = await leaves\.run\('swap_offer', args, \{ origin \}\);/);
+  assert.match(pr, /const quote = await leaves\.run\('take_quote', args, \{ origin \}\);/);
+  assert.match(pr, /return await leaves\.run\('send', \{ request: text, asset: plan\.asset, amount: plan\.amount \}\);/);
   const popup = readFileSync(new URL('../popup/popup.js', import.meta.url), 'utf8');
   assert.match(popup, /rpc\('default\.leaf', \{ command: cmd, args: args \|\| \{\}, person: tradeHolds > 0 \}\)/);
   const site = readFileSync(new URL('../src/site-trade.js', import.meta.url), 'utf8');

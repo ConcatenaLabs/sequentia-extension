@@ -611,8 +611,8 @@ export async function handleDappRequest(origin, method, params = {}) {
     case 'getLeafBalances': {
       await requireUnlockedAndConnected(origin);
       await leaves.requireLeaves();
-      const balance = await leaves.run('balance');
-      const schedule = await leaves.run('schedule').catch(() => null);
+      const balance = await leaves.run('balance', {}, { origin });
+      const schedule = await leaves.run('schedule', {}, { origin }).catch(() => null);
       return leafBalancesAnswer(balance, schedule);
     }
 
@@ -653,7 +653,7 @@ export async function handleDappRequest(origin, method, params = {}) {
       // Read the request to SHOW it; the library pays it, handed the asset and the
       // amount shown, and refuses whatever does not match the request.
       const req = readRequest(text);
-      const info = await leaves.run('info');
+      const info = await leaves.run('info', {}, { origin });
       const plan = planSend(req, { asset: params.asset, amount: params.amount }, info);
       const m = A.assetMeta(plan.asset);
       const ticker = m.ticker && m.ticker !== '?' ? m.ticker : plan.asset.slice(0, 12) + '…';
@@ -692,7 +692,7 @@ export async function handleDappRequest(origin, method, params = {}) {
       await leaves.requireLeaves();
       const args = { asset, amount };
       if (feeAsset) args.fee_asset = feeAsset;
-      const quote = await leaves.run('board_quote', args);
+      const quote = await leaves.run('board_quote', args, { origin });
       const fee = quote.fee || {};
       return requestApproval(origin, 'boardLeaves', {
         text: origin + ' asks you to board an on-chain coin into your leaves: one transaction from your leaf wallet\u2019s on-chain coins to the operator\u2019s tree. The coin is a leaf once the transaction is final.',
@@ -719,7 +719,7 @@ export async function handleDappRequest(origin, method, params = {}) {
       await leaves.requireLeaves();
       const args = { leaf_id: leafId };
       if (feeAsset) args.fee_asset = feeAsset;
-      const quote = await leaves.run('exit_quote', args);
+      const quote = await leaves.run('exit_quote', args, { origin });
       const rows = [
         ['Leaf', leafId],
         ['Coin', leafAmount(quote.value, quote.asset)],
@@ -751,7 +751,7 @@ export async function handleDappRequest(origin, method, params = {}) {
     case 'getLeafOperator': {
       await requireUnlockedAndConnected(origin);
       await leaves.requireLeaves();
-      return await leafTrade.operator();
+      return await leafTrade.operator(origin);
     }
 
     // A take: the library reads the order on its own node (its script from the terms,
@@ -772,8 +772,8 @@ export async function handleDappRequest(origin, method, params = {}) {
       const args = { order: served };
       if (amount != null) args.amount = amount;
       if (maxFee != null) args.max_fee_ppm = maxFee;
-      const quote = await leaves.run('take_quote', args);
-      const op = await leafTrade.operator();
+      const quote = await leaves.run('take_quote', args, { origin });
+      const op = await leafTrade.operator(origin);
       const win = op.forfeit_window_seconds;
       const a = quote.asset_a, b = quote.asset_b;
       const tick = (h) => { const m = A.assetMeta(h); return m.ticker && m.ticker !== '?' ? m.ticker : h.slice(0, 12) + '…'; };
@@ -827,10 +827,10 @@ export async function handleDappRequest(origin, method, params = {}) {
       if (params.expiry != null && params.expiry !== '') args.expiry = pos(params.expiry, 'expiry');
       else {
         // A day ahead of the chain's median time unless the site names when the order may be refunded.
-        const sch = await leaves.run('schedule');
+        const sch = await leaves.run('schedule', {}, { origin });
         args.expiry = String(Number(sch.now) + 86400);
       }
-      const quote = await leaves.run('order_quote', args);
+      const quote = await leaves.run('order_quote', args, { origin });
       const fee = quote.fee || {};
       const refundAt = new Date(Number(quote.expiry_locktime ?? args.expiry) * 1000).toISOString().replace('T', ' ').replace(/\.\d+Z$/, ' UTC');
       return requestApproval(origin, 'placeOrderFromLeaves', {
@@ -865,7 +865,7 @@ export async function handleDappRequest(origin, method, params = {}) {
       if (args.give_asset === args.want_asset) throw new Error('a swap exchanges two assets');
       if (!(await sessionMnemonic())) throw new Error('the wallet is locked; open the wallet popup and unlock first');
       await leaves.requireLeaves();
-      const o = await leaves.run('swap_offer', args);
+      const o = await leaves.run('swap_offer', args, { origin });
       try {
         return await requestApproval(origin, 'leafSwapOffer', {
           text: origin + ' asks you to offer a swap to another wallet that holds leaves of your operator: one reassignment in the tree moves both assets at once, once the other wallet accepts and you complete it.',
@@ -878,7 +878,7 @@ export async function handleDappRequest(origin, method, params = {}) {
           return { swap: o.swap, offer: o.offer, gives: o.gives, gets: o.gets, pays: o.pays };
         });
       } catch (e) {
-        await leaves.run('swap_cancel', { swap: o.swap }).catch(() => {});
+        await leaves.run('swap_cancel', { swap: o.swap }, { origin }).catch(() => {});
         throw e;
       }
     }
@@ -891,7 +891,7 @@ export async function handleDappRequest(origin, method, params = {}) {
       if (!offer) throw new Error('offer is required: the other wallet\u2019s offer text');
       if (!(await sessionMnemonic())) throw new Error('the wallet is locked; open the wallet popup and unlock first');
       await leaves.requireLeaves();
-      const r = await leaves.run('swap_read', { offer });
+      const r = await leaves.run('swap_read', { offer }, { origin });
       return requestApproval(origin, 'leafSwapAccept', {
         text: origin + ' asks you to accept another wallet\u2019s swap: one reassignment in the tree, which you sign now and the other wallet completes.',
         deltas: [{ ticker: (A.assetMeta(r.gives.asset).ticker || r.gives.asset.slice(0, 12)), atoms: '-' + r.gives.value, precision: A.assetMeta(r.gives.asset).precision || 0 },
@@ -934,7 +934,7 @@ export async function handleDappRequest(origin, method, params = {}) {
     case 'getLeafSwaps': {
       await requireUnlockedAndConnected(origin);
       await leaves.requireLeaves();
-      return { swaps: leafSwap.forOrigin(await leaves.run('swaps'), await leafSwap.records(), origin) };
+      return { swaps: leafSwap.forOrigin(await leaves.run('swaps', {}, { origin }), await leafSwap.records(), origin) };
     }
 
     case 'leafSwapCancel': {
@@ -976,12 +976,12 @@ export async function handleDappRequest(origin, method, params = {}) {
       else {
         // A week ahead of the chain's median time unless the site names when the
         // order, once landed on the chain, may be refunded.
-        const sch = await leaves.run('schedule');
+        const sch = await leaves.run('schedule', {}, { origin });
         args.expiry = String(Number(sch.now) + 7 * 86400);
       }
-      const quote = await leaves.run('order_rest_quote', args);
+      const quote = await leaves.run('order_rest_quote', args, { origin });
       const fee = quote.fee || {};
-      const op = await leafTrade.operator();
+      const op = await leafTrade.operator(origin);
       const refundAt = new Date(Number(args.expiry) * 1000).toISOString().replace('T', ' ').replace(/\.\d+Z$/, ' UTC');
       return requestApproval(origin, 'restOrder', {
         text: origin + ' asks you to rest an order in the operator’s tree: the next round makes a leaf of exactly the order’s amount, which takers fill there while you are away, the operator co-signing each fill under the order’s own terms.',
@@ -1014,11 +1014,11 @@ export async function handleDappRequest(origin, method, params = {}) {
       if (amount != null && (!/^\d+$/.test(amount) || BigInt(amount) <= 0n)) throw new Error('amount must be a positive number of atoms');
       if (!(await sessionMnemonic())) throw new Error('the wallet is locked; open the wallet popup and unlock first');
       await leaves.requireLeaves();
-      const op = await leafTrade.operator();
+      const op = await leafTrade.operator(origin);
       if (served.operator_key && op.operator && served.operator_key !== String(op.operator).toLowerCase()) {
         throw new Error('this order rests in the tree of operator ' + served.operator_key + ', not of the operator this wallet joined (' + op.operator + ')');
       }
-      const quote = await leafResting.fillQuote(served, amount);
+      const quote = await leafResting.fillQuote(served, amount, origin);
       const a = quote.gets.asset, b = quote.fee.asset;
       const tick = (h) => { const m = A.assetMeta(h); return m.ticker && m.ticker !== '?' ? m.ticker : h.slice(0, 12) + '…'; };
       const gives = (BigInt(quote.paid) + BigInt(quote.fee.amount)).toString();
@@ -1052,7 +1052,7 @@ export async function handleDappRequest(origin, method, params = {}) {
       if (!(await sessionMnemonic())) throw new Error('the wallet is locked; open the wallet popup and unlock first');
       await leaves.requireLeaves();
       const rec = await leafResting.recordFor(origin, order);
-      const quote = await leaves.run('order_cancel_resting_quote', { order: rec.order || rec.rested_by });
+      const quote = await leaves.run('order_cancel_resting_quote', { order: rec.order || rec.rested_by }, { origin });
       const a = quote.gets.asset;
       return requestApproval(origin, 'cancelRestingOrder', {
         text: origin + ' asks you to cancel an order resting in the operator’s tree: the coin it rests at moves to a leaf of your own, so no taker can fill it any more.',

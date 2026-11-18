@@ -123,7 +123,7 @@ import { frozenAtoms, holdingRefusal } from './src/leaf-profiles.js';
 import { redoingAtoms } from './vendor/default-arca.js';
 import { boardCandidates, boardAll, boardSpent, CLAIMS_EVERY_MS, vestingLots, vestedOpen } from './vendor/default-arca.js';
 import { homeCoins, unreachableOf, homeQuote, homeTake, homeUnderWay } from './vendor/default-arca.js';
-import { createQueue, PERSON, PROMPT, PASS, UPKEEP } from './src/leaf-queue.js';
+import { createQueue, PERSON, PROMPT, SITE, PASS, UPKEEP } from './src/leaf-queue.js';
 import { LEAF_PAUSE_URL } from './src/config.js';
 
 const TICK_MS = 60_000;
@@ -192,11 +192,18 @@ function noteDropped(list) {
 // the caller sees. They do not make the wallet's own work step aside (`read`): the queue's order
 // serves them first, and the pass, the mailbox and the upkeep keep their turns (src/leaf-queue.js).
 const PERSON_READS_WAITING_MOST = 16;
-const personRead = (from) => ({ read: true, share: true, cap: { key: 'person:' + (from || '-'), most: PERSON_READS_WAITING_MOST }, from });
+const personRead = (from) => ({ read: true, share: true, cap: { key: 'person:' + (from || '-'), most: PERSON_READS_WAITING_MOST, what: 'reads asked by the same caller' }, from });
 // A person's other commands (a receive, a payment, a trade): one caller has at most as many waiting,
 // and one more is refused at once as busy, which it sees; a caller that asks one after another as
 // each is answered never meets the bound.
-const personWrite = (from) => ({ cap: { key: 'write:' + (from || '-'), most: PERSON_READS_WAITING_MOST }, from });
+const personWrite = (from) => ({ cap: { key: 'write:' + (from || '-'), most: PERSON_READS_WAITING_MOST, what: 'commands asked by the same caller' }, from });
+// A site's commands the person has not approved (`site`, its origin): at SITE, after the person's own,
+// and counted per site whatever line of the wallet asked them: at most SITE_WAITING_MOST of a site's
+// commands wait, its reads and its others together; the same read waiting is shared.
+const SITE_WAITING_MOST = 16;
+const siteCap = (site) => ({ key: 'site:' + site, most: SITE_WAITING_MOST, what: 'commands of this site' });
+const siteRead = (site, from) => ({ read: true, share: true, cap: siteCap(site), from: from ? site + ' ' + from : site });
+const siteWrite = (site, from) => ({ cap: siteCap(site), from: from ? site + ' ' + from : site });
 const C = { capped: 0, saidAt: 0, since: new Map() };
 function noteCapped(c) {
   C.capped++;
@@ -247,7 +254,9 @@ function ensureWorker() {
 // PASS, before what the rest of the wallet asks (UPKEEP): a pass waits at most for the one command
 // running, so it ends. Each command of a pass is counted against its bound (passOver).
 function call(op, args = {}, prio = PASS, opts) {
-  if (ticking && prio === PASS) { P.commands++; P.last = op === 'run' ? String(args.command) : op; }
+  // `aside`: the host's own command that is no step of the pass (the reads after a command that moves
+  // coins), counted against no pass's bound.
+  if (ticking && prio === PASS && !(opts && opts.aside)) { P.commands++; P.last = op === 'run' ? String(args.command) : op; }
   return Q.call(op, args, prio, opts);
 }
 function post(op, args) {
@@ -507,14 +516,15 @@ async function syncOnce(by, args) {
 // commands keeps it back for good.
 const SYNC_SHARED_MS = 10_000;
 const SYNC_WAITS_MOST_MS = 60_000;
-async function syncForCaller(paying, person = false) {
+async function syncForCaller(paying, person = false, site = false) {
   if (!person) {
     const until = Date.now() + SYNC_WAITS_MOST_MS;
     while (stepAside() && Date.now() < until) await new Promise((r) => setTimeout(r, 500));
   }
-  if (S.syncing) { if (person) raiseSync(PERSON); return await S.syncing; }
+  const prio = !person ? UPKEEP : site ? SITE : PERSON;
+  if (S.syncing) { raiseSync(Math.max(prio, PASS)); return await S.syncing; }
   if (S.lastSyncValue && S.lastSync && Date.now() - S.lastSync.at < SYNC_SHARED_MS) return S.lastSyncValue;
-  return await sync(person ? 'asked by a person' : paying ? 'asked by a trade' : 'asked', person ? PERSON : UPKEEP);
+  return await sync(site ? 'asked by a site' : person ? 'asked by a person' : paying ? 'asked by a trade' : 'asked', prio);
 }
 
 // The wallet's channels as the library holds them (asking nothing of the operator). When those a
@@ -1019,26 +1029,38 @@ async function runCommand(command, cargs, prio = PASS, opts) {
     }
   }
 }
-// The reads after a command that moves coins, one round at a time: a command that ends while a
-// round is under way has one more round run after it (which its caller waits for), never a round of
-// its own beside it. Commands back to back (a site's stream of them) thus add one round to the line,
-// not three reads each, which once put a thousand reads ahead of the mailbox read
-// (sequentia-extension#221).
-const AFTER = { run: null, again: false };
+// The reads after a command that moves coins, in numbered rounds, one at a time: a command that
+// ends asks for the first round that starts after it (the round under way began before it ended, so
+// it is the next one), and its caller waits for that round alone, never for the rounds after it. So
+// commands back to back (a site's stream of them) add one round to the line, not three reads each,
+// which once put a thousand reads ahead of the mailbox read (sequentia-extension#221); and a caller
+// that waits (the pass's board, an upkeep command) waits at most for the round under way and its
+// own, however long the stream lasts. The rounds are no step of the pass and count nothing against
+// its bound.
+const AFTER = { started: 0, finished: 0, running: false, waiters: [] };
 function readAfterMove() {
-  if (AFTER.run) { AFTER.again = true; return AFTER.run; }
-  const run = AFTER.run = (async () => {
-    do {
-      AFTER.again = false;
+  const need = AFTER.started + 1;
+  const p = new Promise((ok) => AFTER.waiters.push({ need, ok }));
+  if (!AFTER.running) afterRounds();
+  return p;
+}
+async function afterRounds() {
+  AFTER.running = true;
+  try {
+    while (AFTER.waiters.some((w) => w.need > AFTER.finished)) {
+      const round = ++AFTER.started;
       try {
-        S.coins = (await call('run', { command: 'coins' })).result || [];
-        S.participations = (await call('run', { command: 'participations' })).result || [];
+        S.coins = (await call('run', { command: 'coins' }, PASS, { aside: true })).result || [];
+        S.participations = (await call('run', { command: 'participations' }, PASS, { aside: true })).result || [];
       } catch { /* the next sync reads them */ }
-      await reportBalance();
-    } while (AFTER.again);
-    if (inFlight(S.coins, S.participations)) plan(1000);
-  })().finally(() => { if (AFTER.run === run) AFTER.run = null; });
-  return run;
+      await reportBalance(PASS, (op, a, prio) => call(op, a, prio, { aside: true }));
+      AFTER.finished = round;
+      const done = AFTER.waiters.filter((w) => w.need <= round);
+      AFTER.waiters = AFTER.waiters.filter((w) => w.need > round);
+      for (const w of done) w.ok();
+      if (inFlight(S.coins, S.participations)) plan(1000);
+    }
+  } finally { AFTER.running = false; }
 }
 
 // Default mode's upkeep follows the mode set last: each message carries when the mode it was read
@@ -1152,12 +1174,14 @@ async function handle(op, args) {
       // Who in the service worker asked (a file, a line and a function), for the state a capture
       // reads and the slow and dropped lines.
       const from = args.from ? String(args.from).slice(0, 120) : null;
+      // A site's command the person has not approved: its origin (src/leaves.js run).
+      const site = args.paying && args.site ? String(args.site).slice(0, 200) : null;
       // A read a person waits on (the receive code's): before the upkeep, as the faucet's coin is.
       if (args.prompt && READS.has(command)) return await runCommand(command, args.args || {}, PROMPT, personRead(from));
       // A sync asked by the trade composer, which follows open trades with one: while a person
       // waits on a quote or a confirmation it waits for them, and one asked within SYNC_SHARED_MS
       // of the last sync's end (whoever asked it) is answered by that sync instead of another.
-      if (command === 'sync') return await syncForCaller(!!args.paying, !!args.paying && !!args.person);
+      if (command === 'sync') return await syncForCaller(!!args.paying, !!args.paying && !!args.person, !!site);
       // A read the trade composer asks while nobody waits on it (it follows its open trades every
       // few seconds) is the wallet's own work: it goes in line with the upkeep and does not count
       // as a person asking, or the mailbox and channel reads that show a payment to this wallet
@@ -1169,8 +1193,10 @@ async function handle(op, args) {
       // Only a command that moves coins, or one asked while the popup holds the upkeep, keeps the
       // mailbox read and the next pass back (lastAsked): a site that polls its orders at a person's
       // priority must not keep a payment to the receive code from showing.
-      const asks = !!args.paying && (!READS.has(command) || upkeepHeld());
-      const person = asks || (!!args.paying && !!args.person);
+      // A site's command, unapproved, keeps nothing back: it waits its turn at SITE.
+      const asks = !site && !!args.paying && (!READS.has(command) || upkeepHeld());
+      const person = asks || (!!args.paying && (!!args.person || !!site));
+      const level = site ? SITE : PERSON;
       // Upkeep the rest of the wallet asks: after the host's own work; a read shares the answer of
       // the same read waiting, and is refused as busy past OUTSIDE_READ_WAIT_MOST_MS unless its
       // caller acts on it and asks it kept (`keep`).
@@ -1181,10 +1207,11 @@ async function handle(op, args) {
       try {
         return await payThrough(command, args.args || {}, {
         // A read under the popup's hold (a quote's several reads at once) is neither capped nor shared.
-        run: (c, a) => runCommand(c, a, PERSON, READS.has(c) ? (asks ? { from } : personRead(from)) : personWrite(from)),
-        sync: () => sync('release', PERSON),
+        run: (c, a) => runCommand(c, a, level, site ? (READS.has(c) ? siteRead(site, from) : siteWrite(site, from))
+          : READS.has(c) ? (asks ? { from } : personRead(from)) : personWrite(from)),
+        sync: () => sync('release', level),
         // The release's polls are the person's payment waiting.
-        coins: async () => (await call('run', { command: 'coins' }, PERSON)).result || [],
+        coins: async () => (await call('run', { command: 'coins' }, level)).result || [],
         waiting: (st) => {
           const first = !!st && !S.releasing;
           S.releasing = st ? { command: st.command, coins: st.coins, asset: st.asset, since: st.since } : null;

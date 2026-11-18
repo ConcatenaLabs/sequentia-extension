@@ -227,7 +227,7 @@ export async function forOrigin(origin) {
   const recs = (await records()).filter((r) => r.origin === origin);
   if (!recs.length) return [];
   const ids = recs.filter((r) => r.order).map((r) => r.order);
-  const view = await leaves.run('order_resting', ids.length ? { orders: ids } : {});
+  const view = await leaves.run('order_resting', ids.length ? { orders: ids } : {}, { origin });
   return recs.map((rec) => {
     const mine = (view.orders || []).find((o) => o.rested_by === rec.rested_by) || null;
     const op = (mine && mine.operator) || null;
@@ -244,10 +244,10 @@ export async function forOrigin(origin) {
 
 // ---- filling ----
 
-export async function fillQuote(served, amount) {
+export async function fillQuote(served, amount, origin = null) {
   const args = { order: served.order };
   if (amount != null) args.amount = String(amount);
-  return await leaves.run('order_fill_resting_quote', args);
+  return await leaves.run('order_fill_resting_quote', args, { origin });
 }
 
 // The fill, as the window showed `quote`. If the operator answers that the order has

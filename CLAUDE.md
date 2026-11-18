@@ -132,16 +132,17 @@ wasm. Read this before changing anything.
 - **A person waiting comes first.** The host keeps one command in the leaf worker at a
   time and holds the rest in its own queue (`src/leaf-queue.js`), by priority: a person's
   commands (PERSON), what a person started waits on (PROMPT: the faucet's coin taken in,
-  `takeIn`; a read asked with `leaves.ask`), the host's own work (PASS: its scheduled pass,
+  `takeIn`; a read asked with `leaves.ask`), a site's unapproved commands (SITE, below), the
+  host's own work (PASS: its scheduled pass,
   every sync, the mailbox and channel reads), then what the rest of the wallet asks (UPKEEP),
   and fairly: a priority with work waiting that three commands of higher priorities have gone
   past (`FAIR_TURN`) is served next. So a person's command waits at most for the command
-  running and one command of each lower priority whose turn has come (three at most), and
+  running and one command of each lower priority whose turn has come (four at most), and
   however a caller asks, every lower priority with work waiting still gets at least one
   command in four: no stream of persons' commands keeps the pass, the mailbox read or the
   upkeep from their turns. A person's
-  command is every command a site or the developer page asks (`leaves.run`, reads
-  included), every command that moves coins, and a read whose caller says a person waits on
+  command is every command the developer page asks, and a site's once the person approved it
+  (`leaves.run`, reads included), every command that moves coins, and a read whose caller says a person waits on
   it: `runUser` with `person` (a quote or a confirmation of the popup's composer or a site's
   engine, inside its `hold`; a site order's review; a payment out of the tree being quoted),
   and `leaves.ask` (Receive's `schedule` and `info`, the tree's `balance` and `info` before a
@@ -152,14 +153,19 @@ wasm. Read this before changing anything.
   popup's hold, which it lets go when the person's step ends, up to 3 minutes), and a stream of
   a person's commands holds the mailbox read and the next pass back for at most as long; past
   that the wallet's own work takes its fair turns among the person's commands, which still go
-  first. The reads after a command that moves coins (coins, participations, balance) run one
-  round at a time: a command that ends while a round is under way has one more round after it,
-  never one of its own, so a stream of commands adds one round to the line. The same person's
-  read waiting is shared (a site polling one read adds one command, not one per poll), and one
-  caller has at most 16 different reads, and 16 other commands, waiting; one more is refused at
-  once as busy, which the caller sees and the host says once a minute. So a person's own
-  command waits at most for its turn among those of the caller it came from, the command
-  running and the lower turns due. Taking the
+  first. The reads after a command that moves coins (coins, participations, balance) run in
+  numbered rounds, one at a time: a command that ends asks for the first round that starts
+  after it, and its caller waits for that round alone (at most the round under way and its
+  own), so a stream of commands adds one round to the line and never holds a caller that
+  waits, the pass's board included; the rounds count against no pass's bound. A site's
+  commands the person has not approved (its reads, its quotes, an offer to approve:
+  `leaves.run` with `origin`) go at SITE, after every command of the person's own (PERSON and
+  PROMPT) and before the host's own work; what the person approved for a site is theirs. At
+  most 16 of one site's commands wait, whatever line of the wallet asked them; the same read
+  waiting is shared. The person's own reads are shared likewise, and one line of the wallet
+  has at most 16 reads, and 16 other commands, waiting. One more is refused at once as busy,
+  which the caller sees and the host says once a minute. So a person's own command waits at
+  most for the command running and the lower turns due, whatever a site asks. Taking the
   coins home (`homeQuote`, `takeHome`, to the balance it reports) and a payment's release (its
   sync, the sync's reads, its polls of the coins) run at PERSON too; a home quote is made from
   a reading of the coins and channels made then, and a refusal of either is the answer. A sync

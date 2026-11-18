@@ -549,3 +549,66 @@ test('a payment\'s release that joins a background sync carries its priority int
   await within(Promise.all([bg, ...polls].filter(Boolean)), 10_000);
   await within(ask('stop'), 10_000);
 }));
+
+// Round 5 (sequentia-extension#221, finding L of the review of #223; #225).
+
+test('ten minutes of a person\'s writes back to back: the mailbox is read and passes end throughout, an upkeep write is answered', timed(async () => {
+  const L = library({ cost: (c) => (c === 'receive' ? 100 : c === 'sync' ? 2000 : 40) });
+  const { ask } = await opened({ L });
+  const t0 = Date.now();
+  const writes = [];
+  const ends = new Map();
+  let i = 0, up = null, upAt = null, upAsked = null;
+  await advance(10 * 60_000, 50, () => {
+    if (i % 2 === 0) writes.push(ask('run', { command: 'receive', args: { k: i }, paying: true, from: 'default-mode.js:266 leafCode' }));
+    // Five minutes in, a write of the wallet's own (the Lightning-to-ark move's receive).
+    if (i === 6000) { upAsked = Date.now(); up = ask('run', { command: 'lightning_receive', args: { asset: 'aa' }, keep: true, from: 'ln-to-ark.js:66' }).then((r) => { upAt = Date.now() - upAsked; return r; }); }
+    // Every 30 s, the pass's state.
+    if (i % 600 === 0) ask('status').then((r) => { const lp = r.value && r.value.diag && r.value.diag.lastPass; if (lp) ends.set(lp.at, lp); });
+    i++;
+  });
+  const mail = since(L, t0, 'mailbox').map((c) => c.at);
+  const gaps = mail.slice(1).map((t, k) => t - mail[k]);
+  const passEnds = [...ends.values()].filter((lp) => lp.at > t0 && (lp.end === 'done' || lp.end === 'bound')).map((lp) => lp.at + lp.ms).sort((a, b) => a - b);
+  const passGaps = passEnds.slice(1).map((t, k) => t - passEnds[k]);
+  say(`ten minutes of writes: ${writes.length} asked; mailbox reads ${mail.length}, the first at +${mail[0] ? mail[0] - t0 : '-'} ms, the last at +${mail.length ? mail.at(-1) - t0 : '-'} ms, longest gap ${Math.max(0, ...gaps)} ms; passes ended ${passEnds.length}, longest gap ${Math.max(0, ...passGaps)} ms; the upkeep write answered in ${upAt} ms`);
+  assert.ok(mail.length >= 30, `${mail.length} mailbox reads in ten minutes`);
+  assert.ok(mail.at(-1) - t0 >= 9 * 60_000, 'read to the end of the stream');
+  assert.ok(Math.max(...gaps) <= 45_000, `the mailbox waited at most ${Math.max(...gaps)} ms between two reads`);
+  assert.ok(passEnds.length >= 4, `${passEnds.length} passes ended in ten minutes`);
+  assert.ok(passEnds.at(-1) - t0 >= 7 * 60_000 && Math.max(...passGaps) <= 180_000, 'passes end throughout the stream');
+  assert.ok(upAt != null && upAt <= 30_000, `the upkeep write answered in ${upAt} ms`);
+  const all = await within(Promise.all([...writes, up]), 60_000);
+  assert.ok(all.done, 'every write answered or refused');
+  await within(ask('stop'), 10_000);
+}));
+
+test('a site keeping all eight of its call sites full: the person\'s own send answers within its bound, the site sees its refusals', timed(async () => {
+  // The review's probe: seven reads and an offer a connected site reaches with nothing approved, each
+  // kept full (quotes 200 ms, offers 300 ms), from one origin.
+  const SITES = [['board_quote', 695], ['exit_quote', 722], ['take_quote', 775], ['order_quote', 833], ['swap_read', 894], ['order_rest_quote', 982],
+    ['order_cancel_resting_quote', 1055], ['swap_offer', 868]];
+  const L = library({ cost: (c) => (c === 'swap_offer' ? 300 : SITES.some(([s]) => s === c) ? 200 : c === 'sync' ? 2000 : 40) });
+  const { ask } = await opened({ L });
+  const t0 = Date.now();
+  const asked = [];
+  let k = 0, sendAt = null, send = null;
+  await advance(3 * 60_000, 50, () => {
+    for (const [command, line] of SITES) asked.push(ask('run', { command, args: { asset: 'aa', k: k++ }, paying: true, person: true, site: 'https://site.example', from: `provider-router.js:${line} handleDappRequest` }));
+    // Two minutes in, the person's own send from the popup.
+    if (Date.now() - t0 === 120_000) { const t = Date.now(); send = ask('run', { command: 'send', args: { request: 'r', asset: 'aa', amount: '5' }, paying: true, from: 'default-mode.js:829 confirmSend' }).then((r) => { sendAt = Date.now() - t; return r; }); }
+  });
+  const all = await within(Promise.all(asked), 30_000);
+  const refused = all.value.filter((r) => !r.ok);
+  const sendRan = L.calls.find((c) => c.command === 'send');
+  const mail = since(L, t0, 'mailbox').length;
+  say(`a site at eight call sites: ${asked.length} asked, ${all.value.length - refused.length} answered, ${refused.length} refused (${refused[0] ? refused[0].error.message : '-'}); the person's send answered in ${sendAt} ms at ${sendRan && sendRan.prio}; mailbox reads ${mail}`);
+  assert.ok(sendAt != null && sendAt <= 1000, `the person's send waited ${sendAt} ms: the command running and one of each lower kind whose turn came`);
+  assert.equal(sendRan.prio, 3);
+  assert.ok(refused.length > 0 && refused.every((r) => r.error.kind === 'busy' && /commands of this site already wait/.test(r.error.message)), 'the site sees each refusal');
+  const site = L.calls.filter((c) => c.at >= t0 && SITES.some(([s]) => s === c.command));
+  assert.ok(site.every((c) => c.prio < 2 && c.prio > 1), 'the site\'s commands at SITE, after the person\'s own');
+  assert.ok(mail >= 10, `${mail} mailbox reads in three minutes`);
+  await within(send, 1000);
+  await within(ask('stop'), 10_000);
+}));
