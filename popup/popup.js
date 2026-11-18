@@ -4,7 +4,7 @@ import { lnInvoiceKind } from '../src/util.js';
 import { userSplit, developerSplit } from '../src/balance-view.js';
 import { partitionHidden } from '../src/hidden.js';
 import { displayPair } from '../src/pair.js';
-import { plannedCoins } from '../src/leaf-schedule.js';
+import { plannedCoins, releasingWords, developerReleasingLine } from '../src/leaf-schedule.js';
 import { frozenSentence, plainRefusal, batchLine, servedPairs, supervisedAssets } from '../src/leaf-profiles.js';
 import { chainGenesis } from '../src/chain-genesis.js';
 import { DEFAULT_WORDS, heldAssetList, anchorDepth, homeSummary, homeOnWay, homeHours } from '../vendor/default-arca.js';
@@ -480,6 +480,9 @@ chrome.runtime.onMessage.addListener((msg) => {
   if (msg && msg.scope === 'leaf-event' && ((msg.event === 'leafArrived' && msg.data && msg.data.kind === 'channel') || msg.event === 'channelsChanged') && receiveOpen()) {
     renderDefaultReceive(true).catch(() => {});
   }
+  // What a payment waits for while it goes through a round of the wallet's own (the host's
+  // `releasing`): default mode's Send says how long (sendWaitWords).
+  if (msg && msg.scope === 'leaf-event' && msg.event === 'leafReleasing') lastReleasing = msg.data || null;
   // A leaf sync finished (on the schedule, or asked): show what it changed.
   if (msg && msg.scope === 'leaf-event' && (msg.event === 'leafSynced' || msg.event === 'leafCared' || msg.event === 'leafReleasing') && !$('leafCard').classList.contains('hide')) {
     renderLeaves().catch(() => {});
@@ -848,8 +851,7 @@ async function renderLeaves() {
   renderCoins(st);
   const rel = st.status && st.status.releasing;
   $('leafReleasing').classList.toggle('hide', !rel);
-  $('leafReleasing').textContent = rel ? 'Paying through the next round: ' + rel.command + ' needs more than the unplanned leaves hold, so '
-    + rel.coins.length + ' planned leaf(s) (' + rel.coins.map(short).join(', ') + ') are given up in the next round for leaves no plan names; it is asked again once that round is final.' : '';
+  $('leafReleasing').textContent = developerReleasingLine(rel, short);
   const sc = st.schedule || {};
   const last = st.status && st.status.lastSync;
   $('leafSchedule').textContent = (sc.next_sync_at ? 'Next sync the schedule asks for: ' + new Date(sc.next_sync_at * 1000).toISOString() : 'Nothing held off the chain, nothing awaited.')
@@ -1712,6 +1714,16 @@ $('btnDReview').onclick = async () => {
   } catch (e) { $('sendDErr').className = 'status err'; $('sendDErr').textContent = e.message; }
   finally { $('btnDReview').disabled = false; }
 };
+// The host's last `releasing` (null once nothing waits): a payment of default mode's Send that waits
+// for a round of the wallet's own reads "Goes through within about N minutes" meanwhile, never a
+// bare "Sending…" for minutes.
+let lastReleasing = null;
+const SEND_COMMANDS = new Set(['send', 'offboard', 'offboard_quote']);
+function sendWaitWords(since) {
+  const rel = lastReleasing;
+  if (!rel || !SEND_COMMANDS.has(rel.command) || !(Number(rel.since) >= since)) return null;
+  return releasingWords(rel);
+}
 function defaultReview(plan) {
   const { m, c } = modal(plan.title);
   for (const line of plan.lines || []) c.appendChild(el('p', 'sub', line));
@@ -1725,8 +1737,10 @@ function defaultReview(plan) {
   ok.onclick = async () => {
     ok.disabled = no.disabled = true;
     st.className = 'status'; st.textContent = DEFAULT_WORDS.sending;
+    const since = Date.now() - 1000;
+    const tell = setInterval(() => { const w = sendWaitWords(since); if (w) st.textContent = w; }, 1000);
     let r;
-    try { r = await rpc('default.confirmSend', { id: plan.id }).finally(release); }
+    try { r = await rpc('default.confirmSend', { id: plan.id }).finally(() => { clearInterval(tell); release(); }); }
     catch (e) { st.className = 'status err'; st.textContent = e.message; no.disabled = false; return; }
     ok.classList.add('hide'); no.textContent = 'Close'; no.disabled = false;
     $('sendDAmt').value = ''; $('sendDTo').value = '';
