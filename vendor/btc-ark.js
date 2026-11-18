@@ -639,6 +639,10 @@ export function mountBtcArk ({ makeWorker, mnemonic, config, decode, onChange = 
         refresh().catch(() => {})
         if (r.state === 'complete') return { state: 'complete', preimage: r.preimage }
         if (r.state === 'failed') return { state: 'failed', reason: r.reason }
+        // Paid with `wait`, Bark answers only once the payment is done: one it no longer knows was
+        // failed back and revoked (Bark keeps a payment from before its first HTLC until it is paid or
+        // revoked), so it failed for certain.
+        if (r.state === 'none') return { state: 'failed', reason: 'the payment did not go through, and its coins came back' }
         return { state: 'pending' }
       },
       async payStatus (hash) {

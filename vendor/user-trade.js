@@ -285,6 +285,10 @@ export const USER_WORDS = Object.freeze({
   waitingOtherLate: 'Keep this page open: this is taking longer than usual. Your BTC is paid once what you buy is held for you, and nothing has left your wallet yet. If the page closes first, nothing is traded.',
   // Buying with BTC, the BTC being paid: seconds.
   btcPaying: 'Paying your BTC. Keep this page open a moment more.',
+  // Buying with BTC, the trade coming back: its BTC payment being read for certain as not made.
+  btcChecking: 'Checking that your BTC was not paid before this trade comes back. Keep this page open a moment more.',
+  // The same, the BTC read as not paid: the trade is being undone at its end.
+  btcReturning: 'Your BTC was not paid. This trade is coming back; keep this page open a moment more.',
   // Buying with BTC, the BTC paid and its proof handed on, what was bought being collected: it comes
   // to the wallet on any device, open or not (the operator holds what claims it).
   btcCollecting: 'Paid. What you bought is arriving, and it comes to your wallet even if this page closes.',
@@ -418,6 +422,8 @@ export function tradeStateWord (r, now = Date.now()) {
   }
   if (r.state === 'returned' || r.state === 'failed') return W.returned
   if (r.state === 'confirming') return W.sending
+  // Buying with BTC and coming back, once its payment is read for certain as not made.
+  if (r.ending) return r.ending.notPaid ? W.btcReturning : W.btcChecking
   const since = (t) => Math.floor((now - (t || r.at || now)) / 60000)
   // Buying with BTC: nothing has left the wallet until its asset is held for it, within the wait the
   // library states (waitBy, from lightning_receive_ready); before its first answer, the library's

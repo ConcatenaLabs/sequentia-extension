@@ -25,7 +25,9 @@
 //                                record the request's, its rounds final, its home date far
 //                                enough off): no round is waited for. Just before it pays, the
 //                                library marks the lock paid (`lock_paid`), so it is taken home
-//                                at its home date unless claimed;
+//                                at its home date unless claimed; a payment that then fails for
+//                                good clears the mark (`lock_unpaid`), so the lock goes back to
+//                                the maker out of round from its timeout;
 //                              - a receive through the operator (`htlc-1`), which the maker's leaf
 //                                pays: the wallet's leaf is made in the operator's next round, and
 //                                the wallet pays once that leaf is held and final, with its home
@@ -78,6 +80,12 @@ export const LOCK_SPARE_SECONDS = 3600
 // A purchase found ready longer ago than this, its BTC not paid yet (the page closed, the wallet's
 // Lightning did not answer), is checked to be held still before the BTC goes out.
 export const RECHECK_MS = 10 * 1000
+// How long a call to pay whose answer the page lost (the page closed, the call threw) may still start
+// a payment at the wallet's Lightning: the LSP's own call runs 60 s and its direct hop up to 105 s
+// more; Bark records a payment before its first HTLC leaves. Until then "no payment" is not taken for
+// certain. A call that was answered can start nothing more: Bark keeps a payment from before its first
+// HTLC until it is paid or revoked, and the LSP reads one in flight while its call for it runs.
+export const PAY_SETTLE_MS = 5 * 60 * 1000
 
 // The seconds of median time the leaf received under the hash must keep before its home date,
 // for a Bitcoin payment of an invoice whose final delta is `minFinalCltv` blocks.
@@ -125,6 +133,8 @@ export function btcTrades ({ run, deps, put, log, now, settleStep, maxFeePpm, fi
   const B = () => deps.btc
   const post = (url, b) => deps.fetchJson(url, { method: 'POST', body: JSON.stringify(b) })
   const release = (maker, swap) => { if (maker && swap) Promise.resolve(post(maker + '/v1/btc/release', { swap })).catch(() => {}) }
+  // The calls to pay this page has made that have not answered yet, by payment hash.
+  const payCalls = new Map()
   // Before a smaller offer is asked for, the larger one is let go of and the maker has answered:
   // it holds what an offer gives until the offer is released.
   const releaseNow = async (maker, swap) => { if (maker && swap) { try { await post(maker + '/v1/btc/release', { swap }) } catch {} } }
@@ -313,7 +323,7 @@ export function btcTrades ({ run, deps, put, log, now, settleStep, maxFeePpm, fi
       // Only the library's refusal says the lock will never do (nothing of the wallet's has left);
       // an operator that does not answer now is asked again.
       if (!(e && (e.kind === 'refused' || /^refused\b/i.test(String(e.message))))) { log('[user trade] not ready yet:', e.message); return 'wait' }
-      log('[user trade] the lock will not do:', e.message); rec.state = 'returned'; rec.returnedAt = now(); rec.why = e.message; return 'wait'
+      log('[user trade] the lock will not do:', e.message); await comeBack(rec, { why: e.message }); return 'wait'
     }
     if (r.ready) { rec.receiveState = 'held'; rec.state = 'sent'; rec.sentAt = now(); rec.paying = true; put(rec); return 'pay' }
     if (/has not come/.test(String(r.why || ''))) {
@@ -322,8 +332,7 @@ export function btcTrades ({ run, deps, put, log, now, settleStep, maxFeePpm, fi
       // A maker that has not locked by now is not going to: nothing of the wallet's has moved, so
       // the trade comes back and the maker lets its offer go.
       if (now() - (rec.waitingSince ?? rec.at ?? now()) >= MAKER_LOCK_MS) {
-        release(rec.maker, rec.swap)
-        rec.state = 'returned'; rec.returnedAt = now(); rec.why = 'the maker did not lock its side in time'; return 'wait'
+        await comeBack(rec, { why: 'the maker did not lock its side in time', release: true }); return 'wait'
       }
       post(rec.maker + '/v1/btc/lock', lockBody(rec)).catch(() => {})
       rec.waitBy = { finalBy: (rec.waitingSince ?? rec.at) + MAKER_LOCK_MS, step: 'payment' }
@@ -374,6 +383,9 @@ export function btcTrades ({ run, deps, put, log, now, settleStep, maxFeePpm, fi
 
   // Buying: wait for the leaf, then pay the BTC, then claim and settle the leaf.
   async function advanceBuy (rec) {
+    // Coming back, its lock still marked paid: it pays nothing more, and comes back once the mark
+    // is cleared.
+    if (rec.ending) return finishEnding(rec)
     const rcv = ((await run('lightning_receives')) || {})[rec.hash] || {}
     if (rec.leg !== 'htlc-2') rec.receiveState = rcv.state || null
     if (rec.state === 'waiting' && rec.leg === 'htlc-2') {
@@ -382,13 +394,12 @@ export function btcTrades ({ run, deps, put, log, now, settleStep, maxFeePpm, fi
       if (next === 'htlc-1') rec.receiveState = rcv.state || null
     }
     if (rec.state === 'waiting') {
-      if (rcv.state === 'failed') { rec.state = 'returned'; rec.returnedAt = now(); return put(rec) }
+      if (rcv.state === 'failed') return comeBack(rec, {})
       // A maker that has not paid the asset in by now is not going to: nothing of the wallet's has
       // moved, so the trade comes back and the maker lets its offer go. The wallet never pays BTC
       // for a trade it has called returned.
       if ((rcv.state === 'waiting' || !rcv.state) && now() - (rec.waitingSince ?? rec.at ?? now()) >= MAKER_LOCK_MS) {
-        release(rec.maker, rec.swap)
-        rec.state = 'returned'; rec.returnedAt = now(); rec.why = 'the maker did not lock its side in time'; return put(rec)
+        return comeBack(rec, { why: 'the maker did not lock its side in time', release: true })
       }
       // The maker's lock, asked for again in case it missed it.
       if (rcv.state === 'waiting') post(rec.maker + '/v1/btc/lock', { swap: rec.swap, invoice: rec.invoiceX }).catch(() => {})
@@ -398,7 +409,7 @@ export function btcTrades ({ run, deps, put, log, now, settleStep, maxFeePpm, fi
         // Only the library's refusal says the leaf will never do (nothing of the wallet's has left);
         // an operator that does not answer now is asked again.
         if (!(e && (e.kind === 'refused' || /^refused\b/i.test(String(e.message))))) { log('[user trade] not ready yet:', e.message); return put(rec) }
-        log('[user trade] the leaf will not do:', e.message); rec.state = 'returned'; rec.returnedAt = now(); rec.why = e.message; return put(rec)
+        log('[user trade] the leaf will not do:', e.message); return comeBack(rec, { why: e.message })
       }
       // Why the asset is not final yet, said once each time it changes.
       if (!r.ready) {
@@ -415,24 +426,26 @@ export function btcTrades ({ run, deps, put, log, now, settleStep, maxFeePpm, fi
       put(rec)
     }
     if (rec.state === 'sent' && !rec.preimage) {
-      let st = await B().payStatus(rec.hash).catch(() => ({ state: 'none' }))
+      let st
+      if (rec.markedPaid || rec.payCalledAt) {
+        // The wallet may have paid already: only a reading for certain moves it on. It pays once: a
+        // payment that is for certain not made after this page called to pay brings the trade back.
+        st = await payState(rec)
+        if (st.state === 'pending' || st.state === 'unknown') return put(rec)
+        if ((st.state === 'failed' || st.state === 'none') && rec.payCalledAt) return comeBack(rec, { why: st.reason || 'the payment did not go through' })
+      } else st = await B().payStatus(rec.hash).catch(() => ({ state: 'none' }))
       // The asset is final only after Bitcoin blocks, which can outlast the maker's invoice: one
       // that runs out soon is renewed by the maker under the same hash, for the same amount, on no
       // longer a lock or a higher fee, or the trade comes back with nothing paid.
       if (st.state === 'none') {
         const fresh = await freshInvoice(rec)
-        if (!fresh) {
-          release(rec.maker, rec.swap)
-          rec.state = 'returned'; rec.returnedAt = now(); rec.why = 'the maker\'s invoice ran out while the trade waited'; rec.whyKind = 'lapsed'
-          return put(rec)
-        }
+        if (!fresh) return comeBack(rec, { why: 'the maker\'s invoice ran out while the trade waited', whyKind: 'lapsed', release: true })
       }
       if (st.state === 'none' && (await beforePay(rec)) !== 'pay') return put(rec)
-      if (st.state === 'none') st = await B().pay({ invoice: rec.invoiceBtc, maxFeeSats: big(rec.routeFee), maxDelay: Number(rec.routeDelay || rec.minFinalCltv || 18) + EXTRA_BLOCKS })
-      if (st.state === 'failed') {
-        // Nothing was paid: the leaf stays unclaimed and goes back to the maker.
-        rec.state = 'returned'; rec.returnedAt = now(); rec.why = st.reason || 'the payment failed'; return put(rec)
-      }
+      if (st.state === 'none') st = await payOnce(rec)
+      // Nothing was paid: the leaf stays unclaimed and goes back to the maker, once the payment is
+      // read for certain as not made (`comeBack`).
+      if (st.state === 'failed') return comeBack(rec, { why: st.reason || 'the payment failed' })
       if (st.state !== 'complete') return put(rec)
       rec.preimage = st.preimage
       put(rec)
@@ -484,15 +497,13 @@ export function btcTrades ({ run, deps, put, log, now, settleStep, maxFeePpm, fi
   // serves it. A library that cannot mark it never sees the BTC paid. -> 'pay', or 'wait' (the
   // record says why).
   async function beforePay (rec) {
-    const refused = (e) => !!e && (e.kind === 'refused' || e.kind === 'parse' || /^refused\b/i.test(String(e.message)))
     if (now() - (rec.sentAt ?? rec.at ?? 0) > RECHECK_MS) {
       const need = needSeconds(rec.routeDelay || rec.minFinalCltv)
       let r
       try { r = await run(rec.leg === 'htlc-2' ? 'lock_ready' : 'lightning_receive_ready', { hash: rec.hash, need_seconds: need }) } catch (e) {
         if (!refused(e)) { log('[user trade] not checked again yet:', e.message); return 'wait' }
         log('[user trade] no longer held:', e.message)
-        release(rec.maker, rec.swap)
-        rec.state = 'returned'; rec.returnedAt = now(); rec.why = e.message; return 'wait'
+        await comeBack(rec, { why: e.message, release: true }); return 'wait'
       }
       if (!r.ready) {
         log('[user trade] not held any more, waiting again:', r.why || '')
@@ -504,11 +515,97 @@ export function btcTrades ({ run, deps, put, log, now, settleStep, maxFeePpm, fi
       try { await run('lock_paid', { hash: rec.hash }); rec.markedPaid = true; put(rec) } catch (e) {
         if (!refused(e)) { log('[user trade] the lock is not marked paid yet:', e.message); return 'wait' }
         log('[user trade] the lock cannot be marked paid, so nothing is paid:', e.message)
-        release(rec.maker, rec.swap)
-        rec.state = 'returned'; rec.returnedAt = now(); rec.why = 'the wallet could not mark its lock paid: ' + e.message; return 'wait'
+        await comeBack(rec, { why: 'the wallet could not mark its lock paid: ' + e.message, release: true }); return 'wait'
       }
     }
     return 'pay'
+  }
+
+  // The library's own refusal (or a library without the command), as against one that did not answer.
+  const refused = (e) => !!e && (e.kind === 'refused' || e.kind === 'parse' || /^refused\b/i.test(String(e.message)))
+
+  // A purchase on a lock marked paid whose BTC payment is for certain not made (`payState`): the mark
+  // is cleared (`lock_unpaid`), so the lock goes back to the maker out of round from its timeout. A
+  // library that does not answer, or whose operator does not, is asked again at the next step
+  // ('wait'); its refusal (the preimage known, the lock claimed or its exit started, no such command)
+  // leaves the mark, and the trade still comes back. -> 'done' or 'wait'.
+  async function unmark (rec) {
+    if (rec.leg !== 'htlc-2' || !rec.markedPaid) return 'done'
+    try { await run('lock_unpaid', { hash: rec.hash }); rec.markedPaid = false; put(rec) } catch (e) {
+      if (!refused(e)) { log('[user trade] the lock\'s paid mark is not cleared yet:', e.message); return 'wait' }
+      log('[user trade] the lock stays marked paid:', e.message); rec.unmarkRefused = e.message; put(rec)
+    }
+    return 'done'
+  }
+
+  // Pays the purchase's BTC, once: the call is recorded before it goes out, and as answered once the
+  // wallet's Lightning answers it (a call that throws, or whose page closed, is not).
+  async function payOnce (rec) {
+    rec.payCalledAt = now(); rec.payAnswered = false; put(rec)
+    payCalls.set(rec.hash, (payCalls.get(rec.hash) || 0) + 1)
+    try {
+      const st = await B().pay({ invoice: rec.invoiceBtc, maxFeeSats: big(rec.routeFee), maxDelay: Number(rec.routeDelay || rec.minFinalCltv || 18) + EXTRA_BLOCKS })
+      rec.payAnswered = true; put(rec)
+      return st
+    } catch (e) {
+      log('[user trade] the payment did not answer:', e && e.message)
+      return { state: 'unknown', reason: e && e.message }
+    } finally {
+      const n = (payCalls.get(rec.hash) || 1) - 1
+      if (n > 0) payCalls.set(rec.hash, n); else payCalls.delete(rec.hash)
+    }
+  }
+
+  // How the purchase's BTC payment stands: 'complete' (with its preimage), 'pending', 'unknown' (not
+  // read), or for certain not made: 'failed' (failed back for good, which the wallet's Lightning says
+  // only once no attempt of it can follow) or 'none' (no payment, and no call of this page's to pay
+  // can still make one: none still running, and none whose answer was lost within PAY_SETTLE_MS).
+  async function payState (rec) {
+    let st
+    try { st = await B().payStatus(rec.hash) } catch (e) { return { state: 'unknown', reason: e && e.message } }
+    const s = st && st.state
+    if (s === 'complete' && st.preimage) return st
+    if (s === 'pending') return { state: 'pending' }
+    if (s === 'failed' || s === 'none') {
+      if (payCalls.has(rec.hash)) return { state: 'pending' }
+      if (s === 'none' && rec.payCalledAt && !rec.payAnswered && now() - rec.payCalledAt < PAY_SETTLE_MS) return { state: 'pending' }
+      return { state: s, reason: st.reason }
+    }
+    return { state: 'unknown' }
+  }
+
+  // The trade comes back, nothing paid (`fields`: why, whyKind, release: the maker lets its offer
+  // go). A purchase whose lock is marked paid comes back only once its payment is for certain not
+  // made and the mark is cleared: until then it is `ending`, pays nothing more, and its row says so.
+  async function comeBack (rec, fields) {
+    if (!(rec.leg === 'htlc-2' && rec.markedPaid)) return returned(rec, fields)
+    rec.ending = { why: fields.why ?? null, whyKind: fields.whyKind ?? null, release: !!fields.release, notPaid: false }
+    put(rec)
+    return finishEnding(rec)
+  }
+
+  async function finishEnding (rec) {
+    const st = await payState(rec)
+    if (st.state === 'complete') {
+      // It went through after all: the trade goes on as paid.
+      log('[user trade] the BTC payment completed after all; the trade goes on')
+      rec.ending = null; rec.state = 'sent'
+      return put(rec)
+    }
+    if (st.state !== 'failed' && st.state !== 'none') { log('[user trade] coming back once the BTC payment is read for certain:', st.state); return put(rec) }
+    if (!rec.ending.notPaid) { rec.ending.notPaid = true; put(rec) }
+    if ((await unmark(rec)) === 'wait') return put(rec)
+    const e = rec.ending
+    rec.ending = null
+    return returned(rec, e)
+  }
+
+  function returned (rec, { why, whyKind, release: rel } = {}) {
+    if (rel) release(rec.maker, rec.swap)
+    rec.state = 'returned'; rec.returnedAt = now()
+    if (why) rec.why = why
+    if (whyKind) rec.whyKind = whyKind
+    return put(rec)
   }
 
   // Hands the library the preimage of a purchase on a lock whose BTC is paid (`lock_preimage`: kept,
