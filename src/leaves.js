@@ -226,10 +226,13 @@ export async function requireLeaves() {
 // itself: the host gives the planned coins up in that round and asks again once it is
 // final (`payThrough`, src/leaf-schedule.js), so the answer can take one round.
 // A person or a site waits on every command asked this way, reads included: the host runs it at a
-// person's priority (`person`), never shared with the wallet's own reads and never refused as busy.
-export async function run(command, args = {}) {
+// person's priority (`person`), never shared with the wallet's own reads and never dropped as busy.
+// `origin`: a site asked it, with no approval of the person's behind it (a site's read, a quote, an
+// offer to approve): the host runs it after the person's own commands, and counts what each site has
+// waiting. A command the person approved is theirs, and is asked without it.
+export async function run(command, args = {}, { origin = null } = {}) {
   await requireLeaves();
-  return (await host('run', { command, args, paying: true, person: true, from: callerOf() })).result;
+  return (await host('run', { command, args, paying: true, person: true, site: origin || undefined, from: callerOf() })).result;
 }
 // One command a person asks for in default mode (a receive code, a payment to a code or an
 // address, a trade): the same path as `run`, through the next round when the planned coins

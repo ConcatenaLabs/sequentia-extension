@@ -7,7 +7,8 @@
 //   createQueue({ send, now? }) -> { call(op, args, prio, opts?), personWaits(), running(), stats(), failAll(e) }
 //     send(op, args) -> a promise of the worker's answer for one command.
 //     prio: PERSON (a person waits on it), PROMPT (something a person started waits on it, such as
-//     the faucet's coin taken in, or the receive code), PASS (a step of the host's scheduled pass,
+//     the faucet's coin taken in, or the receive code), SITE (a site's command the person has not
+//     approved), PASS (a step of the host's scheduled pass,
 //     and the reads that show a payment), UPKEEP (work the rest of the wallet asks for, the default).
 //     opts: { share, dropAfterMs, cap, read, from }
 //       share        a read: one asked while the same read (same command, same arguments) waits at
@@ -17,17 +18,23 @@
 //       dropAfterMs  UPKEEP only, a read whose caller asks again by itself: refused with kind 'busy'
 //                    once it has waited that long, so the line cannot grow without end behind a slow
 //                    library; a sharer that gives none keeps the read whatever its first asker gave;
-//       cap          { key, most }: a read refused at once with kind 'busy', which its caller sees,
-//                    when `most` reads of the same key (one caller) already wait;
+//       cap          { key, most, what? }: a command refused at once with kind 'busy', which its
+//                    caller sees, when `most` commands of the same key (one caller) already wait
+//                    (`what` names them in the refusal: reads, commands);
 //       read         a person's read: it goes at its priority but does not make the wallet's own
 //                    work step aside (personWaits), which only a person's other commands do;
+//       ticket       an object the queue keeps the command in while it waits, for raise();
 //       from         who asked (for the state a capture reads), kept with the command.
+//   raise(ticket, prio): a command still waiting goes at `prio` from now on, when that is higher (a
+//     caller of a higher priority now waits on it); one running already runs. A raised command keeps
+//     its place in the line, the time it was asked: among the commands of its new priority it goes
+//     ahead of those asked after it, a person's included, since that person's command waits on it.
 //
 // The order: the highest priority waiting, first asked first, except that a priority with work
 // waiting that FAIR_TURN commands of higher priorities have gone past is served next (the highest
 // such first). So a person's command waits at most for the command running and one command of each
-// lower priority whose turn has come (three at most: a prompt read, a step of the host's own work,
-// an upkeep read), and under persons' commands back to back every lower priority with work waiting
+// lower priority whose turn has come (four at most: a prompt read, a site's command, a step of the
+// host's own work, an upkeep read), and under persons' commands back to back every lower priority with work waiting
 // still gets one command in every FAIR_TURN + 1 or better. The scheduled pass waits likewise at most
 // for the command running and an upkeep read now and then, so it ends.
 //
@@ -37,6 +44,9 @@
 
 export const PERSON = 3;
 export const PROMPT = 2;
+// A site's command the person has not approved (its reads, its quotes, an offer to approve): after
+// every command of the person's own, before the host's own work.
+export const SITE = 1.5;
 export const PASS = 1;
 export const UPKEEP = 0;
 // How many commands of higher priorities may go past work waiting before that work's turn.
@@ -121,7 +131,7 @@ export function createQueue({ send, now = () => Date.now(), hungAfter = () => 10
   }
 
   return {
-    call(op, args = {}, prio = UPKEEP, { share = false, dropAfterMs = null, cap = null, read = false, from = null } = {}) {
+    call(op, args = {}, prio = UPKEEP, { share = false, dropAfterMs = null, cap = null, read = false, from = null, ticket = null } = {}) {
       counts.asked++;
       // Dropping is the upkeep's alone.
       if (prio !== UPKEEP) dropAfterMs = null;
@@ -131,6 +141,7 @@ export function createQueue({ send, now = () => Date.now(), hungAfter = () => 10
         if (same) {
           counts.shared++;
           same.subs.push({ ok, no });
+          if (ticket) ticket.job = same;
           // A caller that cannot take a refusal keeps the read; else someone still wants it, and
           // its bound counts from the latest ask.
           if (dropAfterMs == null) same.dropAfterMs = null;
@@ -140,10 +151,12 @@ export function createQueue({ send, now = () => Date.now(), hungAfter = () => 10
         if (cap && cap.key != null && waiting.filter((w) => w.capKey === cap.key).length >= cap.most) {
           counts.capped++;
           if (onCapped) { try { onCapped({ command: commandOf(op, args), from, most: cap.most }); } catch {} }
-          no({ kind: 'busy', message: `${cap.most} reads asked by the same caller already wait for the wallet; ask again once they are answered` });
+          no({ kind: 'busy', message: `${cap.most} ${cap.what || 'commands asked by the same caller'} already wait for the wallet; ask again once they are answered` });
           return;
         }
-        waiting.push({ op, args, prio, subs: [{ ok, no }], at: now(), seq: seq++, key, dropAfterMs, from, read: !!read, capKey: cap ? cap.key : null });
+        const job = { op, args, prio, subs: [{ ok, no }], at: now(), seq: seq++, key, dropAfterMs, from, read: !!read, capKey: cap ? cap.key : null };
+        if (ticket) ticket.job = job;
+        waiting.push(job);
         pump();
       });
     },
@@ -153,6 +166,15 @@ export function createQueue({ send, now = () => Date.now(), hungAfter = () => 10
     running: () => (running ? { op: running.op, command: commandOf(running.op, running.args), shape: argsShape(running.op === 'run' ? running.args.args : running.args),
       prio: running.prio, ms: now() - running.started, waited: running.started - running.at, from: running.from } : null),
     waiting: () => waiting.length,
+    raise(ticket, prio) {
+      const job = ticket && ticket.job;
+      if (!job || !(prio > job.prio) || !waiting.includes(job)) return false;
+      job.prio = prio;
+      // A raised command is no longer an upkeep read anyone may drop or share at its old priority.
+      job.dropAfterMs = null;
+      job.key = null;
+      return true;
+    },
     // What the line holds, for a capture: how many wait at each priority, the commands most asked
     // (with who asked them), the oldest wait, and the counts since the start.
     stats() {

@@ -31,9 +31,9 @@ const hex = (b) => [...b].map((x) => x.toString(16).padStart(2, '0')).join('');
 
 // The operator joined, as a site's room names it: its key, its server, the assets it
 // serves with their fees, and how long it waits for a take's forfeits.
-export async function operator() {
+export async function operator(origin = null) {
   // The library's `info` carries the server's own view under `server_info`.
-  const info = await leaves.run('info');
+  const info = await leaves.run('info', {}, { origin });
   const srv = (info && info.server_info) || {};
   return {
     operator: info.operator || null,
@@ -77,7 +77,7 @@ export async function take(origin, served, args, quote, window) {
 export async function takesFor(origin) {
   const recs = (await R.takeRecords()).filter((r) => r.origin === origin);
   if (!recs.length) return [];
-  const parts = await leaves.run('participations');
+  const parts = await leaves.run('participations', {}, { origin });
   return recs.map((r) => R.takeAnswer(r, R.participationOf(parts, r.take)));
 }
 
@@ -101,7 +101,7 @@ export async function place(origin, args, quote) {
 export async function ordersFor(origin) {
   const recs = (await R.orderRecords()).filter((r) => r.origin === origin);
   if (!recs.length) return [];
-  const all = await leaves.run('orders');
+  const all = await leaves.run('orders', {}, { origin });
   return recs.map((rec) => {
     const o = (all || []).find((x) => x.order === rec.order) || null;
     return {
