@@ -1181,7 +1181,7 @@ async function handle(op, args) {
       // A sync asked by the trade composer, which follows open trades with one: while a person
       // waits on a quote or a confirmation it waits for them, and one asked within SYNC_SHARED_MS
       // of the last sync's end (whoever asked it) is answered by that sync instead of another.
-      if (command === 'sync') return await syncForCaller(!!args.paying, !!args.paying && !!args.person, !!site);
+      if (command === 'sync') return await syncForCaller(!!args.paying, !!args.paying && (!!args.person || !!site), !!site);
       // A read the trade composer asks while nobody waits on it (it follows its open trades every
       // few seconds) is the wallet's own work: it goes in line with the upkeep and does not count
       // as a person asking, or the mailbox and channel reads that show a payment to this wallet

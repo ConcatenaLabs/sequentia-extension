@@ -4,6 +4,8 @@
 // wallet's coins are boarded into the operator's tree within a minute, so this is how a site
 // sees and trades them: getBalances counts the leaves, and placeOrder takes from them.
 //
+// Whose each of the engine's and the review's leaf commands is comes from the span the site's request
+// runs in (src/site-context.js): the site's until the person approves, then the person's.
 // The engine asks the leaf library through `leaves.runUser` (the popup's `default.leaf`), BTC
 // over the Bitcoin ark's Lightning (`default.ark`), and reads the relay, the makers and the
 // chain as the popup does. Its records are kept in chrome.storage under `ext.siteTrade`. An
@@ -23,6 +25,7 @@ import { walletTag } from './mode.js';
 import * as engineMod from './engine.js';
 import { servedPairs, supervisedAssets } from './leaf-profiles.js';
 import { chainGenesis } from './chain-genesis.js';
+import { siteContext, siteLeaves } from './site-context.js';
 
 // The kit wallet's own balances, for the figures.
 async function engineBalances() { const b = await engineMod.balances(); return { seq: b.seq, btc: b.btc }; }
@@ -64,18 +67,17 @@ let pairs = null, pairsAt = 0, genesis = null, arkUp = false, sup = [], supAt = 
 const arkBtc = new Proxy({}, { get: (_, method) => (arg) => dm.arkLightning(String(method), arg) });
 
 let S = null;
+// Whose the engine's and the review's leaf commands are (src/site-context.js).
+const ctx = siteContext();
 async function siteOrders() {
   if (S) return S;
   const st = await store();
   const tag = await walletTag();
-  // A site's quote or confirmation is a person waiting (the engine runs it inside `hold`): its reads
-  // go at a person's priority; the engine's background follow of trades stays upkeep.
-  let held = 0;
+  // A site's quote is the site's until the person approves it (its reads after the person's own, and
+  // counted against the site); the trade approved is the person's; the engine's follow of trades
+  // after the answer is the wallet's own.
   const engine = createEngine({
-    leaves: {
-      command: (cmd, args) => leaves.runUser(String(cmd), args || {}, { person: held > 0 }),
-      hold: async (f) => { held++; try { return await f(); } finally { held--; } },
-    },
+    leaves: siteLeaves(ctx, leaves.runUser),
     fetchJson,
     makers: () => LEAF_MAKERS,
     relayBook: (pay, receive) => relayPairBook(receive, pay),
@@ -109,8 +111,8 @@ async function siteOrders() {
   });
   const orders = makeSiteOrders({
     engine, store: st, tag: () => tag || 'default',
-    // Every command of a site's order review (its schedule, quote and placing) is a person's.
-    leaves: { command: (cmd, args) => leaves.runUser(String(cmd), args || {}, { person: true }) },
+    // A site's order review: its schedule and quote the site's, the placing approved the person's.
+    leaves: siteLeaves(ctx, leaves.runUser),
     assetMeta: (h) => A.assetMeta(h),
     fmtAtoms: (atoms, p) => fmtAtoms(atoms, p),
     log: (...a) => console.log(...a),
@@ -129,13 +131,13 @@ async function fresh() {
 }
 
 // -> { id, display } for the approval window.
-export async function quote(params, origin) { return await (await fresh()).orders.quote(params, origin); }
+export async function quote(params, origin) { const s = await fresh(); return await ctx.site(origin, () => s.orders.quote(params, origin)); }
 export async function drop(id) { if (S) S.orders.drop(id); }
 // Settles an approved order; an order that rests is handed to the listing of orders placed
 // from leaves (leaf-trade.js progressOrders), which posts it once it rests.
 export async function confirm(id, origin) {
   const s = await fresh();
-  const r = await s.orders.confirm(id);
+  const r = await ctx.approved(() => s.orders.confirm(id));
   if (r.order) {
     const hex = (b) => [...b].map((x) => x.toString(16).padStart(2, '0')).join('');
     await R.rememberOrder({ order: r.order, origin, offer_id: hex(crypto.getRandomValues(new Uint8Array(16))), amount: null, at: Date.now() });
@@ -145,10 +147,10 @@ export async function confirm(id, origin) {
 export async function orders(origin) {
   const s = await fresh();
   s.orders.follow().catch(() => {});
-  return await s.orders.orders(origin);
+  return await ctx.site(origin, () => s.orders.orders(origin));
 }
-export async function quoteCancel(params, origin) { return await (await fresh()).orders.quoteCancel(params, origin); }
-export async function confirmCancel(id) { return await (await fresh()).orders.confirmCancel(id); }
+export async function quoteCancel(params, origin) { const s = await fresh(); return await ctx.site(origin, () => s.orders.quoteCancel(params, origin)); }
+export async function confirmCancel(id) { const s = await fresh(); return await ctx.approved(() => s.orders.confirmCancel(id)); }
 // Moves open site trades on (called after each leaf sync and on the minute alarm).
 export async function follow() { if (S) await S.orders.follow().catch(() => {}); }
 
@@ -194,9 +196,10 @@ export async function figures(bal, developer) {
 
 // What a trade can pay from now, per asset (getBalances' `spendable`): the leaves the engine can
 // spend, and BTC on the Bitcoin ark, less what is still arriving there.
-export async function spendable() {
+// `origin`: the site asking (getBalances), whose reads they are.
+export async function spendable(origin = null) {
   const out = {};
-  try { const s = await fresh(); for (const [a, v] of await s.engine.spendable()) if (v > 0n) out[a] = v.toString(); } catch {}
+  try { const s = await fresh(); for (const [a, v] of await (origin ? ctx.site(origin, () => s.engine.spendable()) : s.engine.spendable())) if (v > 0n) out[a] = v.toString(); } catch {}
   try { const ark = await dm.arkSum(); const v = BigInt((ark && ark.total) || 0) - BigInt((ark && ark.arriving) || 0); if (v > 0n) out.BTC = v.toString(); } catch {}
   return out;
 }

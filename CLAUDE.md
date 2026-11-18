@@ -159,8 +159,15 @@ wasm. Read this before changing anything.
   own), so a stream of commands adds one round to the line and never holds a caller that
   waits, the pass's board included; the rounds count against no pass's bound. A site's
   commands the person has not approved (its reads, its quotes, an offer to approve:
-  `leaves.run` with `origin`) go at SITE, after every command of the person's own (PERSON and
-  PROMPT) and before the host's own work; what the person approved for a site is theirs. At
+  `leaves.run` or `leaves.runUser` with `origin`) go at SITE, after every command of the
+  person's own (PERSON and PROMPT) and before the host's own work; what the person approved
+  for a site is theirs. That holds for every route a site reaches: the provider's own calls,
+  the market's resting-order preparation (`src/market.js`), and the site-trade engine and its
+  order review (`src/site-trade.js`), whose vendored modules name no caller: each entry a
+  site's request takes into them runs in a span (`src/site-context.js`: the site's while it
+  asks, the person's while what they approved runs), and their commands are the spans'; with
+  several sites' spans at once they share one origin, and a site's span wins over an
+  approved one. At
   most 16 of one site's commands wait, whatever line of the wallet asked them; the same read
   waiting is shared. The person's own reads are shared likewise, and one line of the wallet
   has at most 16 reads, and 16 other commands, waiting. One more is refused at once as busy,

@@ -328,7 +328,8 @@ async function prepareResting(origin, { type, base, quote, side, amount, price, 
   let op;
   try {
     await leaves.requireLeaves();
-    const info = await leaves.run('info');
+    // Read for the site before the person approves anything: the site's (src/leaves.js run).
+    const info = await leaves.run('info', {}, { origin });
     op = info.operator;
     const sup = supervisedAssets(info);
     if (sup.includes(base) || sup.includes(quote)) return null;
@@ -340,7 +341,7 @@ async function prepareResting(origin, { type, base, quote, side, amount, price, 
   const plan = P.planResting({ resting, covenants, side, amount, price: type === 'limit' ? price : null, basePrecision: prec(base) });
   if (!plan) return null;
   const served = leafResting.servedOrder(plan.q.offer);
-  const quote2 = await leafResting.fillQuote(served, plan.filled.toString());
+  const quote2 = await leafResting.fillQuote(served, plan.filled.toString(), origin);
   if (big(quote2.filled) !== plan.filled || big(quote2.paid) !== plan.pays) {
     throw new Error('the order the book showed has changed at its operator; try again');
   }

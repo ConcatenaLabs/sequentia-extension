@@ -16,6 +16,7 @@
 //   node --test test/upkeep-pass-ends.test.mjs
 import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
+import { siteContext, siteLeaves } from '../src/site-context.js';
 
 // The library: every command takes `cost(command)` ms of the worker's time, one at a time. Each call
 // records the priority the host ran it at (its `leafHostDiag().running`, when the host has one).
@@ -611,4 +612,61 @@ test('a site keeping all eight of its call sites full: the person\'s own send an
   assert.ok(mail >= 10, `${mail} mailbox reads in three minutes`);
   await within(send, 1000);
   await within(ask('stop'), 10_000);
+}));
+
+// sequentia-extension#225, the routes a site reaches before approval besides the provider's own
+// calls: the site-trade engine's quote, the site-order review, and the market's resting-order
+// preparation (its `info` and `order_fill_resting_quote`).
+
+// What the service worker sends the host for `leaves.runUser` and `leaves.run` (src/leaves.js).
+const shims = (ask, from) => ({
+  runUser: (command, args, { person = false, origin = null } = {}) => ask('run', { command, args, paying: true, person: person || undefined, site: origin || undefined, from }),
+  run: (command, args, { origin = null } = {}) => ask('run', { command, args, paying: true, person: true, site: origin || undefined, from }),
+});
+// The probe: the four routes kept full with distinct 200 ms reads for three minutes, one site; the
+// person's own send at two minutes. `routes(ask, k)` asks one of each. -> the send's wait (ms).
+async function fourRoutes(routes) {
+  const L = library({ cost: (c) => (['take_quote', 'order_quote', 'info', 'order_fill_resting_quote'].includes(c) ? 200 : c === 'sync' ? 2000 : 40) });
+  const { ask } = await opened({ L });
+  const t0 = Date.now();
+  const asked = [];
+  let k = 0, sendAt = null;
+  const end = routes.open ? await routes.open() : null;
+  await advance(3 * 60_000, 50, () => {
+    asked.push(...routes(ask, k++));
+    if (Date.now() - t0 === 120_000) { const t = Date.now(); asked.push(ask('run', { command: 'send', args: { request: 'r' }, paying: true, from: 'default-mode.js:829 confirmSend' }).then((r) => { sendAt = Date.now() - t; return r; })); }
+  });
+  if (end) end();
+  await within(Promise.all(asked), 60_000);
+  const ran = L.calls.filter((c) => c.at >= t0 && ['take_quote', 'order_quote', 'info', 'order_fill_resting_quote'].includes(c.command));
+  await within(ask('stop'), 10_000);
+  return { sendAt, prios: [...new Set(ran.map((c) => c.prio))], mail: since(L, t0, 'mailbox').length };
+}
+
+test('a site keeping the four routes of the trade engine and the market full: the person\'s own send answers within its bound', timed(async () => {
+  const ORIGIN = 'https://site.example';
+  // As the service worker now asks them: the engine and the review through siteLeaves inside the
+  // site's span (src/site-trade.js), the market's reads with the origin (src/market.js).
+  const ctx = siteContext();
+  let endSpan = null;
+  const now = (ask, k) => {
+    const engine = siteLeaves(ctx, shims(ask, 'site-trade.js:76').runUser);
+    const review = siteLeaves(ctx, shims(ask, 'site-trade.js:113').runUser);
+    const market = shims(ask, 'market.js:331');
+    const resting = shims(ask, 'leaf-resting.js:250');
+    return [engine.command('take_quote', { k }), review.command('order_quote', { k }),
+      market.run('info', { k }, { origin: ORIGIN }), resting.run('order_fill_resting_quote', { order: 'o', k }, { origin: ORIGIN })];
+  };
+  now.open = async () => { ctx.site(ORIGIN, () => new Promise((r) => { endSpan = r; })); return () => endSpan(); };
+  const after = await fourRoutes(now);
+  // As master asked them: the engine's held quote and the review as the person's, the market's
+  // reads with no origin.
+  const before = await fourRoutes((ask, k) => [
+    shims(ask, 'site-trade.js:76').runUser('take_quote', { k }, { person: true }), shims(ask, 'site-trade.js:113').runUser('order_quote', { k }, { person: true }),
+    shims(ask, 'market.js:331').run('info', { k }), shims(ask, 'leaf-resting.js:250').run('order_fill_resting_quote', { order: 'o', k })]);
+  say(`four routes kept full: as asked now, the person's send answered in ${after.sendAt} ms, the routes ran at ${after.prios.join(',')}, mailbox reads ${after.mail}; as master asked them, ${before.sendAt} ms at ${before.prios.join(',')}`);
+  assert.ok(after.sendAt != null && after.sendAt <= 1000, `the person's send waited ${after.sendAt} ms: the command running and one of each lower kind whose turn came`);
+  assert.deepEqual(after.prios, [1.5], 'every route at SITE');
+  assert.ok(after.mail >= 10);
+  assert.ok(before.sendAt > 5000, 'the delay the fix removes');
 }));

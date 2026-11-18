@@ -241,11 +241,13 @@ export async function run(command, args = {}, { origin = null } = {}) {
 // A read asked this way is a person's when `person` says so (a quote or a confirmation the person
 // waits on, the reads of a payment being prepared); without it, a read is the wallet's own work (a
 // trade's background follow) and goes in line with the upkeep. Every other command is a person's.
-export async function runUser(command, args = {}, { person = false } = {}) {
+// `origin`: a site asked it with nothing approved yet (a site's quote through the trade engine), as
+// `run`'s: after the person's own commands, counted against that site.
+export async function runUser(command, args = {}, { person = false, origin = null } = {}) {
   if (!(await config())) throw new Error(NOT_JOINED);
   if (!(await sessionMnemonic())) throw new Error('the wallet is locked');
   await ensureRunning();
-  return (await host('run', { command, args, paying: true, person: !!person || undefined, from: callerOf() })).result;
+  return (await host('run', { command, args, paying: true, person: !!person || undefined, site: origin || undefined, from: callerOf() })).result;
 }
 // A read a person waits on in either mode (the receive code's `schedule`, the assets Receive offers):
 // the host runs it before the wallet's upkeep, as it does the faucet's coin taken in, so it waits
